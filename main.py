@@ -5,6 +5,7 @@ import random
 import os
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from astrbot.api import logger
 from astrbot.api.star import Context, Star, register, StarTools
@@ -31,6 +32,11 @@ class DailySharingPlugin(Star):
         self.data_dir = StarTools.get_data_dir("astrbot_plugin_daily_sharing")
         self.data_dir.mkdir(parents=True, exist_ok=True)
         
+        # 配置文件路径
+        config_dir = self.data_dir.parent.parent / "config"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        self.config_file = config_dir / "astrbot_plugin_daily_sharing_config.json"
+        
         self.state_file = self.data_dir / "sharing_state.json"
         self.history_file = self.data_dir / "sharing_history.json"
         
@@ -51,6 +57,15 @@ class DailySharingPlugin(Star):
         # 延迟初始化
         asyncio.create_task(self._delayed_init())
 
+    async def terminate(self):
+        """插件卸载/重载时的清理逻辑"""
+        try:
+            if self.scheduler.running:
+                self.scheduler.shutdown(wait=False)
+            logger.info("[DailySharing] 🛑 旧的定时任务调度器已停止")
+        except Exception as e:
+            logger.error(f"[DailySharing] Terminate error: {e}")        
+
     async def _delayed_init(self):
         """延迟初始化逻辑"""
         await asyncio.sleep(3)
@@ -69,13 +84,13 @@ class DailySharingPlugin(Star):
         else:
             logger.info("[DailySharing] 自动分享已禁用")
 
-    # ==================== 核心逻辑 ====================
+    # ==================== 核心逻辑 (LLM调用与任务) ====================
 
-    async def _call_llm_wrapper(self, prompt, system_prompt=None, timeout=60):
-        """LLM 调用包装器（供 Service 层使用）"""
+    async def _call_llm_wrapper(self, prompt: str, system_prompt: str = None, timeout: int = 60, max_retries: int = 2) -> Optional[str]:
+        """LLM 调用包装器"""
         provider_id = self.config.get("llm_provider_id", "")
         
-        # 自动探测 Provider
+        # 自动探测 Provider 
         if not provider_id:
             try:
                 cfg = self.context.get_config()
@@ -89,19 +104,42 @@ class DailySharingPlugin(Star):
             except Exception:
                 pass
 
-        try:
-            resp = await asyncio.wait_for(
-                self.context.llm_generate(
-                    prompt=prompt, 
-                    system_prompt=system_prompt, 
-                    chat_provider_id=provider_id if provider_id else None
-                ),
-                timeout=timeout
-            )
-            return resp.completion_text if resp else None
-        except Exception as e:
-            logger.error(f"[DailySharing] LLM Error: {e}")
-            return None
+        config_timeout = self.config.get("llm_timeout", 60)
+        actual_timeout = max(timeout, config_timeout)
+
+        for attempt in range(max_retries + 1):
+            try:
+                resp = await asyncio.wait_for(
+                    self.context.llm_generate(
+                        prompt=prompt, 
+                        system_prompt=system_prompt, 
+                        chat_provider_id=provider_id if provider_id else None
+                    ),
+                    timeout=actual_timeout
+                )
+                
+                if resp and hasattr(resp, 'completion_text'):
+                    result = resp.completion_text.strip()
+                    if result:
+                        return result
+                    
+            except asyncio.TimeoutError:
+                logger.warning(f"[DailySharing] LLM超时 ({actual_timeout}s) (尝试 {attempt+1}/{max_retries+1})")
+                if attempt < max_retries:
+                    await asyncio.sleep(2)
+                    continue
+            except Exception as e:
+                if "401" in str(e):
+                    logger.error(f"[DailySharing] ❌ LLM 失败。请检查 API Key。")
+                    return None
+                
+                logger.error(f"[DailySharing] LLM异常 (尝试 {attempt+1}): {e}")
+                if attempt < max_retries:
+                    await asyncio.sleep(2)
+                    continue
+
+        logger.error(f"[DailySharing] LLM调用失败（已重试{max_retries}次）")
+        return None
 
     def _setup_cron(self, cron_str):
         """设置 Cron 任务"""
@@ -168,9 +206,13 @@ class DailySharingPlugin(Star):
 
         # 遍历目标用户
         targets = self.config.get("target_users", [])
+        if not targets:
+            logger.warning("[DailySharing] 未配置 target_users，跳过执行")
+            return
+
         for uid in targets:
             try:
-                is_group = "group" in uid.lower() or "room" in uid.lower()
+                is_group = "group" in uid.lower() or "room" in uid.lower() or "guild" in uid.lower()
                 
                 # 获取聊天历史 & 群策略检查
                 hist_data = await self.ctx_service.get_history_data(uid, is_group)
@@ -202,7 +244,7 @@ class DailySharingPlugin(Star):
                 # 发送消息
                 await self._send(uid, content, img_path)
 
-                # 记录记忆 (Memos)
+                # 记录记忆
                 img_desc = self.image_service.get_last_description()
                 await self.ctx_service.record_to_memos(uid, content, img_desc)
 
@@ -219,38 +261,51 @@ class DailySharingPlugin(Star):
 
             except Exception as e:
                 logger.error(f"[DailySharing] Error processing {uid}: {e}")
-                
-        logger.info("[DailySharing] <<< Execution finished")
 
     async def _send(self, uid, text, img_path):
         """发送消息（支持分开发送）"""
-        chain = MessageChain().message(text)
-        
-        if img_path:
-            if self.config.get("separate_text_and_image", True):
-                # 分开发送
-                await self.context.send_message(uid, chain)
-                await asyncio.sleep(random.uniform(1.0, 2.0))
-                
-                img_chain = MessageChain()
-                if img_path.startswith("http"): img_chain.url_image(img_path)
-                else: img_chain.file_image(img_path)
-                await self.context.send_message(uid, img_chain)
+        try:
+            chain = MessageChain().message(text)
+            
+            separate = self.config.get("separate_text_and_image", True)
+            
+            if img_path:
+                if separate:
+                    # 分开发送
+                    await self.context.send_message(uid, chain)
+                    # 随机延迟
+                    delay_str = self.config.get("separate_send_delay", "1.0-2.0")
+                    try:
+                        d_min, d_max = map(float, delay_str.split("-"))
+                        await asyncio.sleep(random.uniform(d_min, d_max))
+                    except:
+                        await asyncio.sleep(1.5)
+                    
+                    img_chain = MessageChain()
+                    if img_path.startswith("http"): 
+                        img_chain.url_image(img_path)
+                    else: 
+                        img_chain.file_image(img_path)
+                    await self.context.send_message(uid, img_chain)
+                else:
+                    # 合并发送
+                    if img_path.startswith("http"): 
+                        chain.url_image(img_path)
+                    else: 
+                        chain.file_image(img_path)
+                    await self.context.send_message(uid, chain)
             else:
-                # 合并发送
-                if img_path.startswith("http"): chain.url_image(img_path)
-                else: chain.file_image(img_path)
                 await self.context.send_message(uid, chain)
-        else:
-            await self.context.send_message(uid, chain)
+        except Exception as e:
+            logger.error(f"[DailySharing] Send error to {uid}: {e}")
 
     # ==================== 状态管理 ====================
 
     def _get_curr_period(self) -> TimePeriod:
         h = datetime.now().hour
         if 0 <= h < 6: return TimePeriod.DAWN
-        if 6 <= h < 11: return TimePeriod.MORNING
-        if 11 <= h < 17: return TimePeriod.AFTERNOON
+        if 6 <= h < 12: return TimePeriod.MORNING
+        if 12 <= h < 17: return TimePeriod.AFTERNOON
         if 17 <= h < 20: return TimePeriod.EVENING
         return TimePeriod.NIGHT
 
@@ -269,6 +324,9 @@ class DailySharingPlugin(Star):
         except Exception: pass
 
     def _decide_type_with_state(self, current_period: TimePeriod) -> SharingType:
+        """
+        根据配置和状态决定本次分享类型
+        """
         # 如果配置强制指定类型
         conf_type = self.config.get("sharing_type", "auto")
         if conf_type != "auto":
@@ -281,15 +339,31 @@ class DailySharingPlugin(Star):
         if state.get("last_period") != current_period.value:
             state["sequence_index"] = 0
         
-        # 获取序列
-        seq = SHARING_TYPE_SEQUENCES.get(current_period, [SharingType.GREETING.value])
+        # 1. 尝试从配置中获取序列 (对应 conf_schema.json 中的新字段)
+        config_key_map = {
+            TimePeriod.MORNING: "morning_sequence",
+            TimePeriod.AFTERNOON: "afternoon_sequence",
+            TimePeriod.EVENING: "evening_sequence",
+            TimePeriod.NIGHT: "night_sequence",
+            TimePeriod.DAWN: "dawn_sequence"
+        }
+        
+        config_key = config_key_map.get(current_period)
+        seq = self.config.get(config_key, [])
+        
+        # 2. 如果配置为空，回退到 hardcode 默认值
+        if not seq:
+            seq = SHARING_TYPE_SEQUENCES.get(current_period, [SharingType.GREETING.value])
+        
+        # 3. 计算索引
         idx = state.get("sequence_index", 0)
         
+        # 4. 防止索引越界
         if idx >= len(seq): idx = 0
         
         selected = seq[idx]
         
-        # 更新状态
+        # 5. 更新状态
         state["last_period"] = current_period.value
         state["sequence_index"] = (idx + 1) % len(seq)
         state["last_timestamp"] = datetime.now().isoformat()
@@ -317,15 +391,21 @@ class DailySharingPlugin(Star):
         
         # 异步写入文件
         try:
-            with open(self.history_file, 'w', encoding='utf-8') as f:
-                json.dump(self.sharing_history, f, ensure_ascii=False, indent=2)
+            loop = asyncio.get_running_loop()
+            loop.run_in_executor(None, self._write_history_sync)
         except Exception as e:
             logger.error(f"[DailySharing] Save history failed: {e}")
+
+    def _write_history_sync(self):
+        try:
+            with open(self.history_file, 'w', encoding='utf-8') as f:
+                json.dump(self.sharing_history, f, ensure_ascii=False, indent=2)
+        except Exception: pass
 
     async def _save_config_file(self):
         """保存配置到文件 (用于 enable/disable 命令)"""
         try:
-            if self.config_file.exists():
+            if self.config_file.parent.exists():
                 with open(self.config_file, 'w', encoding='utf-8') as f:
                     json.dump(self.config, f, ensure_ascii=False, indent=2)
         except Exception as e:
@@ -450,7 +530,19 @@ Cron规则: {cron}
     async def handle_seq_status(self, event: AstrMessageEvent):
         """查看序列详情"""
         period = self._get_curr_period()
-        seq = SHARING_TYPE_SEQUENCES.get(period, [])
+        
+        config_key_map = {
+            TimePeriod.MORNING: "morning_sequence",
+            TimePeriod.AFTERNOON: "afternoon_sequence",
+            TimePeriod.EVENING: "evening_sequence",
+            TimePeriod.NIGHT: "night_sequence",
+            TimePeriod.DAWN: "dawn_sequence"
+        }
+        config_key = config_key_map.get(period)
+        seq = self.config.get(config_key, [])
+        if not seq:
+            seq = SHARING_TYPE_SEQUENCES.get(period, [])
+
         state = self._load_state()
         idx = state.get("sequence_index", 0)
         

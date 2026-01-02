@@ -1,6 +1,7 @@
 # services/content.py
 import random
 import re
+from datetime import datetime  
 from typing import Optional, Tuple, List, Dict
 from astrbot.api import logger
 from ..config import SharingType, TimePeriod, NEWS_SOURCE_MAP
@@ -18,12 +19,20 @@ class ContentService:
         """统一生成入口"""
         persona = await self._get_persona()
         
+        # 统一获取当前时间，传给所有功能模块
+        now = datetime.now()
+        date_str = now.strftime("%Y年%m月%d日") 
+        time_str = now.strftime("%H:%M")       
+        
         # 统一上下文数据包
         ctx_data = {
             "is_group": is_group,
             "life_hint": life_ctx, 
             "chat_hint": chat_hist, 
-            "persona": persona
+            "persona": persona,
+            "period_label": period.value, 
+            "date_str": date_str,         
+            "time_str": time_str          
         }
         
         # 分发处理
@@ -38,7 +47,6 @@ class ContentService:
         elif stype == SharingType.RECOMMENDATION:
             return await self._gen_rec(ctx_data)
         
-        # 默认回退
         return await self._gen_greeting(period, ctx_data)
 
     async def _get_persona(self) -> str:
@@ -72,7 +80,6 @@ class ContentService:
 
     async def _gen_greeting(self, period: TimePeriod, ctx: dict):
         """生成问候"""
-        # 1. 完善的时间段映射 (与原版完全一致)
         labels = {
             TimePeriod.DAWN: "凌晨",
             TimePeriod.MORNING: "早晨",
@@ -90,7 +97,6 @@ class ContentService:
         
         p_label = labels.get(period, "现在")
         p_emoji = emojis.get(period, "✨")
-
         is_group = ctx['is_group']
         
         group_instruction = """
@@ -106,7 +112,10 @@ class ContentService:
 2. 真诚、个人化
 """
 
-        prompt = f"""现在是{p_label}，你要向{'群聊' if is_group else '用户'}发送一条温馨自然的问候。
+        prompt = f"""
+【当前时间】{ctx['date_str']} {ctx['time_str']} ({p_label})
+你现在要向{'群聊' if is_group else '私聊'}发送一条温馨自然的问候。
+
 {ctx['life_hint']}
 {ctx['chat_hint']}
 {group_instruction}
@@ -127,8 +136,9 @@ class ContentService:
 1. 以你的人设性格说话，真实自然
 2. {'简短（50-80字）' if is_group else '可适当长一些（80-120字）'}  
 3. 可以加入此刻的心情、想法或今日计划
-4. 如果有真实状态信息，可以自然地提到（但不必全部提）
-5. 直接输出内容，不要解释  
+4. 如果有真实状态信息，可以自然地提到
+5. 基于当前真实日期说话，不要被聊天记录里的过往信息误导
+6. 直接输出内容，不要解释  
 
 请生成{p_label}问候："""
 
@@ -141,7 +151,10 @@ class ContentService:
     async def _gen_mood(self, period, ctx):
         """生成心情"""
         is_group = ctx['is_group']
-        prompt = f"""现在是{period.value}，你想和{'群里的大家' if is_group else '用户'}分享一下现在的心情或想法。
+        prompt = f"""
+【当前时间】{ctx['date_str']} {ctx['time_str']} ({period.value})
+你想和{'群聊' if is_group else '私聊'}分享一下现在的心情或想法。
+
 {ctx['life_hint']}
 {ctx['chat_hint']}
 
@@ -149,6 +162,7 @@ class ContentService:
 - 生活状态信息仅供参考，选择最有感触的1-2点即可
 - {'群聊中避免过于私人，分享能引起共鸣的感受' if is_group else '私聊中可以详细分享内心想法'}
 - 避免流水账式地罗列所有信息
+- 基于当前真实时间感悟，不要被聊天记录里的过往信息误导
 
 【开头方式】（随机选择）
 - 感受切入："今天心情..."
@@ -171,8 +185,8 @@ class ContentService:
         """生成新闻"""
         is_group = ctx['is_group']
         
-        # 1. 降级逻辑：如果没有新闻数据，生成纯文本新闻
         if not news_data:
+            #  降级逻辑：如果没有新闻数据，生成纯文本新闻
             prompt = f"""你突然想和朋友分享一些最近的新闻见闻或有趣的事。
 {ctx['life_hint']}
 要求：
@@ -183,16 +197,13 @@ class ContentService:
 5. 如果有当前场景信息，可以说明在什么情况下看到的
 6. 字数：80-150字
 7. 直接输出内容，不要有说明文字
-
 直接输出："""
             return await self.call_llm(prompt, ctx['persona'])
 
-        # 2. 正常逻辑：格式化新闻列表
         news_list, source_key = news_data
         source_name = NEWS_SOURCE_MAP[source_key]["name"]
         icon = NEWS_SOURCE_MAP[source_key]["icon"]
         
-        # 解析分享数量配置 (支持 "1-2" 这种格式)
         raw_share_count = self.config.get("news_share_count", "1-2")
         try:
             if isinstance(raw_share_count, int):
@@ -210,14 +221,12 @@ class ContentService:
 
         items_limit = self.config.get("news_items_count", 5)
         
-        # 构建新闻文本列表 (✅ 修复：还原热度数值格式化逻辑)
         news_text = f"【{source_name}】\n\n"
         for idx, item in enumerate(news_list[:items_limit], 1):
             hot = item.get("hot", "")
             title = item.get("title", "")
             
             if hot:
-                # 格式化热度值 (123456 -> 12.3万)
                 hot_str = str(hot)
                 if hot_str.isdigit() and int(hot_str) > 10000:
                     hot_display = f"{int(hot_str) / 10000:.1f}万"
@@ -227,8 +236,7 @@ class ContentService:
             else:
                 news_text += f"{idx}. {title}\n"
 
-        # 生成 Prompt
-        prompt = f"""你看到了今天的{source_name}，想选择{share_count}条和{'群里的大家' if is_group else '朋友'}分享。
+        prompt = f"""你看到了今天的{source_name}，想选择{share_count}条和{'群聊' if is_group else '私聊'}分享。
 {ctx['life_hint']}
 {ctx['chat_hint']}
 
@@ -267,7 +275,6 @@ class ContentService:
         if res:
             return f"{icon} {res}"
         else:
-            # 兜底：直接发送新闻列表
             return f"{icon} 今天的{source_name}~\n\n{news_text[:500]}"
 
     async def _gen_knowledge(self, ctx: dict):
@@ -276,7 +283,7 @@ class ContentService:
         topics = ["有趣的冷知识", "生活小技巧", "健康小常识", "历史小故事", "科学小发现", "心理学小知识"]
         topic = random.choice(topics)
         
-        prompt = f"""请分享一个关于"{topic}"的有趣内容给{'群里的大家' if is_group else '朋友'}。
+        prompt = f"""请分享一个关于"{topic}"的有趣内容给{'群聊' if is_group else '私聊'}。
 {ctx['life_hint']}
 {ctx['chat_hint']}
 
@@ -306,20 +313,23 @@ class ContentService:
         return f"📚 {res}" if res else None
 
     async def _gen_rec(self, ctx: dict):
-        """生成推荐"""
+        """生成推荐 (✅ 使用统一传下来的时间)"""
         is_group = ctx['is_group']
         
-        # 智能随机逻辑 (内存记忆)
-        rec_types = ["书籍", "电影", "音乐", "动漫"]
+        # 智能随机逻辑
+        rec_types = ["书籍", "电影", "音乐", "动漫", "美食"]
         available = [t for t in rec_types if t != self._last_rec_type]
         if not available: available = rec_types
         
         rec_type = random.choice(available)
-        self._last_rec_type = rec_type # 更新状态
+        self._last_rec_type = rec_type 
         
         logger.info(f"[Content] Rec type: {rec_type}")
 
-        prompt = f"""你想向{'群里的大家' if is_group else '朋友'}推荐一个{rec_type}。
+        prompt = f"""
+【当前时间】{ctx['date_str']} {ctx['time_str']} ({ctx['period_label']})
+你现在想向{'群聊' if is_group else '私聊'}推荐一个{rec_type}。
+
 {ctx['life_hint']}
 {ctx['chat_hint']}
 
@@ -364,10 +374,11 @@ class ContentService:
 1. 以你的人设性格说话，真实自然
 2. 只推荐1个真实存在的{rec_type} 
 3. 开头必须有明确的推荐表达
-4. 真诚推荐，避免营销号式的夸张表达 
-5. 可以适当用emoji（1-2个）
-6. {'字数：80-120字' if is_group else '字数：120-180字'} 
-7. 直接输出推荐内容，不要有"以下是..."等说明文字
+4. 真诚推荐，避免营销号式的夸张表达
+6. 基于当前真实日期推荐，不要被聊天记录里的过往信息误导 
+7. 可以适当用emoji（1-2个）
+8. {'字数：80-120字' if is_group else '字数：120-180字'} 
+9. 直接输出推荐内容，不要有"以下是..."等说明文字
 
 请生成推荐："""
 

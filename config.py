@@ -60,35 +60,35 @@ NEWS_SOURCE_MAP = {
 # 时间段新闻源偏好
 NEWS_TIME_PREFERENCES = {
     TimePeriod.MORNING: {
-        "xiaohongshu": 0.4,  # 早上偏向小红书（深度内容）
+        "xiaohongshu": 0.4,  # 早上偏向小红书
         "weibo": 0.3,
         "bili": 0.2,
         "zhihu": 0.05,
         "douyin": 0.05,
     },
     TimePeriod.AFTERNOON: {
-        "douyin": 0.4,       # 下午偏向抖音（实时性强）
+        "douyin": 0.4,       # 下午偏向抖音
         "zhihu": 0.25,
         "bili": 0.2,
         "xiaohongshu": 0.1,
         "weibo": 0.05,
     },
     TimePeriod.EVENING: {
-        "bili": 0.35,        # 傍晚偏向B站（娱乐性）
+        "bili": 0.35,        # 傍晚偏向B站
         "weibo": 0.3,
         "douyin": 0.2,
         "zhihu": 0.1,
         "xiaohongshu": 0.05,
     },
     TimePeriod.NIGHT: {
-        "douyin": 0.4,       # 深夜偏向抖音（娱乐性）
+        "douyin": 0.4,       # 深夜偏向抖音
         "bili": 0.3,
         "weibo": 0.2,
         "xiaohongshu": 0.05,
         "zhihu": 0.05,
     },
     TimePeriod.DAWN: {
-        "xiaohongshu": 0.5,  # 凌晨偏向小红书（娱乐性）
+        "xiaohongshu": 0.5,  # 凌晨偏向小红书
         "bili": 0.3,
         "weibo": 0.15,
         "zhihu": 0.03,
@@ -98,13 +98,13 @@ NEWS_TIME_PREFERENCES = {
 
 # 分享类型序列
 SHARING_TYPE_SEQUENCES = {
-    # ===== 早晨时段 (6:00-11:00) =====
+    # ===== 早晨时段 (6:00-12:00) =====
     TimePeriod.MORNING: [
         SharingType.GREETING.value,    # 第1次：早安问候
         SharingType.NEWS.value,        # 第2次：早间新闻
     ],
 
-    # ===== 下午时段 (11:00-17:00) =====
+    # ===== 下午时段 (12:00-17:00) =====
     TimePeriod.AFTERNOON: [
         SharingType.NEWS.value,        # 第1次：午间资讯
         SharingType.KNOWLEDGE.value,   # 第2次：知识分享

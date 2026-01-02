@@ -14,11 +14,11 @@
     "obvious_hint": true
   },
   "sharing_type": {
-    "description": "分享内容类型",
+    "description": "分享类型模式",
     "type": "string",
     "default": "auto",
     "options": ["auto", "greeting", "news", "mood", "knowledge", "recommendation"],
-    "hint": "auto=根据时间段和序列自动选择（推荐） | greeting=问候 | news=新闻见闻 | mood=心情随想 | knowledge=知识分享 | recommendation=推荐。使用auto模式可实现同一时段多种类型轮换"
+    "hint": "auto=按照下方配置的【时段序列】自动轮换（推荐） | 若选择具体类型（如news），则无视时段永远只发该类型。"
   },
   "target_users": {
     "description": "接收分享的用户列表（UMO格式）",
@@ -28,6 +28,61 @@
     },
     "default": [],
     "hint": "格式: QQ:FriendMessage:123456（QQ私聊）或 QQ:GroupMessage:654321（QQ群）。支持同时配置多个私聊和群聊，每个用户将收到个性化内容",
+    "obvious_hint": true
+  },
+  "morning_sequence": {
+    "description": "【序列】早晨时段 (06:00-11:00)",
+    "type": "list",
+    "items": {
+      "type": "string",
+      "options": ["greeting", "news", "mood", "knowledge", "recommendation"]
+    },
+    "default": ["greeting", "news"],
+    "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环执行。",
+    "obvious_hint": true
+  },
+  "afternoon_sequence": {
+    "description": "【序列】下午时段 (11:00-17:00)",
+    "type": "list",
+    "items": {
+      "type": "string",
+      "options": ["greeting", "news", "mood", "knowledge", "recommendation"]
+    },
+    "default": ["news", "knowledge", "recommendation"],
+    "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环执行。",
+    "obvious_hint": true
+  },
+  "evening_sequence": {
+    "description": "【序列】傍晚时段 (17:00-20:00)",
+    "type": "list",
+    "items": {
+      "type": "string",
+      "options": ["greeting", "news", "mood", "knowledge", "recommendation"]
+    },
+    "default": ["recommendation", "news"],
+    "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环执行。",
+    "obvious_hint": true
+  },
+  "night_sequence": {
+    "description": "【序列】夜晚时段 (20:00-24:00)",
+    "type": "list",
+    "items": {
+      "type": "string",
+      "options": ["greeting", "news", "mood", "knowledge", "recommendation"]
+    },
+    "default": ["mood"],
+    "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环执行。",
+    "obvious_hint": true
+  },
+  "dawn_sequence": {
+    "description": "【序列】凌晨时段 (00:00-06:00)",
+    "type": "list",
+    "items": {
+      "type": "string",
+      "options": ["greeting", "news", "mood", "knowledge", "recommendation"]
+    },
+    "default": ["mood"],
+    "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环执行。",
     "obvious_hint": true
   },
   "llm_provider_id": {
