@@ -37,10 +37,10 @@
     *   **防打扰**：检测到群聊正在热烈讨论时，可自动跳过分享或简化内容。
 
 ## 📥 安装
-### 通过 AstrBot 管理面板安装
-1. 打开 AstrBot 管理面板。
-2. 进入插件市场。
-3. 搜索 `astrbot_plugin_daily_sharing` 进行安装。
+### 通过 AstrBot 插件市场安装
+1. 在 AstrBot WebUI 中打开插件市场
+2. 搜索 `astrbot_plugin_daily_sharing`
+3. 点击安装
 
 ### 2. 推荐依赖插件 (可选但强烈建议)
 为了获得最佳体验，建议安装以下插件：
