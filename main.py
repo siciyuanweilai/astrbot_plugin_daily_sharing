@@ -48,7 +48,7 @@ class DailySharingPlugin(Star):
         self.news_service = NewsService(config)
         self.image_service = ImageService(context, config, self._call_llm_wrapper)
         
-        # 修正2: 确保传入 state_file 参数
+        # 确保传入 state_file 参数
         self.content_service = ContentService(
             config, 
             self._call_llm_wrapper, 
@@ -78,8 +78,11 @@ class DailySharingPlugin(Star):
         await asyncio.sleep(3)
         
         # 检查配置
-        if not self.config.get("target_users", []):
-            logger.warning("[DailySharing] ⚠️ 未配置接收对象 (target_users)")
+        receiver = self.config.get("receiver", {})
+        has_targets = receiver.get("groups") or receiver.get("users")
+        
+        if not has_targets:
+            logger.warning("[DailySharing] ⚠️ 未配置接收对象 (receiver)")
 
         # 启动调度器
         if self.config.get("enable_auto_sharing", True):
@@ -205,9 +208,17 @@ class DailySharingPlugin(Star):
             news_data = await self.news_service.get_hot_news()
 
         # 遍历目标用户
-        targets = self.config.get("target_users", [])
+        targets = []
+        receiver_conf = self.config.get("receiver", {})
+        adapter_id = receiver_conf.get("adapter_id", "QQ")
+        for gid in receiver_conf.get("groups", []):
+            if gid:
+                targets.append(f"{adapter_id}:GroupMessage:{gid}")
+        for uid in receiver_conf.get("users", []):
+            if uid:
+                targets.append(f"{adapter_id}:FriendMessage:{uid}")
         if not targets:
-            logger.warning("[DailySharing] 未配置 target_users，跳过执行")
+            logger.warning("[DailySharing] ⚠️ 未配置接收对象，请在配置页填写群号或QQ号")
             return
 
         for uid in targets:

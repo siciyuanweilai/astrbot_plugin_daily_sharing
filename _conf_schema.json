@@ -20,15 +20,38 @@
     "options": ["auto", "greeting", "news", "mood", "knowledge", "recommendation"],
     "hint": "auto=按照下方配置的【时段序列】自动轮换（推荐） | 若选择具体类型（如news），则无视时段永远只发该类型。"
   },
-  "target_users": {
-    "description": "接收分享的用户列表（UMO格式）",
-    "type": "list",
+  "receiver": {
+    "title": "推送目标设置",
+    "description": "配置自动发送的目标（QQ号/群号）",
+    "type": "object",
     "items": {
-      "type": "string"
-    },
-    "default": [],
-    "hint": "格式: QQ:FriendMessage:123456（QQ私聊）或 QQ:GroupMessage:654321（QQ群）。支持同时配置多个私聊和群聊，每个用户将收到个性化内容",
-    "obvious_hint": true
+      "adapter_id": {
+        "title": "适配器ID",
+        "type": "string",
+        "default": "aiocqhttp",
+        "description": "AstrBot平台适配器ID（机器人名称）"
+      },
+      "groups": {
+        "title": "群聊列表",
+        "type": "list",
+        "items": {
+          "type": "string",
+          "title": "群号"
+        },
+        "description": "群聊",
+        "default": []
+      },
+      "users": {
+        "title": "私聊列表",
+        "type": "list",
+        "items": {
+          "type": "string",
+          "title": "QQ号"
+        },
+        "description": "私聊",
+        "default": []
+      }
+    }
   },
   "morning_sequence": {
     "description": "【序列】早晨时段 (06:00-11:00)",
