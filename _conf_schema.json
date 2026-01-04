@@ -36,9 +36,9 @@
         "type": "list",
         "items": {
           "type": "string",
-          "title": "群号"
+          "hint": "点击“添加更多”输入群号。"
         },
-        "description": "群聊",
+        "description": "推送到群聊",
         "default": []
       },
       "users": {
@@ -46,9 +46,9 @@
         "type": "list",
         "items": {
           "type": "string",
-          "title": "QQ号"
+          "hint": "点击“添加更多”输入QQ号。"
         },
-        "description": "私聊",
+        "description": "推送到私聊",
         "default": []
       }
     }
@@ -152,20 +152,20 @@
     "description": "是否启用聊天历史功能",
     "type": "bool",
     "default": true,
-    "hint": "开启后，分享内容会根据最近的聊天历史生成，能够延续话题、符合对方兴趣。需要 memos_integrator 插件支持。推荐开启以获得更个性化的分享体验",
+    "hint": "开启后，分享内容会根据最近的聊天历史生成，能够延续话题、符合对方兴趣。推荐开启以获得更个性化的分享体验",
     "obvious_hint": true
   },
   "chat_history_count": {
-    "description": "私聊历史消息数量",
-    "type": "int",
-    "default": 5,
-    "hint": "私聊中获取的历史消息条数（3-10条）。推荐5条，足以了解最近话题又不会太冗长"
-  },
-  "group_chat_history_count": {
-    "description": "群聊历史消息数量",
+    "description": "私聊读取消息数量",
     "type": "int",
     "default": 10,
-    "hint": "群聊中获取的历史消息条数（5-20条）。群聊消息更多，推荐10条以分析聊天热度和话题"
+    "hint": "私聊中获取的历史消息条数。推荐设置为 10-20 条以获取完整语境"
+  },
+  "group_chat_history_count": {
+    "description": "群聊读取消息数量",
+    "type": "int",
+    "default": 20,
+    "hint": "群聊中获取的历史消息条数。推荐设置为 20-30 条，便于分析群聊热度和当前话题"
   },
   "group_share_strategy": {
     "description": "群聊分享策略",

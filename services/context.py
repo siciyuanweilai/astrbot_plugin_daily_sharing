@@ -1,5 +1,6 @@
 # services/context.py
 import datetime
+import time
 from typing import Optional, Dict, Any, List
 from astrbot.api import logger
 from ..config import SharingType
@@ -25,7 +26,7 @@ class ContextService:
         return None
 
     def _get_memos_plugin(self):
-        """懒加载获取 Memos 插件"""
+        """懒加载获取 Memos 插件 (仅用于写入记录)"""
         if not self._memos_plugin:
             self._memos_plugin = self._find_plugin("astrbot_plugin_memos_integrator")
         return self._memos_plugin
@@ -41,11 +42,50 @@ class ContextService:
                 return False
             
             message_type = parts[1].lower()
-            # 群聊类型关键词
             group_keywords = ['group', 'guild', 'channel', 'room']
             return any(keyword in message_type for keyword in group_keywords)
         except Exception as e:
             return False
+
+    def _parse_umo(self, target_umo: str):
+        """解析 UMO ID"""
+        try:
+            parts = target_umo.split(':')
+            if len(parts) >= 3:
+                return parts[0], parts[2]
+            return None, None
+        except:
+            return None, None
+
+    def _get_bot_instance(self, pm, adapter_id: str):
+        # --- 方案 1: 标准精确查找 (性能最好) ---
+        try:
+            inst = pm.get_inst(adapter_id)
+            if inst and hasattr(inst, "bot") and inst.bot:
+                return inst.bot
+        except: pass
+
+        # --- 方案 2: 全局暴力搜索 (解决 ID 不匹配问题) ---
+        try:
+            for attr_name in dir(pm):
+                if attr_name.startswith("__"): continue 
+                try:
+                    val = getattr(pm, attr_name)
+                    # 检查字典 (通常是 insts 字典)
+                    if isinstance(val, dict):
+                        for v in val.values():
+                            if hasattr(v, "bot") and v.bot:
+                                return v.bot
+                    # 检查列表
+                    elif isinstance(val, list):
+                        for v in val:
+                            if hasattr(v, "bot") and v.bot:
+                                return v.bot
+                except: continue
+        except Exception:
+            pass
+            
+        return None
 
     # ==================== 生活上下文 (Life Scheduler) ====================
 
@@ -79,7 +119,7 @@ class ContextService:
         """格式化群聊生活上下文"""
         if not self.config.get("life_context_in_group", True): return ""
         
-        # 如果是心情分享，且群聊热度高，则不带生活状态（避免在大家讨论由于时突然说自己心情不好）
+        # 如果是心情分享，且群聊热度高，则不带生活状态
         if sharing_type == SharingType.MOOD and group_info and group_info.get("chat_intensity") == "high":
             return ""
 
@@ -122,63 +162,107 @@ class ContextService:
             return ""
         return ""
 
-    # ==================== 聊天历史 (Memos) ====================
+    # ==================== 聊天历史 ====================
 
     async def get_history_data(self, target_umo: str, is_group: bool = None) -> Dict[str, Any]:
-        """获取聊天历史 (统一入口)"""
-        # 1. 检查配置
+        """
+        获取聊天历史 
+        """
         if not self.config.get("enable_chat_history", True):
             return {}
             
-        # 自动判断是否为群聊 (如果调用方没传 is_group)
         if is_group is None:
             is_group = self._is_group_chat(target_umo)
 
-        # 2. 获取插件
-        memos = self._get_memos_plugin()
-        if not memos or not hasattr(memos, 'memory_manager'):
+        adapter_id, real_id = self._parse_umo(target_umo)
+        if not real_id:
+            logger.warning(f"[DailySharing] 无法解析目标ID: {target_umo}")
             return {}
 
-        # 3. 计算 limit
-        default_limit = 10
-        conf_limit = self.config.get("chat_history_count", default_limit)
-        limit = min(self.config.get("group_chat_history_count", conf_limit * 2), 25) if is_group else conf_limit
+        bot = self._get_bot_instance(self.context.platform_manager, adapter_id)
 
+        if not bot:
+            logger.warning(f"[DailySharing] ❌ 无法找到任何可用的 Bot 实例。")
+            return {}
+
+        limit = 20
+        
         try:
-            logger.info(f"[DailySharing] Fetching history for {target_umo} (limit={limit})...")
-            # 4. 调用 API
-            memories = await memos.memory_manager.retrieve_relevant_memories(
-                query="最近的对话", 
-                user_id=target_umo, 
-                conversation_id="", 
-                limit=limit
-            )
-
-            if not memories: 
-                return {}
-
-            # 5. 格式转换
+            logger.info(f"[DailySharing] Reading history for {real_id}...")
             messages = []
-            for mem in memories:
-                m_type = mem.get("type", "fact")
-                role = mem.get("role")
-                
-                if m_type == "preference":
-                    role = "system"
-                elif not role:
-                    role = "assistant"
-                
-                # Memos 可能会把用户消息标记在 content 里
-                content = mem.get("content", "")
-                if content.startswith("User:") or content.startswith("用户:"):
-                    role = "user"
-                
-                messages.append({
-                    "role": role,
-                    "content": content,
-                    "timestamp": mem.get("timestamp", ""),
-                    "user_id": mem.get("user_id", "")
-                })
+            
+            if is_group:
+                # === 群聊逻辑 ===
+                try:
+                    payloads = {"group_id": int(real_id), "count": limit}
+                    result = await bot.api.call_action("get_group_msg_history", **payloads)
+                    
+                    raw_msgs = []
+                    if result and isinstance(result, dict):
+                        raw_msgs = result.get("messages", [])
+                    elif result and isinstance(result, list):
+                        raw_msgs = result
+                    
+                    self_id = str(bot.self_id) if hasattr(bot, "self_id") else ""
+
+                    for msg in raw_msgs:
+                        sender_id = str(msg.get("sender", {}).get("user_id", ""))
+                        raw_content = ""
+                        if "message" in msg and isinstance(msg["message"], list):
+                            raw_content = "".join(
+                                seg["data"]["text"] for seg in msg["message"] if seg["type"] == "text"
+                            ).strip()
+                        elif "raw_message" in msg:
+                            raw_content = msg["raw_message"]
+
+                        if not raw_content: continue
+                        role = "assistant" if sender_id == self_id else "user"
+                        ts = msg.get("time", time.time())
+                        ts_str = datetime.datetime.fromtimestamp(ts).isoformat()
+                        messages.append({"role": role, "content": raw_content, "timestamp": ts_str, "user_id": sender_id})
+
+                    if messages:
+                        logger.info(f"[DailySharing] 群聊历史获取成功: {len(messages)} 条")
+                    else:
+                        logger.warning(f"[DailySharing] 群聊历史为空 (API返回了数据但解析后为0，或群内无新消息)")
+
+                except Exception as e:
+                    logger.warning(f"[DailySharing] 获取群聊历史失败: {e} (可能是当前适配器不支持 get_group_msg_history)")
+
+            else:
+                # === 私聊逻辑 ===
+                try:
+                    payloads = {"user_id": int(real_id), "count": limit}
+                    result = await bot.api.call_action("get_friend_msg_history", **payloads)
+                    raw_msgs = result.get("messages", [])
+                    
+                    self_id = str(bot.self_id) if hasattr(bot, "self_id") else ""
+
+                    for msg in raw_msgs:
+                        sender_data = msg.get("sender", {})
+                        msg_uid = str(sender_data.get("user_id", ""))
+                        
+                        raw_content = ""
+                        if "message" in msg and isinstance(msg["message"], list):
+                            raw_content = "".join(
+                                seg["data"]["text"] for seg in msg["message"] if seg["type"] == "text"
+                            ).strip()
+                        elif "raw_message" in msg:
+                            raw_content = msg["raw_message"]
+
+                        if not raw_content: continue
+
+                        role = "assistant" if msg_uid == self_id else "user"
+                        ts = msg.get("time", time.time())
+                        ts_str = datetime.datetime.fromtimestamp(ts).isoformat()
+                        messages.append({"role": role, "content": raw_content, "timestamp": ts_str, "user_id": msg_uid})
+                        
+                    logger.info(f"[DailySharing] 私聊历史获取成功: {len(messages)} 条")
+
+                except Exception as e:
+                    logger.debug(f"[DailySharing] NapCat Private History API skipped: {e}")
+
+            if not messages: return {}
 
             result = {"messages": messages, "is_group": is_group}
             if is_group:
@@ -187,11 +271,11 @@ class ContextService:
             return result
 
         except Exception as e:
-            logger.error(f"[DailySharing] History API error: {e}")
+            logger.warning(f"[DailySharing] API Fetch History error: {e}")
             return {}
 
     def _analyze_group_chat(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
-        """分析群聊历史"""
+        """分析群聊"""
         if not messages: return {}
         try:
             user_count = {}
@@ -207,25 +291,18 @@ class ContextService:
                 if len(content) > 5: topics.append(content[:50])
                 if msg.get("timestamp"): timestamps.append(msg.get("timestamp"))
             
-            # 活跃用户
             active_users = sorted(user_count.items(), key=lambda x: x[1], reverse=True)[:3]
-            
-            # 聊天热度
             cnt = len(messages)
-            if cnt > 10: intensity = "high"
-            elif cnt > 5: intensity = "medium"
-            else: intensity = "low"
+            intensity = "high" if cnt > 10 else "medium" if cnt > 5 else "low"
             
-            # 是否正在讨论 (5分钟内)
             is_discussing = False
             if timestamps:
                 try:
                     last_ts = timestamps[-1]
                     if isinstance(last_ts, str): last = datetime.datetime.fromisoformat(last_ts)
                     else: last = last_ts
-                    
-                    if (datetime.datetime.now() - last).total_seconds() < 300:
-                        is_discussing = True
+                    if isinstance(last, (int, float)): last = datetime.datetime.fromtimestamp(last)
+                    if (datetime.datetime.now() - last).total_seconds() < 600: is_discussing = True
                 except: pass
             
             return {
@@ -240,47 +317,33 @@ class ContextService:
             return {}
 
     def format_history_prompt(self, history_data: Dict, sharing_type: SharingType) -> str:
-        """格式化 Prompt 文本 (统一入口)"""
+        """格式化 Prompt"""
         if not history_data or not history_data.get("messages"): return ""
-        
         is_group = history_data.get("is_group", False)
         messages = history_data["messages"]
-        
         if is_group:
             return self._format_group_chat_for_prompt(messages, history_data.get("group_info", {}), sharing_type)
         else:
             return self._format_private_chat_for_prompt(messages, sharing_type)
 
     def _format_group_chat_for_prompt(self, messages: List[Dict], group_info: Dict, sharing_type: SharingType) -> str:
-        """格式化群聊 Prompt"""
         intensity = group_info.get("chat_intensity", "low")
         discussing = group_info.get("is_discussing", False)
         topics = group_info.get("recent_topics", [])
         
-        # 提示词策略
         if sharing_type == SharingType.GREETING:
-            if discussing:
-                hint = "💡 群里正在热烈讨论，简短打个招呼即可"
-            else:
-                hint = "💡 可以活跃一下气氛"
-        elif sharing_type == SharingType.NEWS:
-            hint = "💡 选择可能引起群内讨论的新闻"
-        elif sharing_type == SharingType.MOOD:
-            hint = "💡 可以简单分享心情，但不要过于私人"
-        else:
-            hint = ""
+            hint = "💡 群里正在热烈讨论，简短打个招呼即可" if discussing else "💡 可以活跃一下气氛"
+        elif sharing_type == SharingType.NEWS: hint = "💡 选择可能引起群内讨论的新闻"
+        elif sharing_type == SharingType.MOOD: hint = "💡 可以简单分享心情，但不要过于私人"
+        else: hint = ""
         
         txt = f"\n\n【群聊状态】\n聊天热度: {intensity}\n消息数: {group_info.get('message_count', 0)} 条\n"
         if discussing: txt += "⚠️ 群里正在热烈讨论中！\n"
-        if topics:
-            txt += "\n【最近话题】\n" + "\n".join([f"• {t}..." for t in topics[-3:]])
-        
+        if topics: txt += "\n【最近话题】\n" + "\n".join([f"• {t}..." for t in topics[-3:]])
         return txt + f"\n{hint}\n"
 
     def _format_private_chat_for_prompt(self, messages: List[Dict], sharing_type: SharingType) -> str:
-        """格式化私聊 Prompt"""
         max_length = 500
-        
         if sharing_type == SharingType.GREETING: hint = "💡 可以根据最近的对话内容打招呼"
         elif sharing_type == SharingType.MOOD: hint = "💡 可以延续最近的话题或感受"
         elif sharing_type == SharingType.NEWS: hint = "💡 可以根据对方的兴趣选择新闻"
@@ -288,43 +351,34 @@ class ContextService:
         
         lines = []
         total_len = 0
-        for m in reversed(messages[-5:]): # 默认取最近5条
+        for m in reversed(messages[-5:]):
             role = "用户" if m["role"] == "user" else "你"
             content = m["content"]
             if len(content) > 100: content = content[:100] + "..."
-            
             line = f"{role}: {content}"
             if total_len + len(line) > max_length: break
-            
             lines.insert(0, line)
             total_len += len(line)
-        
         return "\n\n【最近的对话】\n" + "\n".join(lines) + f"\n\n{hint}\n"
 
     # ==================== 策略检查 ====================
 
     def check_group_strategy(self, group_info: Dict) -> bool:
-        """检查群聊是否允许发送"""
         if not group_info: return True
-        
         strategy = self.config.get("group_share_strategy", "cautious")
         is_discussing = group_info.get("is_discussing", False)
         intensity = group_info.get("chat_intensity", "low")
 
         if strategy == "cautious":
-            # 谨慎模式：群里正在热烈讨论时，不打断
             if is_discussing and intensity == "high": return False
         elif strategy == "minimal":
-            # 最小模式：只有没人说话时才发
             if is_discussing or intensity != "low": return False
         return True
 
     # ==================== 记忆记录 ====================
 
     async def record_to_memos(self, target_umo: str, content: str, image_desc: str = None):
-        """记录发送内容到 Memos """
         if not self.config.get("record_sharing_to_memory", True): return
-        
         memos = self._get_memos_plugin()
         if memos:
             try:
