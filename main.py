@@ -17,12 +17,35 @@ from .services.image import ImageService
 from .services.content import ContentService
 from .services.context import ContextService
 
+# 类型汉化映射表
+TYPE_CN_MAP = {
+    "greeting": "问候",
+    "news": "新闻",
+    "mood": "心情",
+    "knowledge": "知识",
+    "recommendation": "推荐"
+}
+
+# 输入指令映射表
+CMD_CN_MAP = {
+    "问候": SharingType.GREETING,
+    "新闻": SharingType.NEWS,
+    "心情": SharingType.MOOD,
+    "知识": SharingType.KNOWLEDGE,
+    "推荐": SharingType.RECOMMENDATION
+}
+
 @register("daily_sharing", "四次元未来", "定时主动分享所见所闻", "1.0.0")
 class DailySharingPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config 
         self.scheduler = AsyncIOScheduler()
+        
+        self.basic_conf = self.config.get("basic_conf", {})
+        self.image_conf = self.config.get("image_conf", {})
+        self.llm_conf = self.config.get("llm_conf", {})
+        self.receiver_conf = self.config.get("receiver", {})
         
         # 锁与防抖
         self._lock = asyncio.Lock()
@@ -48,20 +71,18 @@ class DailySharingPlugin(Star):
         self.news_service = NewsService(config)
         self.image_service = ImageService(context, config, self._call_llm_wrapper)
         
-        # 确保传入 state_file 参数
+        # 依赖注入：将 news_service 传给 content_service
         self.content_service = ContentService(
             config, 
             self._call_llm_wrapper, 
             context,
-            str(self.state_file)
+            str(self.state_file),
+            self.news_service 
         )
 
     async def initialize(self):
         """初始化插件"""
-        # 加载历史记录
         self.sharing_history = self._load_history()
-        
-        # 延迟初始化
         asyncio.create_task(self._delayed_init())
 
     async def terminate(self):
@@ -71,22 +92,19 @@ class DailySharingPlugin(Star):
                 self.scheduler.shutdown(wait=False)
             logger.info("[DailySharing] 🛑 旧的定时任务调度器已停止")
         except Exception as e:
-            logger.error(f"[DailySharing] Terminate error: {e}")        
+            logger.error(f"[DailySharing] 停止插件出错: {e}")        
 
     async def _delayed_init(self):
         """延迟初始化逻辑"""
         await asyncio.sleep(3)
         
-        # 检查配置
-        receiver = self.config.get("receiver", {})
-        has_targets = receiver.get("groups") or receiver.get("users")
+        has_targets = self.receiver_conf.get("groups") or self.receiver_conf.get("users")
         
         if not has_targets:
             logger.warning("[DailySharing] ⚠️ 未配置接收对象 (receiver)")
 
-        # 启动调度器
-        if self.config.get("enable_auto_sharing", True):
-            cron = self.config.get("sharing_cron", "0 8,20 * * *")
+        if self.config.get("enable_auto_sharing", False):
+            cron = self.basic_conf.get("sharing_cron", "0 8,20 * * *")
             self._setup_cron(cron)
             if not self.scheduler.running:
                 self.scheduler.start()
@@ -98,7 +116,7 @@ class DailySharingPlugin(Star):
 
     async def _call_llm_wrapper(self, prompt: str, system_prompt: str = None, timeout: int = 60, max_retries: int = 2) -> Optional[str]:
         """LLM 调用包装器"""
-        provider_id = self.config.get("llm_provider_id", "")
+        provider_id = self.llm_conf.get("llm_provider_id", "")
         
         # 自动探测 Provider 
         if not provider_id:
@@ -114,7 +132,7 @@ class DailySharingPlugin(Star):
             except Exception:
                 pass
 
-        config_timeout = self.config.get("llm_timeout", 60)
+        config_timeout = self.llm_conf.get("llm_timeout", 60)
         actual_timeout = max(timeout, config_timeout)
 
         for attempt in range(max_retries + 1):
@@ -139,6 +157,11 @@ class DailySharingPlugin(Star):
                     await asyncio.sleep(2)
                     continue
             except Exception as e:
+                err_str = str(e)
+                if "PROHIBITED_CONTENT" in err_str or "blocked" in err_str:
+                    logger.error(f"[DailySharing] ❌ 内容被模型安全策略拦截 (敏感词): {prompt[:50]}...")
+                    return None 
+
                 if "401" in str(e):
                     logger.error(f"[DailySharing] ❌ LLM 失败。请检查 API Key。")
                     return None
@@ -157,7 +180,6 @@ class DailySharingPlugin(Star):
             if self.scheduler.get_job("auto_share"):
                 self.scheduler.remove_job("auto_share")
 
-            # 使用 config.py 中的模板
             actual_cron = CRON_TEMPLATES.get(cron_str, cron_str)
             parts = actual_cron.split()
             
@@ -169,11 +191,11 @@ class DailySharingPlugin(Star):
                     replace_existing=True,
                     max_instances=1  
                 )
-                logger.info(f"[DailySharing] Cron set: {actual_cron}")
+                logger.info(f"[DailySharing] 定时任务已设定: {actual_cron}")
             else:
-                logger.error(f"[DailySharing] Invalid cron: {cron_str}")
+                logger.error(f"[DailySharing] 无效的 Cron 表达式: {cron_str}")
         except Exception as e:
-            logger.error(f"[DailySharing] Cron setup failed: {e}")
+            logger.error(f"[DailySharing] 设置 Cron 失败: {e}")
 
     async def _task_wrapper(self):
         """任务包装器（防抖 + 锁）"""
@@ -191,30 +213,25 @@ class DailySharingPlugin(Star):
 
     async def _execute_share(self, force_type: SharingType = None):
         """执行分享的主流程"""
-        
-        # 确定时间段和类型
         period = self._get_curr_period()
         if force_type:
             stype = force_type
         else:
             stype = self._decide_type_with_state(period)
         
-        logger.info(f"[DailySharing] Period: {period.value}, Type: {stype.value}")
+        logger.info(f"[DailySharing] 时段: {period.value}, 类型: {stype.value}")
 
-        # 获取全局上下文
         life_ctx = await self.ctx_service.get_life_context()
         news_data = None
         if stype == SharingType.NEWS:
             news_data = await self.news_service.get_hot_news()
 
-        # 遍历目标用户
         targets = []
-        receiver_conf = self.config.get("receiver", {})
-        adapter_id = receiver_conf.get("adapter_id", "QQ")
-        for gid in receiver_conf.get("groups", []):
+        adapter_id = self.receiver_conf.get("adapter_id", "QQ")
+        for gid in self.receiver_conf.get("groups", []):
             if gid:
                 targets.append(f"{adapter_id}:GroupMessage:{gid}")
-        for uid in receiver_conf.get("users", []):
+        for uid in self.receiver_conf.get("users", []):
             if uid:
                 targets.append(f"{adapter_id}:FriendMessage:{uid}")
         if not targets:
@@ -225,41 +242,42 @@ class DailySharingPlugin(Star):
             try:
                 is_group = "group" in uid.lower() or "room" in uid.lower() or "guild" in uid.lower()
                 
-                # 获取聊天历史 & 群策略检查
                 hist_data = await self.ctx_service.get_history_data(uid, is_group)
                 if is_group and "group_info" in hist_data:
                     if not self.ctx_service.check_group_strategy(hist_data["group_info"]):
-                        logger.info(f"[DailySharing] Skip group {uid} due to strategy")
+                        logger.info(f"[DailySharing] 因策略跳过群组 {uid}")
                         continue
 
-                # 格式化 Prompt
                 hist_prompt = self.ctx_service.format_history_prompt(hist_data, stype)
                 group_info = hist_data.get("group_info")
                 life_prompt = self.ctx_service.format_life_context(life_ctx, stype, is_group, group_info)
 
-                # 生成文本
-                logger.info(f"[DailySharing] Generating content for {uid}...")
+                logger.info(f"[DailySharing] 正在为 {uid} 生成内容...")
                 content = await self.content_service.generate(
                     stype, period, uid, is_group, life_prompt, hist_prompt, news_data
                 )
                 
+                # 如果生成失败，记录日志到历史文件，然后跳过
                 if not content:
-                    logger.warning(f"[DailySharing] Content gen failed for {uid}")
+                    logger.warning(f"[DailySharing] 内容生成失败 {uid}")
+                    self._append_history({
+                        "timestamp": datetime.now().isoformat(),
+                        "target": uid,
+                        "type": stype.value,
+                        "content": "❌ 生成失败 (LLM无响应)",
+                        "success": False
+                    })
                     continue
 
-                # 生成图片
                 img_path = None
-                if self.config.get("enable_ai_image", False):
+                if self.image_conf.get("enable_ai_image", False):
                     img_path = await self.image_service.generate_image(content, stype, life_ctx)
 
-                # 发送消息
                 await self._send(uid, content, img_path)
 
-                # 记录记忆
                 img_desc = self.image_service.get_last_description()
                 await self.ctx_service.record_to_memos(uid, content, img_desc)
 
-                # 记录到本地历史文件 
                 self._append_history({
                     "timestamp": datetime.now().isoformat(),
                     "target": uid,
@@ -271,21 +289,18 @@ class DailySharingPlugin(Star):
                 await asyncio.sleep(2) 
 
             except Exception as e:
-                logger.error(f"[DailySharing] Error processing {uid}: {e}")
+                logger.error(f"[DailySharing] 处理 {uid} 时出错: {e}")
 
     async def _send(self, uid, text, img_path):
         """发送消息（支持分开发送）"""
         try:
             chain = MessageChain().message(text)
-            
-            separate = self.config.get("separate_text_and_image", True)
+            separate = self.image_conf.get("separate_text_and_image", True)
             
             if img_path:
                 if separate:
-                    # 分开发送
                     await self.context.send_message(uid, chain)
-                    # 随机延迟
-                    delay_str = self.config.get("separate_send_delay", "1.0-2.0")
+                    delay_str = self.image_conf.get("separate_send_delay", "1.0-2.0")
                     try:
                         if "-" in str(delay_str):
                             d_min, d_max = map(float, str(delay_str).split("-"))
@@ -302,7 +317,6 @@ class DailySharingPlugin(Star):
                         img_chain.file_image(img_path)
                     await self.context.send_message(uid, img_chain)
                 else:
-                    # 合并发送
                     if img_path.startswith("http"): 
                         chain.url_image(img_path)
                     else: 
@@ -311,7 +325,7 @@ class DailySharingPlugin(Star):
             else:
                 await self.context.send_message(uid, chain)
         except Exception as e:
-            logger.error(f"[DailySharing] Send error to {uid}: {e}")
+            logger.error(f"[DailySharing] 发送消息给 {uid} 失败: {e}")
 
     # ==================== 状态管理 ====================
 
@@ -338,22 +352,16 @@ class DailySharingPlugin(Star):
         except Exception: pass
 
     def _decide_type_with_state(self, current_period: TimePeriod) -> SharingType:
-        """
-        根据配置和状态决定本次分享类型
-        """
-        # 如果配置强制指定类型
-        conf_type = self.config.get("sharing_type", "auto")
+        conf_type = self.basic_conf.get("sharing_type", "auto")
         if conf_type != "auto":
             try: return SharingType(conf_type)
             except: pass
 
         state = self._load_state()
         
-        # 如果时段变了，重置索引
         if state.get("last_period") != current_period.value:
             state["sequence_index"] = 0
         
-        # 1. 尝试从配置中获取序列
         config_key_map = {
             TimePeriod.MORNING: "morning_sequence",
             TimePeriod.AFTERNOON: "afternoon_sequence",
@@ -363,21 +371,16 @@ class DailySharingPlugin(Star):
         }
         
         config_key = config_key_map.get(current_period)
-        seq = self.config.get(config_key, [])
+        seq = self.basic_conf.get(config_key, [])
         
-        # 2. 如果配置为空，回退到 hardcode 默认值
         if not seq:
             seq = SHARING_TYPE_SEQUENCES.get(current_period, [SharingType.GREETING.value])
         
-        # 3. 计算索引
         idx = state.get("sequence_index", 0)
-        
-        # 4. 防止索引越界
         if idx >= len(seq): idx = 0
         
         selected = seq[idx]
         
-        # 5. 更新状态
         state["last_period"] = current_period.value
         state["sequence_index"] = (idx + 1) % len(seq)
         state["last_timestamp"] = datetime.now().isoformat()
@@ -398,17 +401,15 @@ class DailySharingPlugin(Star):
         return []
 
     def _append_history(self, record):
-        """添加历史并保存文件"""
         self.sharing_history.append(record)
         if len(self.sharing_history) > 50:
             self.sharing_history = self.sharing_history[-50:]
         
-        # 异步写入文件
         try:
             loop = asyncio.get_running_loop()
             loop.run_in_executor(None, self._write_history_sync)
         except Exception as e:
-            logger.error(f"[DailySharing] Save history failed: {e}")
+            logger.error(f"[DailySharing] 保存历史记录失败: {e}")
 
     def _write_history_sync(self):
         try:
@@ -417,85 +418,112 @@ class DailySharingPlugin(Star):
         except Exception: pass
 
     async def _save_config_file(self):
-        """保存配置到文件 (用于 enable/disable 命令)"""
         try:
             if self.config_file.parent.exists():
                 with open(self.config_file, 'w', encoding='utf-8') as f:
                     json.dump(self.config, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            logger.error(f"[DailySharing] Save config failed: {e}")
+            logger.error(f"[DailySharing] 保存配置失败: {e}")
 
-    # ==================== 命令系统 ====================
+    # ==================== 统一命令入口 ====================
 
-    @filter.command("share_now")
+    @filter.command("分享")
     @filter.permission_type(filter.PermissionType.ADMIN)
-    async def handle_share_now(self, event: AstrMessageEvent):
-        """立即触发分享 """
-        event.stop_event()
-        
+    async def handle_share_main(self, event: AstrMessageEvent):
+        """
+        每日分享统一命令入口
+        """
         msg = event.message_str.strip()
         parts = msg.split()
-        force_type = None
         
-        if len(parts) > 1:
-            try:
-                force_type = SharingType(parts[1].lower())
-            except ValueError:
-                yield event.plain_result(f"❌ 无效类型。可用: {', '.join([t.value for t in SharingType])}")
+        if len(parts) == 1:
+            yield event.plain_result("❌ 指令格式错误，请指定参数。")
+            return
+
+        arg = parts[1].lower()
+
+        if arg == "状态":
+            async for res in self._cmd_status(event): yield res
+        elif arg == "开启":
+            async for res in self._cmd_enable(event): yield res
+        elif arg == "关闭":
+            async for res in self._cmd_disable(event): yield res
+        elif arg == "重置序列":
+            async for res in self._cmd_reset_seq(event): yield res
+        elif arg == "查看序列":
+            async for res in self._cmd_view_seq(event): yield res
+        elif arg == "帮助":
+            async for res in self._cmd_help(event): yield res
+            
+        elif arg in ["自动", "auto"]:
+            yield event.plain_result("🚀 正在生成并发送分享内容 (自动类型)...")
+            await self._execute_share(None)
+        else:
+            if arg in CMD_CN_MAP:
+                force_type = CMD_CN_MAP[arg]
+                type_cn = TYPE_CN_MAP.get(force_type.value, arg)
+                yield event.plain_result(f"🚀 正在生成并发送 [{type_cn}] 分享...")
+                await self._execute_share(force_type)
                 return
 
-        yield event.plain_result("🚀 正在生成并发送分享内容...")
-        await self._execute_share(force_type)
+            try:
+                force_type = SharingType(arg)
+                type_cn = TYPE_CN_MAP.get(force_type.value, arg)
+                yield event.plain_result(f"🚀 正在生成并发送 [{type_cn}] 分享...")
+                await self._execute_share(force_type)
+            except ValueError:
+                yield event.plain_result(f"❌ 未知指令或无效类型: {arg}\n可用类型: 问候, 新闻, 心情, 知识, 推荐")
 
-    @filter.command("share_enable")
-    @filter.permission_type(filter.PermissionType.ADMIN)
-    async def handle_enable(self, event: AstrMessageEvent):
+    # ==================== 子命令逻辑 ====================
+
+    async def _cmd_enable(self, event: AstrMessageEvent):
         """启用插件"""
         self.config["enable_auto_sharing"] = True
         await self._save_config_file()
         
-        cron = self.config.get("sharing_cron", "0 8,20 * * *")
+        cron = self.basic_conf.get("sharing_cron", "0 8,20 * * *")
         self._setup_cron(cron)
         if not self.scheduler.running: self.scheduler.start()
         
         yield event.plain_result("✅ 自动分享已启用")
 
-    @filter.command("share_disable")
-    @filter.permission_type(filter.PermissionType.ADMIN)
-    async def handle_disable(self, event: AstrMessageEvent):
+    async def _cmd_disable(self, event: AstrMessageEvent):
         """禁用插件"""
         self.config["enable_auto_sharing"] = False
         await self._save_config_file()
         self.scheduler.remove_all_jobs()
         yield event.plain_result("❌ 自动分享已禁用")
 
-    @filter.command("share_status")
-    @filter.permission_type(filter.PermissionType.ADMIN)
-    async def handle_status(self, event: AstrMessageEvent):
+    async def _cmd_status(self, event: AstrMessageEvent):
         """查看详细状态"""
-        # 读取状态文件
         state = self._load_state()
-        
         enabled = self.config.get("enable_auto_sharing", True)
-        cron = self.config.get("sharing_cron")
+        cron = self.basic_conf.get("sharing_cron")
         
-        # 构建历史预览
+        last_type_raw = state.get('last_type', '无')
+        last_type_cn = TYPE_CN_MAP.get(last_type_raw, last_type_raw)
+
         hist_txt = "无记录"
         if self.sharing_history:
             lines = []
             for h in reversed(self.sharing_history[-3:]):
                 ts = h.get("timestamp", "")[5:16].replace("T", " ")
-                lines.append(f"• {ts} [{h.get('type')}] {h.get('content')}")
+                content_preview = h.get('content', '') or ""
+                
+                t_raw = h.get('type')
+                t_cn = TYPE_CN_MAP.get(t_raw, t_raw)
+                
+                lines.append(f"• {ts} [{t_cn}] {content_preview}")
             hist_txt = "\n".join(lines)
 
-        msg = f"""📊 Daily Sharing 状态
+        msg = f"""📊 每日分享状态
 ================
 运行状态: {'✅ 启用' if enabled else '❌ 禁用'}
 Cron规则: {cron}
 当前时段: {self._get_curr_period().value}
 
 【序列状态】
-上次类型: {state.get('last_type', '无')}
+上次类型: {last_type_cn}
 上次时间: {state.get('last_timestamp', '无')[5:16].replace('T', ' ')}
 序列索引: {state.get('sequence_index', 0)}
 
@@ -504,48 +532,14 @@ Cron规则: {cron}
 """
         yield event.plain_result(msg)
 
-    @filter.command("share_reset_sequence")
-    @filter.permission_type(filter.PermissionType.ADMIN)
-    async def handle_reset_seq(self, event: AstrMessageEvent):
+    async def _cmd_reset_seq(self, event: AstrMessageEvent):
         """重置序列"""
         self._save_state({"sequence_index": 0, "last_period": None})
         yield event.plain_result("✅ 序列已重置")
 
-    @filter.command("share_set_image_behavior")
-    @filter.permission_type(filter.PermissionType.ADMIN)
-    async def handle_img_behavior(self, event: AstrMessageEvent):
-        """设置配图行为"""
-        args = event.message_str.split()
-        if len(args) < 2:
-            curr = "auto"
-            if self.config.get("image_always_include_self"): curr = "always"
-            elif self.config.get("image_never_include_self"): curr = "never"
-            yield event.plain_result(f"当前模式: {curr}\n用法: /share_set_image_behavior <auto|always|never>")
-            return
-
-        mode = args[1].lower()
-        if mode == "auto":
-            self.config["image_always_include_self"] = False
-            self.config["image_never_include_self"] = False
-        elif mode == "always":
-            self.config["image_always_include_self"] = True
-            self.config["image_never_include_self"] = False
-        elif mode == "never":
-            self.config["image_always_include_self"] = False
-            self.config["image_never_include_self"] = True
-        else:
-            yield event.plain_result("❌ 无效模式")
-            return
-            
-        await self._save_config_file()
-        yield event.plain_result(f"✅ 配图模式已设置为: {mode}")
-
-    @filter.command("share_sequence_status")
-    @filter.permission_type(filter.PermissionType.ADMIN)
-    async def handle_seq_status(self, event: AstrMessageEvent):
+    async def _cmd_view_seq(self, event: AstrMessageEvent):
         """查看序列详情"""
         period = self._get_curr_period()
-        
         config_key_map = {
             TimePeriod.MORNING: "morning_sequence",
             TimePeriod.AFTERNOON: "afternoon_sequence",
@@ -554,7 +548,7 @@ Cron规则: {cron}
             TimePeriod.DAWN: "dawn_sequence"
         }
         config_key = config_key_map.get(period)
-        seq = self.config.get(config_key, [])
+        seq = self.basic_conf.get(config_key, [])
         if not seq:
             seq = SHARING_TYPE_SEQUENCES.get(period, [])
 
@@ -562,20 +556,18 @@ Cron规则: {cron}
         idx = state.get("sequence_index", 0)
         
         txt = f"🔄 当前时段: {period.value}\n"
-        for i, t in enumerate(seq):
+        for i, t_raw in enumerate(seq):
             mark = "👉 " if i == idx else "   "
-            txt += f"{mark}{i}. {t}\n"
-            
+            t_cn = TYPE_CN_MAP.get(t_raw, t_raw)
+            txt += f"{mark}{i}. {t_cn}\n"
         yield event.plain_result(txt)
 
-    @filter.command("share_help")
-    async def handle_help(self, event: AstrMessageEvent):
+    async def _cmd_help(self, event: AstrMessageEvent):
         """帮助菜单"""
-        yield event.plain_result("""📚 Daily Sharing 命令列表:
-/share_status - 查看运行状态
-/share_now [类型] - 立即执行一次
-/share_enable - 启用插件
-/share_disable - 禁用插件
-/share_reset_sequence - 重置发送序列
-/share_sequence_status - 查看当前序列
-/share_set_image_behavior <mode> - 设置配图模式""")
+        yield event.plain_result("""📚 每日分享插件帮助:
+/分享 [类型] - 立即执行 (类型: 问候/新闻/心情/知识/推荐)
+/分享 状态 - 查看运行状态
+/分享 开启 - 启用自动分享
+/分享 关闭 - 禁用自动分享
+/分享 重置序列 - 重置当前发送序列
+/分享 查看序列 - 查看当前时段序列""")

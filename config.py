@@ -101,25 +101,25 @@ SHARING_TYPE_SEQUENCES = {
     # ===== 早晨时段 (6:00-12:00) =====
     TimePeriod.MORNING: [
         SharingType.GREETING.value,    # 第1次：早安问候
-        SharingType.NEWS.value,        # 第2次：早间新闻
+        SharingType.NEWS.value,        # 第2次：新闻热搜
     ],
 
     # ===== 下午时段 (12:00-17:00) =====
     TimePeriod.AFTERNOON: [
-        SharingType.NEWS.value,        # 第1次：午间资讯
-        SharingType.KNOWLEDGE.value,   # 第2次：知识分享
-        SharingType.RECOMMENDATION.value,  # 第3次：随机推荐（书籍/电影/音乐/动漫）
+        SharingType.NEWS.value,        # 第1次：新闻热搜
+        SharingType.KNOWLEDGE.value,   # 第2次：知识
+        SharingType.RECOMMENDATION.value,  # 第3次：推荐
     ],
 
     # ===== 傍晚时段 (17:00-20:00) =====
     TimePeriod.EVENING: [
-        SharingType.RECOMMENDATION.value,  # 第1次：随机推荐（书籍/电影/音乐/动漫）
-        SharingType.NEWS.value,        # 第2次：晚间热点
+        SharingType.NEWS.value,        # 第1次：新闻热搜
     ],
 
     # ===== 夜晚时段 (20:00-24:00) =====
     TimePeriod.NIGHT: [
         SharingType.MOOD.value,        # 第1次：夜晚心情
+        SharingType.GREETING.value,    # 第2次：晚安问候        
     ],
 
     # ===== 凌晨时段 (0:00-6:00) =====

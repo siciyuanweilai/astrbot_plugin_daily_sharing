@@ -14,6 +14,9 @@ class ImageService:
         self._aiimg_plugin = None
         self._aiimg_plugin_not_found = False
         self._last_image_description = None
+        
+        self.img_conf = self.config.get("image_conf", {})
+        self.llm_conf = self.config.get("llm_conf", {})
 
     def _get_current_period(self) -> TimePeriod:
         hour = datetime.now().hour
@@ -25,19 +28,19 @@ class ImageService:
 
     # ==================== 主入口 ====================
     async def generate_image(self, content: str, sharing_type: SharingType, life_context: str = None) -> Optional[str]:
-        if not self.config.get("enable_ai_image", False): return None
+        if not self.img_conf.get("enable_ai_image", False): return None
 
-        # 1. 检测是否涉及自己
+        # 检测是否涉及自己
         involves_self = await self._check_involves_self(content, sharing_type)
         
-        # 2. 提取穿搭 (仅当涉及自己且有上下文时)
+        # 提取穿搭 (仅当涉及自己且有上下文时)
         outfit_info = None
         if involves_self and life_context:
             outfit_info = await self._extract_outfit(life_context)
             if outfit_info:
                 logger.info(f"[DailySharing] 🎨 使用智能提取的穿搭: {outfit_info}")
 
-        # 3. 生成 Prompt
+        # 生成 Prompt
         prompt = await self._generate_image_prompt(content, sharing_type, involves_self, outfit_info)
         if not prompt: 
             logger.warning("[DailySharing] 提示词生成失败")
@@ -45,10 +48,10 @@ class ImageService:
 
         logger.info(f"[DailySharing] 配图提示词: {prompt[:100]}...")
         
-        # 4. 生成中文描述用于记忆
-        self._last_image_description = await self._convert_prompt_to_description(prompt)
+        # 直接使用 Prompt 作为记忆描述
+        self._last_image_description = prompt[:200]
 
-        # 5. 调用画图插件
+        # 调用画图插件
         return await self._call_aiimg(prompt)
 
     def get_last_description(self) -> Optional[str]:
@@ -59,15 +62,15 @@ class ImageService:
     # ==================== 智能判断逻辑 ====================
     async def _check_involves_self(self, content: str, sharing_type: SharingType) -> bool:
         """检测内容是否涉及'自己'"""
-        # 1. 配置强制模式
-        if self.config.get("image_always_include_self", False):
+        # 配置强制模式
+        if self.img_conf.get("image_always_include_self", False):
             logger.debug("[DailySharing] 配置：始终包含自己")
             return True
-        if self.config.get("image_never_include_self", False):
+        if self.img_conf.get("image_never_include_self", False):
             logger.debug("[DailySharing] 配置：从不包含自己")
             return False
 
-        # 2. LLM 智能判断
+        # LLM 智能判断
         try:
             type_hint = ""
             if sharing_type == SharingType.GREETING: type_hint = "(提示：问候通常需要人物出镜)"
@@ -100,7 +103,7 @@ class ImageService:
         except Exception as e:
             logger.warning(f"[DailySharing] 智能判断出镜失败: {e}，使用关键词兜底")
 
-        # 3. 关键词兜底
+        # 关键词兜底
         keywords = [
             "我", "我的", "我在", "我正在", "我刚", "我想", "我觉得", "我发现",
             "咱", "本人", "俺", "吾", "余",
@@ -110,7 +113,7 @@ class ImageService:
         ]
         if any(k in content for k in keywords): return True
 
-        # 4. 特定类型兜底
+        # 特定类型兜底
         if sharing_type in [SharingType.GREETING, SharingType.MOOD, SharingType.RECOMMENDATION]:
             return True
             
@@ -124,7 +127,7 @@ class ImageService:
         time_desc = "深夜/休息时间" if is_night else "白天/活动时间"
         
         prompt = f"""
-任务：从以下用户的【生活状态】描述中，提取**符合当前时间段**的角色穿搭，并翻译为 **AI绘画的英文提示词**。
+任务：从以下用户的【生活状态】描述中，提取**符合当前时间段**的角色穿搭，并提取为 **AI绘画的中文提示词**。
 
 【当前时间段】：{time_desc}
 【生活状态】：
@@ -135,11 +138,11 @@ class ImageService:
 2. 文本中可能包含“白天穿了...”和“晚上换了...”两套描述。
 3. 如果是【深夜/休息时间】，必须优先提取“睡衣、睡裙、家居服”等晚间描述，忽略白天外出的衣服。
 4. 如果是【白天/活动时间】，必须优先提取“大衣、外出服”等日间描述。
-5. 将提取到的穿搭描述（材质、颜色、款式）翻译为逗号分隔的英文单词。
+5. 将提取到的穿搭描述（材质、颜色、款式）提取为逗号分隔的中文单词。
 6. 不要包含动作（如坐在、躺在），只描述衣服。
-7. 仅输出英文提示词，不要输出任何中文解释。
+7. 仅输出中文提示词，不要输出任何解释。
 
-请输出英文穿搭提示词："""
+请输出中文穿搭提示词："""
         
         res = await self.call_llm(prompt, timeout=30)
         if res:
@@ -150,28 +153,31 @@ class ImageService:
         """根据构图过滤鞋袜"""
         if not outfit: return ""
         
-        system_prompt = """你是一个AI绘画Prompt优化专家。
-任务：根据【场景构图】，判断是否应该在【穿搭描述】中保留鞋子/靴子/袜子。
+        system_prompt = (
+            "你是一个 AI 绘画提示词专家。"
+            "任务：根据用户的【画面描述】，决定是否在【穿搭】中保留鞋子/靴子/袜子。"
+            "目标：防止生成图片时出现“断脚”、“鞋子切一半”或“画面底部强行塞入鞋子”的构图崩坏。"
+            "严格执行以下规则："
+            "1. 【保留规则】：只有当画面描述中**明确包含**“全身”、“Full body”、“从头到脚”、“展示鞋子”这些强调全身构图的词汇时，才允许【保留】鞋袜描述。"
+            "2. 【删除规则】：如果画面描述只是模糊的“站立”、“走在街上”、“坐在...”，但**没有**明确写“全身”，默认 AI 可能会生成七分身（膝盖以上）。此时必须【删除】所有鞋子、靴子、袜子的描述，确保画面自然截断。"
+            "3. 【删除规则】：如果是“半身”、“特写”、“自拍”、“上半身”，必须【删除】鞋袜描述。"
+            "4. 仅输出修改后的穿搭字符串，不要包含任何解释。"
+        )
 
-规则：
-1. 如果场景暗示【看不见脚】（如：upper body, close-up, sitting at desk, selfie, portrait），请从穿搭中【删除】鞋袜描述。
-2. 如果场景暗示【能看见脚】（如：full body, standing, walking, wide shot），请【保留】鞋袜描述。
-3. 仅输出修改后的穿搭英文单词，用逗号分隔，不要有任何解释。"""
-
-        user_prompt = f"当前穿搭：{outfit}\n场景构图：{scene_context}\n\n请输出优化后的穿搭："
+        user_prompt = f"当前穿搭：{outfit}\n画面描述：{scene_context}\n\n请输出优化后的穿搭："
         
         res = await self.call_llm(user_prompt, system_prompt, timeout=20)
         return res.strip().strip(".").strip() if res else outfit
 
     async def _get_appearance_keywords(self) -> str:
         """获取人设外貌"""
-        # 1. 配置优先
-        conf_p = self.config.get("appearance_prompt", "").strip()
+        # 配置优先
+        conf_p = self.img_conf.get("appearance_prompt", "").strip()
         if conf_p: return conf_p
 
-        # 2. 从人设提取
+        # 从人设提取
         try:
-            pid = self.config.get("persona_id", "")
+            pid = self.llm_conf.get("persona_id", "")
             p_text = ""
             
             if pid: 
@@ -184,16 +190,16 @@ class ImageService:
             
             if not p_text or len(p_text) < 10: return ""
 
-            prompt = f"""请从以下人设描述中提取外貌特征，并转换为英文的图片生成提示词。
+            prompt = f"""请从以下人设描述中提取外貌特征，并转换为中文的图片生成提示词。
 人设描述：
 {p_text}
 要求：
 1. 【重要】必须包含人种/国籍描述
 2. 提取外貌细节（发型、发色、眼睛、肤色、体型、常穿衣服等）
-3. 转换为简短的英文关键词，用逗号分隔
-4. 适合用于 AI 绘画（realist style）
+3. 转换为简短的中文关键词，用逗号分隔
+4. 适合用于 AI 绘画
 5. 不要包含性格、职业等非外貌信息
-6. 直接输出关键词，不要解释
+6. 直接输出中文关键词，不要解释
 请输出："""
             
             res = await self.call_llm(prompt, timeout=30)
@@ -212,9 +218,25 @@ class ImageService:
         if involves_self:
             appearance = await self._get_appearance_keywords()
             if appearance: final_prompt = f"{appearance}, {final_prompt}"
+
+        # 强制注入环境修正词（Hard Fix），专门解决窗户变白天的问题
+        period = self._get_current_period()
+        time_enforcement = ""
+        
+        if period in [TimePeriod.NIGHT, TimePeriod.DAWN]:
+            # 夜晚强制词
+            # "窗外黑暗" 是解决窗户漏光问题的核心 Tag
+            time_enforcement = ", 夜晚, 午夜, 深色天空, 窗外黑暗, 城市夜景" 
+        elif period == TimePeriod.EVENING:
+            time_enforcement = ", 日落, 黄昏, 金色光照"
+        else:
+            time_enforcement = ", 白天, 日光, 晴朗, 明亮"
+            
+        # 将强制词加到最后，权重通常较高
+        final_prompt = f"{final_prompt}{time_enforcement}"            
         
         # 叠加质量词
-        quality_tags = "realist style, masterpiece, best quality, high resolution, detailed, vibrant colors"
+        quality_tags = "高质量, 杰作, 高分辨率, 细节丰富, 色彩鲜艳"
         return f"{final_prompt}, {quality_tags}"
 
     async def _generate_scene_prompt(self, content, sharing_type, involves_self, outfit_info) -> str:
@@ -222,25 +244,25 @@ class ImageService:
         
         # === 光影逻辑与环境 ===
         if period in [TimePeriod.NIGHT, TimePeriod.DAWN]:
-            time_context = "Night/Late Night"
-            light_vibe = "dim lighting, indoor artificial light (lamp/screen), cinematic lighting, cozy atmosphere"
-            negative_constraint = "NO sunlight, NO blue sky, NO bright day view"
+            time_context = "夜晚/深夜"
+            light_vibe = "昏暗的灯光, 室内人造光 (台灯/屏幕光), 电影感布光, 舒适的氛围，窗外必须是漆黑的夜空, 只有城市灯光"
+            negative_constraint = "不要阳光, 不要蓝天, 不要明亮的白天景色，窗户里不能透出白天的光"
         elif period == TimePeriod.EVENING:
-            time_context = "Evening/Dusk"
-            light_vibe = "warm golden lighting, sunset vibe, soft shadows"
-            negative_constraint = "NO strong noon sun, NO pitch black night"
+            time_context = "傍晚/黄昏"
+            light_vibe = "温暖的金色光线, 日落氛围, 柔和的阴影"
+            negative_constraint = "不要正午强光, 不要漆黑的夜晚"
         else:
-            time_context = "Daytime"
-            light_vibe = "natural window light, bright, soft daylight, clean illumination"
-            negative_constraint = "NO night view, NO starry sky, NO dark room"
+            time_context = "白天"
+            light_vibe = "自然窗光, 明亮, 柔和的日光, 清晰的照明"
+            negative_constraint = "不要夜景, 不要星空, 不要黑暗的房间"
 
         if involves_self:
             # ================= 画人模式 =================
-            if sharing_type == SharingType.GREETING: comp_desc = "portrait, upper body, looking at viewer (半身照/大头照)"
-            elif sharing_type == SharingType.MOOD: comp_desc = "close-up, facial focus, depth of field (特写)"
-            elif sharing_type == SharingType.NEWS: comp_desc = "medium shot, sitting at desk or cafe (中景/坐姿)"
-            elif sharing_type == SharingType.RECOMMENDATION: comp_desc = "medium shot, holding object, focus on hand (中景/展示物品)"
-            else: comp_desc = "medium shot, natural pose (中景)"
+            if sharing_type == SharingType.GREETING: comp_desc = "肖像, 上半身, 直视镜头"
+            elif sharing_type == SharingType.MOOD: comp_desc = "特写, 脸部聚焦, 景深效果"
+            elif sharing_type == SharingType.NEWS: comp_desc = "中景, 坐在桌前或咖啡馆, 看手机或屏幕"
+            elif sharing_type == SharingType.RECOMMENDATION: comp_desc = "中景, 手持物品, 聚焦手部"
+            else: comp_desc = "中景, 自然姿态"
 
             outfit_constraint = ""
             if outfit_info:
@@ -259,16 +281,16 @@ class ImageService:
 - {comp_desc}
 
 要求：
-1. 仅输出英文提示词，不要有任何解释
+1. 仅输出中文提示词，不要有任何解释
 2. 描述人物的动作、姿态、表情
 3. 描述场景、环境、氛围
-4. 如果提供了穿搭信息，必须优先使用并详细转换为英文提示词
+4. 如果提供了穿搭信息，必须优先使用并详细转换为中文提示词
 5. 提示词用逗号分隔，简洁明确
 """
             user_prompt = f"""分享类型：{sharing_type.value}
 分享内容：{content[:300]}{outfit_constraint}
 
-请生成人物场景提示词："""
+请生成人物场景中文提示词："""
 
         else:
             # ================= 画景模式 =================
@@ -281,83 +303,29 @@ class ImageService:
 - 禁止: {negative_constraint}
 
 要求：
-1. 仅输出英文提示词，不要有任何解释
+1. 仅输出中文提示词，不要有任何解释
 2. 描述场景、环境、氛围、主题
-3. **不要包含人物描述** (No humans)
+3. **不要包含人物描述** (无人物)
 4. 提示词用逗号分隔，简洁明确
 """
             user_prompt = f"""分享类型：{sharing_type.value}
 分享内容：{content[:300]}
 
-请生成纯景物提示词："""
+请生成纯景物中文提示词："""
         
         res = await self.call_llm(user_prompt, system_prompt, timeout=30)
         
         # 清理输出
         if res:
             scene_prompt = res.strip().replace("\n", " ").replace("  ", " ")
-            prefixes = ["输出：", "Output:", "提示词：", "Prompt:", "Keywords:"]
+            prefixes = ["输出：", "Output:", "提示词：", "Prompt:", "Keywords:", "提示词："]
             for prefix in prefixes:
                 if scene_prompt.startswith(prefix):
                     scene_prompt = scene_prompt[len(prefix):].strip()
             return scene_prompt
             
-        return self._get_fallback_scene_prompt(sharing_type, involves_self)
-
-    def _get_fallback_scene_prompt(self, sharing_type: SharingType, involves_self: bool) -> str:
-        """兜底场景逻辑"""
-        period = self._get_current_period()
-        
-        if period in [TimePeriod.NIGHT, TimePeriod.DAWN]:
-            time_suffix = ", dim lighting, indoor lamp light, dark atmosphere, cinematic lighting, night time"
-        elif period == TimePeriod.EVENING:
-            time_suffix = ", warm lighting, sunset atmosphere, soft shadows, evening"
-        else:
-            time_suffix = ", natural lighting, soft daylight, bright room, clear details"
-
-        if involves_self:
-            # 涉及自己的场景字典
-            base_scenes = {
-                SharingType.GREETING: "standing in cozy room, gentle smile, daily life theme",
-                SharingType.NEWS: "sitting at desk, looking at phone/screen, casual lifestyle",
-                SharingType.MOOD: "relaxing by window, thoughtful expression, peaceful vibe",
-                SharingType.KNOWLEDGE: "reading book, focused, comfortable study room",
-                SharingType.RECOMMENDATION: "holding an item, enthusiastic expression, sharing moment",
-            }
-        else:
-            # 纯空镜字典
-            base_scenes = {
-                SharingType.GREETING: "aesthetic room corner, morning vibe, clean composition",
-                SharingType.NEWS: "city street view, depth of field, urban life",
-                SharingType.MOOD: "quiet corner, light and shadow, emotional atmosphere",
-                SharingType.KNOWLEDGE: "bookshelf, desk setup, study atmosphere",
-                SharingType.RECOMMENDATION: "product display style, elegant background, soft focus",
-            }
-  
-        base = base_scenes.get(sharing_type, "aesthetic scene, high quality")
-        return f"{base}{time_suffix}, masterpiece, best quality, realist style"
-
-    # ==================== 辅助方法 ====================
-    async def _convert_prompt_to_description(self, prompt: str) -> str:
-        """将 Prompt 转换为中文描述"""
-        try:
-            # 简化提示词
-            simplified = prompt.replace("realist style,", "").replace("masterpiece,", "")
-            simplified = simplified.replace("best quality,", "").replace("high resolution,", "")
-            simplified = simplified.replace("detailed,", "").replace("vibrant colors", "")
-            simplified = simplified.strip().strip(",").strip()
-
-            if len(simplified) > 200:
-                simplified = simplified[:200] + "..."
-
-            res = await self.call_llm(f"请将以下英文绘画提示词翻译成简短的中文描述（20字内）：\n{simplified}", timeout=15)
-            
-            if res and len(res) < 50:
-                return res.strip()
-            
-            return simplified[:80] if len(simplified) > 80 else simplified
-        except: 
-            return "图片"
+        logger.warning("[DailySharing] 场景提示词生成失败（LLM异常或被拦截），取消配图")
+        return ""
 
     async def _call_aiimg(self, prompt: str) -> Optional[str]:
         # 插件查找逻辑
@@ -371,7 +339,12 @@ class ImageService:
 
         if self._aiimg_plugin:
             try: 
-                return await self._aiimg_plugin._generate_image(prompt=prompt, size="")
+                target_size = self._aiimg_plugin.config.get("size", "1024x1024")
+                path_obj = await self._aiimg_plugin.service.generate(prompt=prompt, size=target_size)
+                return str(path_obj)
+                
             except Exception as e: 
-                logger.error(f"[DailySharing] Generate error: {e}")
+                logger.error(f"[DailySharing] 生成图片出错: {e}")
+                
         return None
+

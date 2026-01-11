@@ -11,6 +11,14 @@ class ContextService:
         self.config = config
         self._life_plugin = None
         self._memos_plugin = None
+        
+        unified_conf = self.config.get("context_conf", {})
+        
+        self.life_conf = unified_conf
+        self.history_conf = unified_conf
+        self.memory_conf = unified_conf
+
+        self.image_conf = self.config.get("image_conf", {})
 
     # ==================== 基础辅助方法 ====================
 
@@ -22,7 +30,7 @@ class ContextService:
                 if keyword in getattr(plugin, "name", ""):
                     return getattr(plugin, "star_cls", None)
         except Exception as e:
-            logger.warning(f"[Context] Find plugin '{keyword}' error: {e}")
+            logger.warning(f"[上下文] 查找插件 '{keyword}' 错误: {e}")
         return None
 
     def _get_memos_plugin(self):
@@ -91,7 +99,7 @@ class ContextService:
 
     async def get_life_context(self) -> Optional[str]:
         """获取生活上下文"""
-        if not self.config.get("enable_life_context", True): 
+        if not self.life_conf.get("enable_life_context", True): 
             return None
             
         if not self._life_plugin: 
@@ -103,7 +111,7 @@ class ContextService:
                 if ctx and len(ctx.strip()) > 10:
                     return ctx
             except Exception as e: 
-                logger.warning(f"[Context] Life Scheduler error: {e}")
+                logger.warning(f"[上下文] Life Scheduler 插件调用出错: {e}")
         return None
 
     def format_life_context(self, context: str, sharing_type: SharingType, is_group: bool, group_info: dict = None) -> str:
@@ -117,12 +125,13 @@ class ContextService:
 
     def _format_life_context_for_group(self, context: str, sharing_type: SharingType, group_info: dict = None) -> str:
         """格式化群聊生活上下文"""
-        if not self.config.get("life_context_in_group", True): return ""
+        if not self.life_conf.get("life_context_in_group", True): return ""
         
-        # 如果是心情分享，且群聊热度高，则不带生活状态
+        # 如果是心情分享，且群聊热度高，则不带生活状态（避免在大家聊得火热时突然插一句无关的“我今天好累”）
         if sharing_type == SharingType.MOOD and group_info and group_info.get("chat_intensity") == "high":
             return ""
 
+        # 解析上下文中的关键信息
         lines = context.split('\n')
         weather, period, busy = None, None, False
         for line in lines:
@@ -130,36 +139,50 @@ class ContextService:
             elif '时段' in line: period = line.strip()
             elif '今日计划' in line or '约会' in line: busy = True
         
-        hint = "\n\n【你的状态】\n"
+        # 构建状态描述列表
+        status_parts = []
+        if weather: status_parts.append(weather)
+        if period: status_parts.append(period) 
+        if busy: status_parts.append("（今日状态：比较忙碌）")
+        
+        full_status = "\n".join(status_parts) if status_parts else "未知"
+        
+        # === 针对不同类型的 Prompt ===
+        
         if sharing_type == SharingType.GREETING:
-            if weather: hint += f"{weather}\n💡 可以提醒大家注意天气\n"
-            if period: hint += f"{period}\n"
-            if busy: hint += "今天有些安排\n💡 可以简单提一下你今天比较忙\n"
-            return hint
+            return f"\n\n【你的状态】\n{full_status}\n💡 结合天气、时段(早/晚)和忙闲状态，自然地向大家打招呼\n"
+            
         elif sharing_type == SharingType.NEWS:
-            if weather: return f"\n\n【当前场景】\n{weather}\n💡 可以说在什么天气下看到这个新闻\n"
+            return f"\n\n【当前场景】\n{full_status}\n💡 结合你当前的状态(如忙碌/休闲/天气)自然地分享新闻\n"
+            
+        elif sharing_type in (SharingType.KNOWLEDGE, SharingType.RECOMMENDATION):
+            return f"\n\n【当前场景】\n{full_status}\n💡 结合你当前的状态(如工作中/休息中)来切入分享\n"
+
         elif sharing_type == SharingType.MOOD:
-            hint_str = f"\n\n【你的状态】\n{weather or ''}\n"
-            if busy: hint_str += "今天有些事情要做\n"
-            return hint_str + "💡 可以简单分享心情，但不要过于私人\n"
+            return f"\n\n【你的状态】\n{full_status}\n💡 可以简单分享心情（结合天气或忙闲），但不要过于私人\n"
+            
         return ""
 
     def _format_life_context_for_private(self, context: str, sharing_type: SharingType) -> str:
         """格式化私聊生活上下文"""
+        # 私聊直接使用完整上下文 (context)，让 LLM 知道所有细节
+        
         if sharing_type == SharingType.GREETING:
-            return f"\n\n【你的真实状态】\n{context}\n\n💡 可以结合上面的真实状态（天气、穿搭、今日计划）来打招呼\n"
+            return f"\n\n【你的真实状态】\n{context}\n\n💡 请根据上面的真实日程（天气、穿搭、正在做什么）来打招呼\n"
+            
         elif sharing_type == SharingType.MOOD:
-            return f"\n\n【你现在的状态】\n{context}\n\n💡 可以结合当前的穿搭、天气、心情、约会等分享感受\n"
+            return f"\n\n【你现在的状态】\n{context}\n\n💡 可以结合当前的穿搭、天气、具体心情、约会/工作安排等分享感受\n"
+            
         elif sharing_type == SharingType.NEWS:
-            lines = [l for l in context.split('\n') if '天气' in l or '穿搭' in l or '约会' in l]
-            if lines:
-                return f"\n\n【你当前在做什么】\n{chr(10).join(lines[:3])}\n\n💡 可以说明你在什么场景下看到这个新闻\n"
-            return ""
+            return f"\n\n【你当前真实状态】\n{context}\n\n💡 你正在这个状态下偷闲刷手机，请根据当前状态合理描述（例如：工作时间就说是忙里偷闲；休息时间可以随意些）。\n"
+            
         elif sharing_type in (SharingType.KNOWLEDGE, SharingType.RECOMMENDATION):
-            lines = [l for l in context.split('\n') if '天气' in l or '时段' in l]
-            if lines:
-                return f"\n\n【当前场景】\n{chr(10).join(lines[:2])}\n\n💡 可以简单提一下当前场景\n"
-            return ""
+            return (
+                f"\n\n【你当前真实状态】\n{context}\n\n"
+                "💡 请结合你【当前正在做的事】来自然地引出这个分享。\n"
+                "   (例如：如果正在工作，可以是为了解决工作问题；如果正在运动，可以是间隙的思考。)\n"
+            )
+            
         return ""
 
     # ==================== 聊天历史 ====================
@@ -168,7 +191,7 @@ class ContextService:
         """
         获取聊天历史 
         """
-        if not self.config.get("enable_chat_history", True):
+        if not self.history_conf.get("enable_chat_history", True):
             return {}
             
         if is_group is None:
@@ -188,7 +211,7 @@ class ContextService:
         limit = 20
         
         try:
-            logger.info(f"[DailySharing] Reading history for {real_id}...")
+            logger.info(f"[DailySharing] 正在读取 {real_id} 的历史记录...")
             messages = []
             
             if is_group:
@@ -260,7 +283,7 @@ class ContextService:
                     logger.info(f"[DailySharing] 私聊历史获取成功: {len(messages)} 条")
 
                 except Exception as e:
-                    logger.debug(f"[DailySharing] NapCat Private History API skipped: {e}")
+                    logger.debug(f"[DailySharing] 私聊历史 API 获取失败: {e}")
 
             if not messages: return {}
 
@@ -271,7 +294,7 @@ class ContextService:
             return result
 
         except Exception as e:
-            logger.warning(f"[DailySharing] API Fetch History error: {e}")
+            logger.warning(f"[DailySharing] API 获取历史出错: {e}")
             return {}
 
     def _analyze_group_chat(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
@@ -313,7 +336,7 @@ class ContextService:
                 "is_discussing": is_discussing,
             }
         except Exception as e:
-            logger.warning(f"[DailySharing] Analyze group error: {e}")
+            logger.warning(f"[DailySharing] 分析群聊出错: {e}")
             return {}
 
     def format_history_prompt(self, history_data: Dict, sharing_type: SharingType) -> str:
@@ -365,7 +388,7 @@ class ContextService:
 
     def check_group_strategy(self, group_info: Dict) -> bool:
         if not group_info: return True
-        strategy = self.config.get("group_share_strategy", "cautious")
+        strategy = self.history_conf.get("group_share_strategy", "cautious")
         is_discussing = group_info.get("is_discussing", False)
         intensity = group_info.get("chat_intensity", "low")
 
@@ -378,13 +401,13 @@ class ContextService:
     # ==================== 记忆记录 ====================
 
     async def record_to_memos(self, target_umo: str, content: str, image_desc: str = None):
-        if not self.config.get("record_sharing_to_memory", True): return
+        if not self.memory_conf.get("record_sharing_to_memory", True): return
         memos = self._get_memos_plugin()
         if memos:
             try:
                 full_text = content
                 if image_desc: 
-                    tag = f"[配图: {image_desc}]" if self.config.get("record_image_description", True) else "[已发送配图]"
+                    tag = f"[配图: {image_desc}]" if self.image_conf.get("record_image_description", True) else "[已发送配图]"
                     full_text += f"\n{tag}"
                 elif image_desc is not None:
                     full_text += "\n[已发送配图]"
@@ -392,10 +415,15 @@ class ContextService:
                 cid = await self.context.conversation_manager.get_curr_conversation_id(target_umo)
                 if not cid: cid = await self.context.conversation_manager.new_conversation(target_umo)
 
+                virtual_prompt = "请发送今天的每日分享内容。" 
                 await memos.memory_manager.add_message(
-                    messages=[{"role": "assistant", "content": full_text}],
+                    messages=[
+                        {"role": "user", "content": virtual_prompt}, 
+                        {"role": "assistant", "content": full_text}
+                    ],
                     user_id=target_umo, conversation_id=cid
                 )
-                logger.info(f"[Context] Recorded to Memos for {target_umo}")
+                logger.info(f"[上下文] 已记录到 Memos: {target_umo}")
             except Exception as e: 
-                logger.warning(f"[Context] Record error: {e}")
+                logger.warning(f"[上下文] 记录失败: {e}")
+
