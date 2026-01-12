@@ -1,9 +1,10 @@
 # services/context.py
 import datetime
 import time
+import re
 from typing import Optional, Dict, Any, List
 from astrbot.api import logger
-from ..config import SharingType
+from ..config import SharingType, TimePeriod 
 
 class ContextService:
     def __init__(self, context_obj, config):
@@ -11,6 +12,7 @@ class ContextService:
         self.config = config
         self._life_plugin = None
         self._memos_plugin = None
+        self._tts_plugin = None
         
         unified_conf = self.config.get("context_conf", {})
         
@@ -19,6 +21,7 @@ class ContextService:
         self.memory_conf = unified_conf
 
         self.image_conf = self.config.get("image_conf", {})
+        self.tts_conf = self.config.get("tts_conf", {}) 
 
     # ==================== 基础辅助方法 ====================
 
@@ -38,6 +41,13 @@ class ContextService:
         if not self._memos_plugin:
             self._memos_plugin = self._find_plugin("astrbot_plugin_memos_integrator")
         return self._memos_plugin
+
+    def _get_tts_plugin_inst(self):
+        """获取 TTS 插件实例"""
+        if not self._tts_plugin:
+            # 查找 astrbot_plugin_tts_emotion_router
+            self._tts_plugin = self._find_plugin("astrbot_plugin_tts_emotion_router")
+        return self._tts_plugin
 
     def _is_group_chat(self, target_umo: str) -> bool:
         """判断是否为群聊"""
@@ -66,25 +76,21 @@ class ContextService:
             return None, None
 
     def _get_bot_instance(self, pm, adapter_id: str):
-        # --- 方案 1: 标准精确查找 (性能最好) ---
         try:
             inst = pm.get_inst(adapter_id)
             if inst and hasattr(inst, "bot") and inst.bot:
                 return inst.bot
         except: pass
 
-        # --- 方案 2: 全局暴力搜索 (解决 ID 不匹配问题) ---
         try:
             for attr_name in dir(pm):
                 if attr_name.startswith("__"): continue 
                 try:
                     val = getattr(pm, attr_name)
-                    # 检查字典 (通常是 insts 字典)
                     if isinstance(val, dict):
                         for v in val.values():
                             if hasattr(v, "bot") and v.bot:
                                 return v.bot
-                    # 检查列表
                     elif isinstance(val, list):
                         for v in val:
                             if hasattr(v, "bot") and v.bot:
@@ -95,8 +101,132 @@ class ContextService:
             
         return None
 
-    # ==================== 生活上下文 (Life Scheduler) ====================
+    # ==================== TTS 集成 (修改核心) ====================
 
+    def _determine_emotion_raw(self, sharing_type: SharingType, period: TimePeriod, content: str = "") -> str:
+        """
+        根据分享类型、时间段和文本内容，决定 TTS 的情绪字符串。
+        返回: 'happy', 'sad', 'angry', 'neutral' 或 None
+        """
+        
+        # === 1. 扩充关键词库 (融合了 TTS 插件的词库 + 分享场景特有词) ===
+        
+        happy_keywords = [
+            "开心", "快乐", "高兴", "喜悦", "愉快", "兴奋", "喜欢", "棒", "不错", "哈哈", 
+            "lol", "great", "awesome", "happy", "joy", "excited", ":)", "😀",
+            "震惊", "惊爆", "突发", "奇迹", "不可思议", "没想到", "惊讶", "哇", "天啊", 
+            "surprise", "喜讯", "祝贺", "期待"
+        ]
+        
+        # 愤怒/生气
+        angry_keywords = [
+            "生气", "愤怒", "火大", "恼火", "气愤", "气死", "怒", "怒了", "angry", 
+            "furious", "mad", "rage", "annoyed", "nm", "tmd", "淦", "😡",
+            "怒斥", "谴责", "恶劣", "讨厌", "过分", "无语", "抵制"
+        ]
+        
+        # 悲伤/难过 
+        sad_keywords = [
+            "伤心", "难过", "沮丧", "低落", "悲伤", "哭", "流泪", "难受", "失望", 
+            "委屈", "心碎", "sad", "depress", "upset", "unhappy", "blue", "tear", 
+            "遗憾", "可惜", "哀悼", "去世", "逝世", "痛苦", ":(", "😢"
+        ]
+
+        # === 2. 优先根据关键词判断强情绪 ===
+        
+        for k in angry_keywords:
+            if k in content: return "angry"
+            
+        for k in sad_keywords:
+            if k in content: return "sad"
+            
+        for k in happy_keywords:
+            if k in content: return "happy"
+        
+        # === 3. 根据业务类型和时间段判断基础情绪 (兜底策略) ===
+        
+        if sharing_type == SharingType.GREETING:
+            if period in [TimePeriod.DAWN, TimePeriod.MORNING, TimePeriod.EVENING]:
+                return "happy" # 早上元气一点
+            elif period == TimePeriod.NIGHT:
+                return "sad"   # 晚上温柔一点
+            else:
+                return "happy"
+        
+        elif sharing_type == SharingType.MOOD:
+            if period == TimePeriod.NIGHT:
+                return "sad" # 深夜网抑云
+            else:
+                return "neutral" # 随笔默认中立
+
+        elif sharing_type in [SharingType.NEWS, SharingType.KNOWLEDGE, SharingType.RECOMMENDATION]:
+            # 推荐通常是正向的
+            if sharing_type == SharingType.RECOMMENDATION:
+                return "happy"
+            # 新闻和知识默认客观中立
+            else:
+                return "neutral" 
+
+        return "neutral"
+
+    async def text_to_speech(self, text: str, target_umo: str, sharing_type: SharingType = None, period: TimePeriod = None) -> Optional[str]:
+        """
+        调用 TTS 插件将文本转换为语音文件路径
+        """
+        # 1. 检查开关
+        if not self.tts_conf.get("enable_tts", False):
+            return None
+
+        # 2. 获取插件
+        tts_plugin = self._get_tts_plugin_inst()
+        if not tts_plugin:
+            logger.warning("[DailySharing] 未找到 TTS 插件 (astrbot_plugin_tts_emotion_router)，无法生成语音。")
+            return None
+
+        # 3. 文本清洗与情感获取
+        final_text = text
+        
+        # 【正则替换】：彻底清洗文本中可能存在的任何标签，只保留纯文本给 TTS
+        final_text = re.sub(r'$$(EMO:)?(happy|sad|angry|neutral|surprise)$$', '', final_text, flags=re.IGNORECASE).strip()
+        
+        target_emotion = "neutral"
+        if sharing_type and period:
+            # 获取纯情绪字符串 (如 "happy")
+            target_emotion = self._determine_emotion_raw(sharing_type, period, text)
+
+        # 4. 调用生成
+        try:
+            session_state = None
+            
+            # 关键修改：直接操作 TTS 插件的 Session State
+            if hasattr(tts_plugin, "_get_session_state"):
+                # 获取该用户的会话状态对象
+                session_state = tts_plugin._get_session_state(target_umo)
+                
+                # 【注入情感】：将我们判断出的情绪直接写入 pending_emotion
+                if target_emotion and target_emotion != "neutral":
+                    if hasattr(session_state, "pending_emotion"):
+                        session_state.pending_emotion = target_emotion
+                        logger.debug(f"[DailySharing] 已注入 TTS 情绪状态: {target_emotion}")
+
+            logger.info(f"[DailySharing] 正在请求 TTS 生成: {final_text[:20]}... (情绪: {target_emotion})")
+            
+            # 调用 TTS 处理器的 process 方法
+            result = await tts_plugin.tts_processor.process(final_text, session_state)
+
+            if result and result.success and result.audio_path:
+                logger.info(f"[DailySharing] TTS 生成成功: {result.audio_path}")
+                return str(result.audio_path)
+            else:
+                logger.warning(f"[DailySharing] TTS 生成失败: {getattr(result, 'error', '未知错误')}")
+                return None
+
+        except Exception as e:
+            logger.error(f"[DailySharing] 调用 TTS 插件出错: {e}")
+            return None
+
+    # ==================== 生活上下文 (Life Scheduler) ====================
+    
     async def get_life_context(self) -> Optional[str]:
         """获取生活上下文"""
         if not self.life_conf.get("enable_life_context", True): 
@@ -127,9 +257,18 @@ class ContextService:
         """格式化群聊生活上下文"""
         if not self.life_conf.get("life_context_in_group", True): return ""
         
-        # 如果是心情分享，且群聊热度高，则不带生活状态（避免在大家聊得火热时突然插一句无关的“我今天好累”）
+        # 如果是心情分享，且群聊热度高，则不带生活状态
         if sharing_type == SharingType.MOOD and group_info and group_info.get("chat_intensity") == "high":
             return ""
+
+        # 检查配置开关：是否允许分享细节
+        allow_detail = self.life_conf.get("group_share_schedule", False)
+
+        if allow_detail:
+            # 如果允许细节，直接返回完整上下文
+            return f"\n\n【你的当前状态】\n{context}\n💡 (注意：这是群聊，你可以提及上述状态，但请保持自然，不要像汇报工作一样)\n"
+
+        # --- 以下为默认隐私模式（脱敏） ---
 
         # 解析上下文中的关键信息
         lines = context.split('\n')
@@ -426,4 +565,3 @@ class ContextService:
                 logger.info(f"[上下文] 已记录到 Memos: {target_umo}")
             except Exception as e: 
                 logger.warning(f"[上下文] 记录失败: {e}")
-

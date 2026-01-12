@@ -11,6 +11,7 @@ from astrbot.api import logger
 from astrbot.api.star import Context, Star, register, StarTools
 from astrbot.api.event import filter, AstrMessageEvent, MessageChain
 from astrbot.api import AstrBotConfig
+from astrbot.api.message_components import Record
 from .config import TimePeriod, SharingType, SHARING_TYPE_SEQUENCES, CRON_TEMPLATES
 from .services.news import NewsService
 from .services.image import ImageService
@@ -44,6 +45,7 @@ class DailySharingPlugin(Star):
         
         self.basic_conf = self.config.get("basic_conf", {})
         self.image_conf = self.config.get("image_conf", {})
+        self.tts_conf = self.config.get("tts_conf", {})
         self.llm_conf = self.config.get("llm_conf", {})
         self.receiver_conf = self.config.get("receiver", {})
         
@@ -257,7 +259,6 @@ class DailySharingPlugin(Star):
                     stype, period, uid, is_group, life_prompt, hist_prompt, news_data
                 )
                 
-                # 如果生成失败，记录日志到历史文件，然后跳过
                 if not content:
                     logger.warning(f"[DailySharing] 内容生成失败 {uid}")
                     self._append_history({
@@ -268,13 +269,36 @@ class DailySharingPlugin(Star):
                         "success": False
                     })
                     continue
-
+                
+                # --- 生成多媒体素材 (图片 & 语音) ---
+                
+                # 1. 配图生成逻辑
                 img_path = None
-                if self.image_conf.get("enable_ai_image", False):
-                    img_path = await self.image_service.generate_image(content, stype, life_ctx)
+                enable_img_global = self.image_conf.get("enable_ai_image", False)
+                img_allowed_types = self.image_conf.get("image_enabled_types", ["greeting", "mood", "knowledge", "recommendation"])
+                
+                if enable_img_global:
+                    if stype.value in img_allowed_types:
+                        img_path = await self.image_service.generate_image(content, stype, life_ctx)
+                    else:
+                         logger.info(f"[DailySharing] 当前类型 {stype.value} 不在配图允许列表，跳过作图。")
 
-                await self._send(uid, content, img_path)
+                # 2. 语音生成逻辑
+                audio_path = None
+                enable_tts_global = self.tts_conf.get("enable_tts", False)
+                tts_allowed_types = self.tts_conf.get("tts_enabled_types", ["greeting", "mood"])
+                
+                if enable_tts_global:
+                    if stype.value in tts_allowed_types:
+                        # 传入 stype 和 period 以确定情感
+                        audio_path = await self.ctx_service.text_to_speech(content, uid, stype, period)
+                    else:
+                        logger.info(f"[DailySharing] 当前类型 {stype.value} 不在语音允许列表，跳过 TTS。")
 
+                # --- 发送消息 ---
+                await self._send(uid, content, img_path, audio_path)
+
+                # --- 记录与历史 ---
                 img_desc = self.image_service.get_last_description()
                 await self.ctx_service.record_to_memos(uid, content, img_desc)
 
@@ -290,42 +314,69 @@ class DailySharingPlugin(Star):
 
             except Exception as e:
                 logger.error(f"[DailySharing] 处理 {uid} 时出错: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
 
-    async def _send(self, uid, text, img_path):
-        """发送消息（支持分开发送）"""
+    async def _send(self, uid, text, img_path, audio_path=None):
+        """发送消息（支持分开发送，支持语音）"""
         try:
-            chain = MessageChain().message(text)
-            separate = self.image_conf.get("separate_text_and_image", True)
+            separate_img = self.image_conf.get("separate_text_and_image", True)
+            prefer_audio_only = self.tts_conf.get("prefer_audio_only", False)
             
-            if img_path:
-                if separate:
-                    await self.context.send_message(uid, chain)
-                    delay_str = self.image_conf.get("separate_send_delay", "1.0-2.0")
-                    try:
-                        if "-" in str(delay_str):
-                            d_min, d_max = map(float, str(delay_str).split("-"))
-                            await asyncio.sleep(random.uniform(d_min, d_max))
-                        else:
-                            await asyncio.sleep(float(delay_str))
-                    except:
-                        await asyncio.sleep(1.5)
-                    
-                    img_chain = MessageChain()
-                    if img_path.startswith("http"): 
-                        img_chain.url_image(img_path)
-                    else: 
-                        img_chain.file_image(img_path)
-                    await self.context.send_message(uid, img_chain)
-                else:
-                    if img_path.startswith("http"): 
-                        chain.url_image(img_path)
-                    else: 
-                        chain.file_image(img_path)
-                    await self.context.send_message(uid, chain)
-            else:
-                await self.context.send_message(uid, chain)
+            # 判断是否应该发送文字
+            # 如果有语音，且开启了“仅发语音”，则不发文字
+            should_send_text = True
+            if audio_path and prefer_audio_only:
+                should_send_text = False
+
+            # 1. 发送文字（如果需要）
+            if should_send_text:
+                text_chain = MessageChain().message(text)
+                # 如果图片不分开发送，且没有语音（因为如果有语音，图片最好单独发），则合并图片
+                if img_path and not separate_img and not audio_path:
+                    if img_path.startswith("http"): text_chain.url_image(img_path)
+                    else: text_chain.file_image(img_path)
+                
+                await self.context.send_message(uid, text_chain)
+                
+                # 如果后续还有消息，进行随机延迟
+                if audio_path or (img_path and separate_img):
+                    await self._random_sleep()
+
+            # 2. 发送语音（如果有）
+            if audio_path:
+                audio_chain = MessageChain()
+                audio_chain.chain.append(Record(file=audio_path))
+                await self.context.send_message(uid, audio_chain)
+                
+                # 如果后续还有图片，延迟
+                if img_path and separate_img:
+                    await self._random_sleep()
+            
+            # 3. 发送图片（如果需要单独发送，或者因为有语音而被迫单独发送）
+            # 逻辑：只要图片还没发（separate_img 为真，或者虽然 separate_img 为假但因为有语音没能合并），就发
+            img_not_sent_yet = img_path and (separate_img or audio_path)
+            
+            if img_not_sent_yet:
+                img_chain = MessageChain()
+                if img_path.startswith("http"): img_chain.url_image(img_path)
+                else: img_chain.file_image(img_path)
+                await self.context.send_message(uid, img_chain)
+
         except Exception as e:
             logger.error(f"[DailySharing] 发送消息给 {uid} 失败: {e}")
+
+    async def _random_sleep(self):
+        """随机延迟"""
+        delay_str = self.image_conf.get("separate_send_delay", "1.0-2.0")
+        try:
+            if "-" in str(delay_str):
+                d_min, d_max = map(float, str(delay_str).split("-"))
+                await asyncio.sleep(random.uniform(d_min, d_max))
+            else:
+                await asyncio.sleep(float(delay_str))
+        except:
+            await asyncio.sleep(1.5)
 
     # ==================== 状态管理 ====================
 
