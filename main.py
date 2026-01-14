@@ -82,7 +82,6 @@ class DailySharingPlugin(Star):
         self.news_service = NewsService(config)
         self.image_service = ImageService(context, config, self._call_llm_wrapper)
         
-        # 依赖注入：将 news_service 传给 content_service
         self.content_service = ContentService(
             config, 
             self._call_llm_wrapper, 
@@ -308,12 +307,10 @@ class DailySharingPlugin(Star):
                 await self._send(uid, content, img_path, audio_path)
                 
                 # --- 获取图片描述并写入 AstrBot 聊天上下文 ---
-                # 先获取描述（ImageService 生成图片时保存的 Prompt）
                 img_desc = self.image_service.get_last_description()
                 await self.ctx_service.record_bot_reply_to_history(uid, content, image_desc=img_desc)
 
                 # --- 记录与历史 ---
-                # 传入相同的 img_desc
                 await self.ctx_service.record_to_memos(uid, content, img_desc)
 
                 await self._append_history({
@@ -542,7 +539,7 @@ class DailySharingPlugin(Star):
                     # 检查参数中是否包含 指定源
                     # 遍历除了命令本身外的参数
                     for p in parts[2:]:
-                        if p == "图片": continue # 跳过关键词
+                        if p == "图片": continue 
                         if p in SOURCE_CN_MAP:
                             news_src = SOURCE_CN_MAP[p]
                             break

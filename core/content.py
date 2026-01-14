@@ -1,4 +1,4 @@
-# services/content.py
+# core/content.py
 import random
 import json
 import os
@@ -41,7 +41,7 @@ REC_CATS = {
     "电影": ["高分冷门", "烧脑科幻", "经典黑白", "是枝裕和风", "赛博朋克", "奥斯卡遗珠", "纪录片"],
     "音乐": ["后摇/纯音", "爵士/蓝调", "独立民谣", "CityPop", "古典入门", "电影原声", "小众乐队"],
     "动漫": ["治愈日常", "硬核科幻", "热血运动", "悬疑智斗", "吉卜力风", "今敏风格", "冷门佳作"],
-    "美食": ["地方特色小吃", "创意懒人菜", "季节限定", "街头黑暗料理", "传统糕点", "异国风味"]
+    "美食": ["地方特色小吃", "创意懒人菜", "季节限定", "深夜罪恶美食", "传统糕点", "异国风味"]
 }
 
 class ContentService:
@@ -465,7 +465,7 @@ class ContentService:
     async def _gen_knowledge(self, ctx: dict):
         """生成知识分享，API 失败则使用 LLM 兜底"""
         if not self.news_service:
-            logger.warning("[内容服务] 未注入新闻服务，无法查询知识库，取消分享")
+            logger.warning("[内容服务] 无法调用百科服务，无法查询相关资料，取消分享")
             return None
 
         is_group = ctx['is_group']
@@ -603,7 +603,7 @@ class ContentService:
     async def _gen_rec(self, ctx: dict):
         """生成推荐，API 失败则使用 LLM 兜底"""
         if not self.news_service:
-            logger.warning("[内容服务] 未注入新闻服务，无法查询作品资料，取消分享")
+            logger.warning("[内容服务] 无法调用百科服务，无法查询相关资料，取消分享")
             return None
 
         is_group = ctx['is_group']
@@ -623,18 +623,35 @@ class ContentService:
         target_work = ""
         baike_context = ""
 
-        # 1. 快速生成一个作品名
+        # 针对“美食”类型进行特殊约束，防止推荐到动漫/游戏/电影
+        
+        target_item_desc = "作品名称"
+        food_constraint = ""
+        
+        if rec_type == "美食":
+            target_item_desc = "具体的食物名称"
+            food_constraint = """
+【严重警告 - 类别约束】
+你现在推荐的类别是【美食】。
+严禁推荐任何动漫、电影、游戏、书籍或小说作品！
+严禁推荐《食戟之灵》、《中华小当家》、《黄金神威》等番剧！
+必须输出一个【现实中存在的、可以吃的】具体食物名称（如：螺蛳粉、北京烤鸭、仰望星空派、臭豆腐）。
+"""
+
+        # 1. 快速生成一个作品/食物名
         pre_prompt = f"""
-请推荐一个【{sub_style}】风格的【{rec_type}】作品名称。
+请推荐一个【{sub_style}】风格的【{rec_type}】{target_item_desc}。
 【已推荐过的列表(请绝对避开)】
 {history_str}
 要求：
-1. 请优先选择【口碑极佳】的作品。
+1. 请优先选择【口碑极佳】的目标。
 2. 拒绝那些被推荐烂了的“教科书式标准答案”。
 3. 可以是经典名作，但最好能让人有“眼前一亮”或“值得重温”的感觉。
 4. 严禁输出上述“已推荐过的列表”中的内容，必须换一个新的。
-5. 只输出作品名，不要书名号，不要解释，不要标点。
+5. 只输出名称，不要书名号，不要解释，不要标点。
+{food_constraint}
 """
+
         kw_res = await self.call_llm(prompt=pre_prompt, system_prompt="你是一个品味独特的资深鉴赏家。", timeout=15)
         
         if not kw_res:
@@ -648,12 +665,12 @@ class ContentService:
         
         if info:
             # 命中 API
-             baike_context = f"\n\n【作品简介（真实数据）】\n{info}\n"
+             baike_context = f"\n\n【资料简介（真实数据）】\n{info}\n"
              logger.info(f"[内容服务] 百科API命中: {target_work}")
         else:
             # 未命中 API，使用 LLM 兜底
              logger.warning(f"[内容服务] 百科未命中【{target_work}】，将使用 LLM 内部知识库兜底")
-             baike_context = f"\n\n【提示】暂无外部资料，请基于你自己的知识库，真诚推荐作品【{target_work}】。"
+             baike_context = f"\n\n【提示】暂无外部资料，请基于你自己的知识库，真诚推荐【{target_work}】。"
 
         # 3. 称呼控制
         address_rule = ""
@@ -666,9 +683,9 @@ class ContentService:
         context_instruction = ""
         if is_group:
              if allow_detail:
-                 context_instruction = "- 场景参考：可以提及你当下的活动（如刚看完书、听完歌），作为推荐的引子。"
+                 context_instruction = "- 场景参考：可以提及你当下的活动（如刚看完书、听完歌、吃完饭），作为推荐的引子。"
              else:
-                 context_instruction = "- 忽略天气，除非它能极大烘托氛围（如下雨推爵士）。重点关注内容本身。如果状态忙碌，可以说“推荐个治愈的”，状态休闲可以说“打发时间”。"
+                 context_instruction = "- 忽略天气，除非它能极大烘托氛围（如下雨推爵士）。重点关注内容本身。如果状态忙碌，可以说“忙里偷闲推荐个”，状态休闲可以说“打发时间”。"
         else:
              context_instruction = """
 - **场景筛选（重要）**：
@@ -676,16 +693,16 @@ class ContentService:
   2. 关于状态：请尝试将推荐理由与你【当前正在做的事】联系起来。
      - 刚忙完工作 -> 推荐轻松的剧/音乐来回血
      - 正在深夜网抑云 -> 推荐致郁/治愈电影
-     - 正在吃饭 -> 推荐下饭综/美食番
+     - 正在吃饭 -> 推荐下饭综/美食番/好吃的
      让推荐看起来像是你此刻真实需求的延伸。
 """
 
         prompt = f"""
 【当前时间】{ctx['date_str']} {ctx['time_str']} ({ctx['period_label']})
-你现在的任务是：向{'群聊' if is_group else '私聊'}推荐作品【{target_work}】。
+你现在的任务是：向{'群聊' if is_group else '私聊'}推荐【{target_work}】。
 
 【核心指令】
-1. 必须基于下面的资料进行推荐，不要更换作品。
+1. 必须基于下面的资料进行推荐，不要更换目标。
 {baike_context}
 2. 历史记录：[{history_str}]
 
@@ -694,7 +711,7 @@ class ContentService:
 
 【严重警告 - 拒绝尴尬开头】
 - 严禁使用：“看大家推了那么多”、“看你们都在聊窝被窝”。
-- 直接说“最近发现了一个...”或者“推荐一部...”
+- 直接说“最近发现了一个...”或者“推荐一部/一个...”
 - 请完全忽略群聊的上下文，直接开启新话题。
 
 【重要：称呼控制】
@@ -709,7 +726,7 @@ class ContentService:
 3. 真诚推荐，避免营销号式的夸张表达
 4. 结合资料介绍它的亮点。
 5. 可以适当用emoji（1-2个）
-6. 务必用【】将作品全名【{target_work}】括起来。
+6. 务必用【】将推荐目标的名称【{target_work}】括起来。
 7. {'字数：80-120字' if is_group else '字数：120-180字'}。
 8. 直接输出推荐内容。
 """
