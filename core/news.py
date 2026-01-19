@@ -14,10 +14,10 @@ class NewsService:
     def _get_current_period(self) -> TimePeriod:
         from datetime import datetime
         hour = datetime.now().hour
-        if 0 <= hour < 6: return TimePeriod.DAWN
-        elif 6 <= hour < 12: return TimePeriod.MORNING
+        if 0 <= hour < 8: return TimePeriod.DAWN
+        elif 8 <= hour < 12: return TimePeriod.MORNING
         elif 12 <= hour < 17: return TimePeriod.AFTERNOON
-        elif 17 <= hour < 20: return TimePeriod.EVENING
+        elif 17 <= hour < 19: return TimePeriod.EVENING
         else: return TimePeriod.NIGHT
 
     def select_news_source(self) -> str:

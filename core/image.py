@@ -1,4 +1,4 @@
-# services/image.py
+# core/image.py
 import os
 import random
 from datetime import datetime
@@ -20,10 +20,10 @@ class ImageService:
 
     def _get_current_period(self) -> TimePeriod:
         hour = datetime.now().hour
-        if 0 <= hour < 6: return TimePeriod.DAWN
-        elif 6 <= hour < 11: return TimePeriod.MORNING
+        if 0 <= hour < 8: return TimePeriod.DAWN
+        elif 8 <= hour < 11: return TimePeriod.MORNING
         elif 11 <= hour < 17: return TimePeriod.AFTERNOON
-        elif 17 <= hour < 20: return TimePeriod.EVENING
+        elif 17 <= hour < 19: return TimePeriod.EVENING
         else: return TimePeriod.NIGHT
 
     # ==================== 主入口 ====================
@@ -234,11 +234,11 @@ class ImageService:
         
         # === 光影逻辑与环境 ===
         if period in [TimePeriod.NIGHT, TimePeriod.DAWN]:
-            time_context = "夜晚/深夜"
-            light_vibe = "昏暗的光线, 电影感布光, 舒适的氛围, 深色调, (如果是室内则是人造光), (如果是室外则是城市灯光)"
+            time_context = "夜晚"
+            light_vibe = "昏暗的光线, 电影感布光, 舒适的氛围, 深色调, 室内人造光, 室外城市灯光"
             negative_constraint = "不要阳光, 不要蓝天, 不要明亮的白天景色, 画面整体不要太亮"
         elif period == TimePeriod.EVENING:
-            time_context = "傍晚/黄昏"
+            time_context = "傍晚"
             light_vibe = "温暖的金色光线, 日落氛围, 柔和的阴影"
             negative_constraint = "不要正午强光, 不要漆黑的夜晚"
         else:
@@ -253,10 +253,10 @@ class ImageService:
 
         if involves_self:
             # ================= 画人模式 =================
-            if sharing_type == SharingType.GREETING: comp_desc = "肖像, 上半身, 直视镜头"
+            if sharing_type == SharingType.GREETING: comp_desc = "半身像, 面对镜头, 背景虚化"
             elif sharing_type == SharingType.MOOD: comp_desc = "特写, 脸部聚焦, 景深效果"
-            elif sharing_type == SharingType.NEWS: comp_desc = "中景, 坐在桌前或咖啡馆, 看手机或屏幕"
-            elif sharing_type == SharingType.RECOMMENDATION: comp_desc = "中景, 手持物品, 聚焦手部"
+            elif sharing_type == SharingType.NEWS: comp_desc = "中景, 生活快照, 看手机或屏幕"
+            elif sharing_type == SharingType.RECOMMENDATION: comp_desc = "中景, 展示物品, 手部特写, 聚焦物体"
             else: comp_desc = "中景, 自然姿态"
 
             outfit_constraint = ""

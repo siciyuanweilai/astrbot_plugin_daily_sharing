@@ -124,6 +124,142 @@ class DailySharingPlugin(Star):
 
     # ==================== 核心逻辑 (LLM调用与任务) ====================
 
+    @filter.llm_tool(name="daily_share")
+    async def daily_share_tool(
+        self, 
+        event: AstrMessageEvent, 
+        share_type: str, 
+        source: str = None, 
+        get_image: bool = False,
+        need_image: bool = False,
+        need_voice: bool = False
+    ):
+        """
+        主动分享日常内容、新闻热搜、获取热搜图片等。
+        当用户想要看新闻、热搜、早安晚安、冷知识、心情或推荐时调用此工具。
+
+        Args:
+            share_type(string): 分享类型。必须是以下之一：'问候', '新闻', '心情', '知识', '推荐'。
+            source(string): 仅当 share_type 为'新闻'时有效。指定新闻平台。支持：微博, 知乎, B站, 抖音, 头条, 百度, 腾讯, 小红书。如果不指定则留空。
+            get_image(boolean): 仅当 share_type 为'新闻'时有效。如果用户明确想看“图片”、“长图”或“截图”时设为 True。默认为 False (即只看文字摘要)。
+            need_image(boolean): 是否需要AI为这段文案配图。默认为 False。仅当用户明确说“配图”、“带图”、“发张图”时，才将其设为 True。
+            need_voice(boolean): 是否需要将文案转为语音(TTS)发送。默认为 False。仅当用户明确提到“语音”、“朗读”、“念给我听”时，设为 True。
+        """
+        
+        # 1. 防抖检查
+        request_id = f"share_{event.get_sender_id()}"
+        if self._lock.locked():
+             return "正如火如荼地准备中，请稍后..."
+        
+        # 2. 参数清洗与映射
+        target_type_enum = None
+        
+        # 映射分享类型 (中文 -> 枚举)
+        if share_type in CMD_CN_MAP:
+            target_type_enum = CMD_CN_MAP[share_type]
+        else:
+            # 模糊匹配尝试
+            for k, v in CMD_CN_MAP.items():
+                if k in share_type:
+                    target_type_enum = v
+                    break
+            if not target_type_enum:
+                return f"不支持的分享类型：{share_type}。支持：问候, 新闻, 心情, 知识, 推荐。"
+
+        # 映射新闻源 (中文 -> key)
+        news_src_key = None
+        if target_type_enum == SharingType.NEWS and source:
+            # 尝试直接匹配
+            if source in SOURCE_CN_MAP:
+                news_src_key = SOURCE_CN_MAP[source]
+            # 尝试在 map 的 values 中找 (处理 LLM 可能传英文 key 的情况)
+            elif source in NEWS_SOURCE_MAP:
+                news_src_key = source
+            else:
+                # 模糊匹配
+                for name, key in SOURCE_CN_MAP.items():
+                    if name in source or source in name:
+                        news_src_key = key
+                        break
+        
+        # 3. 执行逻辑
+        try:
+            # 场景 A: 获取新闻长图 (直接发送图片，不走 LLM 生成文本流程)
+            if target_type_enum == SharingType.NEWS and get_image:
+                # 如果没指定源，让 service 自动选一个
+                if not news_src_key:
+                    news_src_key = self.news_service.select_news_source()
+                
+                img_url, src_name = self.news_service.get_hot_news_image_url(news_src_key)
+                
+                # 发送图片
+                await event.send(event.image_result(img_url))
+                return f"已发送{src_name}图片。"
+
+            # 场景 B: 标准流程 (生成文案 + 可选配图 + 可选语音)
+            else:
+                src_info = f" ({NEWS_SOURCE_MAP[news_src_key]['name']})" if news_src_key else ""
+                
+                # 获取上下文
+                uid = event.get_sender_id()
+                # 统一格式 adapter:type:id
+                if not ":" in str(uid):
+                    # 尝试从 event 构建标准 UMO ID
+                    target_umo = event.unified_msg_origin
+                else:
+                    target_umo = uid
+
+                # 重新计算时段
+                period = self._get_curr_period()
+                
+                # 准备数据
+                life_ctx = await self.ctx_service.get_life_context()
+                news_data = None
+                if target_type_enum == SharingType.NEWS:
+                    news_data = await self.news_service.get_hot_news(news_src_key)
+
+                # 获取历史
+                is_group = self.ctx_service._is_group_chat(target_umo)
+                hist_data = await self.ctx_service.get_history_data(target_umo, is_group)
+                hist_prompt = self.ctx_service.format_history_prompt(hist_data, target_type_enum)
+                group_info = hist_data.get("group_info")
+                life_prompt = self.ctx_service.format_life_context(life_ctx, target_type_enum, is_group, group_info)
+                
+                # 生成内容
+                content = await self.content_service.generate(
+                    target_type_enum, period, target_umo, is_group, life_prompt, hist_prompt, news_data
+                )
+                
+                if not content:
+                    return "内容生成失败，请稍后再试。"
+                
+                # 生成配图/语音
+                img_path = None
+                if self.image_conf.get("enable_image", False) and need_ai_image:
+                    allowed = self.image_conf.get("image_enabled_types", [])
+                    if target_type_enum.value in allowed:
+                        img_path = await self.image_service.generate_image(content, target_type_enum, life_ctx)
+
+                audio_path = None
+                if self.tts_conf.get("enable_tts", False) and need_voice:
+                    audio_path = await self.ctx_service.text_to_speech(content, target_umo, target_type_enum, period)
+
+                # 发送
+                await self._send(target_umo, content, img_path, audio_path)
+                
+                # 记录上下文
+                img_desc = self.image_service.get_last_description()
+                await self.ctx_service.record_bot_reply_to_history(target_umo, content, image_desc=img_desc)
+                await self.ctx_service.record_to_memos(target_umo, content, img_desc)
+                
+                return f"已成功分享{share_type}内容。"
+
+        except Exception as e:
+            logger.error(f"[DailySharing] Tool error: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return f"执行出错: {str(e)}"
+
     async def _call_llm_wrapper(self, prompt: str, system_prompt: str = None, timeout: int = 60, max_retries: int = 2) -> Optional[str]:
         """LLM 调用包装器"""
         provider_id = self.llm_conf.get("llm_provider_id", "")
@@ -393,10 +529,10 @@ class DailySharingPlugin(Star):
 
     def _get_curr_period(self) -> TimePeriod:
         h = datetime.now().hour
-        if 0 <= h < 6: return TimePeriod.DAWN
-        if 6 <= h < 12: return TimePeriod.MORNING
+        if 0 <= h < 8: return TimePeriod.DAWN
+        if 8 <= h < 12: return TimePeriod.MORNING
         if 12 <= h < 17: return TimePeriod.AFTERNOON
-        if 17 <= h < 20: return TimePeriod.EVENING
+        if 17 <= h < 19: return TimePeriod.EVENING
         return TimePeriod.NIGHT
 
     @staticmethod

@@ -53,7 +53,7 @@ class ContentService:
         self.call_llm = llm_func
         self.context = context 
         self.state_file = state_file 
-        self.news_service = news_service # 注入 NewsService 以调用百科API
+        self.news_service = news_service
         
         self.news_conf = self.config.get("news_conf", {})
         self.llm_conf = self.config.get("llm_conf", {})
@@ -407,17 +407,15 @@ class ContentService:
         context_instruction = ""
         if is_group:
             if allow_detail:
-                 context_instruction = "- 场景参考：可以直接说是“忙里偷闲”或“写代码的时候”刷到的，展示你的真实状态。"
+                 context_instruction = "- 场景参考：必须基于上方提供的【真实状态】。如果是外出探索，就说是“在路上刷到的”；如果是工作，就说是“忙里偷闲”。"
             else:
-                 context_instruction = "- 场景参考：如果提示你状态忙碌，可以说“忙里偷闲刷到了这个”。如果状态未知，直接分享新闻即可。"
+                 context_instruction = "- 场景参考：请忽略环境干扰，专注于新闻本身。简单带过你的状态即可。"
         else:
             context_instruction = """
 - **场景合理化（重要）**：
-  你可能正在工作、学习或休息（参考上面的【真实状态】）。
-  请务必合理化“为什么你现在在看新闻”：
-  - 如果在工作/忙碌：说是“忙里偷闲”、“趁休息空档”、“摸鱼看到的”。
-  - 如果在休息/路上：说是“无聊刷到的”、“刚醒看到的”。
-  不要让你的行为和你的日程产生逻辑冲突。
+  必须基于上方提供的【真实生活状态】来设定你“在哪里看新闻”。
+  - 严禁违背日程：如果日程是“外出/约会”，必须描述为在途中、躲雨时或到达目的地后看的，严禁说“在被窝里”或“刚醒”。
+  - 即使天气不好，也要按照日程设定的“外出人设”来发言（例如：“虽然下雨，但在外面躲雨的时候看到了这个...”）。
 """
 
         prompt = f"""
@@ -435,8 +433,9 @@ class ContentService:
 - 请完全忽略群聊的上下文，直接开启这个新闻话题。
 {address_rule}
 
-【重要：场景融合】
+【重要：场景融合与一致性】
 {context_instruction}
+【特别强调】：请检查你的穿搭和日程，如果你的穿搭是外出/约会的（如大衣、制服），绝对不要描述自己躺在床上或刚睡醒。这不符合逻辑。
 
 【开头方式】（必须自然提到平台"{source_name}"）
 - "忙里偷闲刷了下{source_name}..."
