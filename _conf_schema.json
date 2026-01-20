@@ -59,25 +59,34 @@
         "hint": "auto=按照下方配置的【时段序列】自动轮换（推荐） | 若选择具体类型，则永远只发该类型。"
       },
       "morning_sequence": {
-        "description": "【序列】早晨时段 (06:00-12:00)",
+        "description": "【序列】早晨时段 (06:00-09:00)",
         "type": "list",
         "items": {
           "type": "string"
         },
-        "default": ["greeting", "news"],
+        "default": ["greeting"],
         "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环执行。"
       },
-      "afternoon_sequence": {
-        "description": "【序列】下午时段 (12:00-17:00",
+      "forenoon_sequence": {
+        "description": "【序列】上午时段 (09:00-12:00)",
         "type": "list",
         "items": {
           "type": "string"
         },
-        "default": ["news", "knowledge", "recommendation"],
+        "default": ["news", "knowledge"],
+        "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环执行。"
+      },      
+      "afternoon_sequence": {
+        "description": "【序列】下午时段 (12:00-16:00)",
+        "type": "list",
+        "items": {
+          "type": "string"
+        },
+        "default": ["news", "knowledge"],
         "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环执行。"
       },
       "evening_sequence": {
-        "description": "【序列】傍晚时段 (17:00-20:00)",
+        "description": "【序列】傍晚时段 (16:00-19:00)",
         "type": "list",
         "items": {
           "type": "string"
@@ -86,12 +95,12 @@
         "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环执行。"        
       },
       "night_sequence": {
-        "description": "【序列】夜晚时段 (20:00-24:00)",
+        "description": "【序列】夜晚时段 (19:00-24:00)",
         "type": "list",
         "items": {
           "type": "string"
         },
-        "default": ["mood"],
+        "default": ["mood", "greeting"],
         "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环执行。"        
       },
       "dawn_sequence": {

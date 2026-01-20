@@ -140,8 +140,11 @@ class ContentService:
 
     def _get_period_label(self, period: TimePeriod) -> str:
         labels = {
-            TimePeriod.DAWN: "凌晨", TimePeriod.MORNING: "早晨",
-            TimePeriod.AFTERNOON: "下午", TimePeriod.EVENING: "傍晚",
+            TimePeriod.DAWN: "凌晨", 
+            TimePeriod.MORNING: "早晨",
+            TimePeriod.FORENOON: "上午",
+            TimePeriod.AFTERNOON: "下午", 
+            TimePeriod.EVENING: "傍晚",
             TimePeriod.NIGHT: "深夜",
         }
         return labels.get(period, "现在")
@@ -206,8 +209,11 @@ class ContentService:
 
     async def _gen_greeting(self, period: TimePeriod, ctx: dict):
         emojis = {
-            TimePeriod.DAWN: "🌃", TimePeriod.MORNING: "🌅",
-            TimePeriod.AFTERNOON: "☀️", TimePeriod.EVENING: "🌇",
+            TimePeriod.DAWN: "🌃", 
+            TimePeriod.MORNING: "🌅",
+            TimePeriod.FORENOON: "☀️",
+            TimePeriod.AFTERNOON: "☕",
+            TimePeriod.EVENING: "🌇",
             TimePeriod.NIGHT: "🌙",
         }
         p_label = ctx['period_label']
@@ -245,6 +251,20 @@ class ContentService:
         else:
             context_instruction = "真诚、个人化"
 
+        greeting_constraint = ""
+        
+        # 清晨(6-8) -> 强制早安
+        if period in [TimePeriod.MORNING]:
+            greeting_constraint = "4. 文案开头必须带上温馨的早安问候"
+            
+        # 深夜(19-24) 和 凌晨(0-6) -> 强制晚安
+        elif period in [TimePeriod.NIGHT, TimePeriod.DAWN]:
+            greeting_constraint = "4. 文案末尾必须带上温馨的晚安问候"
+            
+        # 上午/下午/傍晚 -> 自然打招呼
+        else:
+            greeting_constraint = "4. 就像平常聊天一样自然打招呼即可，不需要刻意说早安晚安"            
+
         prompt = f"""
 【当前时间】{ctx['date_str']} {ctx['time_str']} ({p_label})
 你现在要向{'群聊' if is_group else '私聊'}发送一条温馨自然的问候。
@@ -269,10 +289,9 @@ class ContentService:
 1. 以你的人设性格说话，真实自然
 2. 基于当前真实时间问候
 3. 忽略群聊历史，直接开启新问候
-4. 如果是【早晨】时段，文案开头必须带上温馨的早安问候
-5. 如果是【深夜】时段，文案末尾必须带上温馨的晚安问候
-6. {'简短（50-80字）' if is_group else '可适当长一些（50-80字）'}
-7. 直接输出内容，不要解释  
+{greeting_constraint} 
+5. {'简短（50-80字）' if is_group else '可适当长一些（50-80字）'}
+6. 直接输出内容，不要解释  
 
 请生成{p_label}问候："""
 

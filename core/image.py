@@ -20,10 +20,11 @@ class ImageService:
 
     def _get_current_period(self) -> TimePeriod:
         hour = datetime.now().hour
-        if 0 <= hour < 8: return TimePeriod.DAWN
-        elif 8 <= hour < 11: return TimePeriod.MORNING
-        elif 11 <= hour < 17: return TimePeriod.AFTERNOON
-        elif 17 <= hour < 19: return TimePeriod.EVENING
+        if 0 <= hour < 6: return TimePeriod.DAWN
+        elif 6 <= hour < 9: return TimePeriod.MORNING
+        elif 9 <= hour < 12: return TimePeriod.FORENOON
+        elif 12 <= hour < 16: return TimePeriod.AFTERNOON
+        elif 16 <= hour < 19: return TimePeriod.EVENING
         else: return TimePeriod.NIGHT
 
     # ==================== 主入口 ====================
@@ -112,7 +113,7 @@ class ImageService:
         is_night = period in [TimePeriod.NIGHT, TimePeriod.DAWN]
         
         # 定义时间段约束，防止晚上提取到白天的衣服
-        time_constraint = "【深夜/休息模式】：忽略白天外出服，仅提取睡衣、家居服或浴袍。" if is_night else "【白天/活动模式】：提取外出的日常穿搭，忽略睡衣。"
+        time_constraint = "【深夜/休息模式】：忽略白天外出服装，仅提取睡衣、家居服或浴袍。" if is_night else "【白天/活动模式】：提取外出的日常穿搭，忽略睡衣。"
 
         prompt = f"""
 你是一个 AI 绘图提示词优化专家。你的任务是将用户的【日记式穿搭文本】转化为【AI 视觉提示词】。
@@ -122,15 +123,15 @@ class ImageService:
 请严格遵守以下清洗规则：
 1. 【提取视觉元素】：提取发型、衣物（外套、上衣、下装）、配饰（包、发卡、耳饰、鞋袜）。
 2. 【明确穿搭层次（核心）】：
-   - 若文本同时包含【外套】和【内搭】，**必须**明确描述层次关系。
+   - 若文本同时包含【外套】和【内搭】，必须明确描述层次关系。
    - 推荐格式：使用 '穿着xxx外套，敞开露出内搭xxx' 或 '外穿xxx，内搭xxx'。
    - 严禁将外套和内搭简单并列，防止画面材质混淆（例如不要说：'香芋紫毛衣，棒球服'，要说：'棒球服外套，内搭香芋紫毛衣'）。
-3. 【保留关键细节】：保留物体的**数量**（如'双'马尾）、**颜色**、**材质**（如'马海毛'、'丝绒'）和**形状**。
+3. 【保留关键细节】：保留物体的数量（如'双'马尾）、颜色、材质（如'马海毛'、'丝绒'）和形状。
 4. 【去除噪音】：
    - 删除情绪描写（如'心情好'）。
    - 删除看不见的贴身衣物（如'光腿神器'、'保暖内衣'、'秋裤'），除非它是作为外穿打底裤描述的。
 5. 【禁止比喻】：删除比喻句（如'像路人甲'），只保留物体本身的视觉特征。
-6. 【保留鞋袜】：在此阶段**保留**所有鞋子和袜子的描述（构图剪裁将在后续步骤处理）。
+6. 【保留鞋袜】：在此阶段保留所有鞋子和袜子的描述（构图剪裁将在后续步骤处理）。
 7. 【输出格式】：直接输出清洗后的中文视觉描述字符串，用逗号分隔，不要任何解释。
 请输出视觉提示词："""
         
@@ -241,6 +242,14 @@ class ImageService:
             time_context = "傍晚"
             light_vibe = "温暖的金色光线, 日落氛围, 柔和的阴影"
             negative_constraint = "不要正午强光, 不要漆黑的夜晚"
+        elif period == TimePeriod.MORNING:
+            time_context = "早晨"
+            light_vibe = "日出晨光, 柔和的朝阳, 清新的空气感, 丁达尔效应, 梦幻光影"
+            negative_constraint = "不要正午顶光, 不要夜晚"    
+        elif period in [TimePeriod.FORENOON, TimePeriod.AFTERNOON]:
+            time_context = "白天"
+            light_vibe = "明亮的日光, 晴朗的天空, 清晰的照明, 充满活力"
+            negative_constraint = "不要夜景, 不要黄昏, 画面不要太暗"                    
         else:
             time_context = "白天"
             light_vibe = "自然光, 明亮, 柔和的日光, 清晰的照明"

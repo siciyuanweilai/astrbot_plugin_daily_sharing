@@ -529,10 +529,11 @@ class DailySharingPlugin(Star):
 
     def _get_curr_period(self) -> TimePeriod:
         h = datetime.now().hour
-        if 0 <= h < 8: return TimePeriod.DAWN
-        if 8 <= h < 12: return TimePeriod.MORNING
-        if 12 <= h < 17: return TimePeriod.AFTERNOON
-        if 17 <= h < 19: return TimePeriod.EVENING
+        if 0 <= h < 6: return TimePeriod.DAWN
+        if 6 <= h < 9: return TimePeriod.MORNING
+        if 9 <= h < 12: return TimePeriod.FORENOON
+        if 12 <= h < 16: return TimePeriod.AFTERNOON
+        if 16 <= h < 19: return TimePeriod.EVENING
         return TimePeriod.NIGHT
 
     @staticmethod
@@ -573,6 +574,7 @@ class DailySharingPlugin(Star):
         
         config_key_map = {
             TimePeriod.MORNING: "morning_sequence",
+            TimePeriod.FORENOON: "forenoon_sequence",
             TimePeriod.AFTERNOON: "afternoon_sequence",
             TimePeriod.EVENING: "evening_sequence",
             TimePeriod.NIGHT: "night_sequence",

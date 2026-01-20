@@ -4,10 +4,11 @@ from enum import Enum
 class TimePeriod(Enum):
     """时间段"""
     DAWN = "dawn"          # 凌晨 0-6
-    MORNING = "morning"    # 早晨 6-12
-    AFTERNOON = "afternoon"  # 下午 12-17  
-    EVENING = "evening"    # 傍晚 17-20  
-    NIGHT = "night"        # 深夜 20-24  
+    MORNING = "morning"    # 早晨 6-9
+    FORENOON = "forenoon"  # 上午 9-12
+    AFTERNOON = "afternoon"  # 下午 12-16  
+    EVENING = "evening"    # 傍晚 16-19  
+    NIGHT = "night"        # 深夜 19-24  
 
 class SharingType(Enum):
     """分享类型"""
@@ -82,6 +83,14 @@ NEWS_TIME_PREFERENCES = {
         "bili": 0.1,
         "zhihu": 0.05,
     },
+    TimePeriod.FORENOON: {
+        "xiaohongshu": 0.3, 
+        "weibo": 0.25,
+        "toutiao": 0.2,
+        "baidu": 0.1,
+        "bili": 0.1,
+        "zhihu": 0.05,
+    },    
     TimePeriod.AFTERNOON: {
         "douyin": 0.3,
         "zhihu": 0.2,
@@ -117,25 +126,30 @@ NEWS_TIME_PREFERENCES = {
 
 # 分享类型序列
 SHARING_TYPE_SEQUENCES = {
-    # ===== 早晨时段 (6:00-12:00) =====
+    # ===== 早晨时段 (06:00-09:00) =====
     TimePeriod.MORNING: [
         SharingType.GREETING.value,    # 第1次：早安问候
-        SharingType.NEWS.value,        # 第2次：新闻热搜
     ],
 
-    # ===== 下午时段 (12:00-17:00) =====
+    # ===== 上午时段 (09:00-12:00) =====
+    TimePeriod.FORENOON: [
+        SharingType.NEWS.value,        # 第1次：新闻热搜
+        SharingType.KNOWLEDGE.value,   # 第2次：知识
+    ],    
+
+    # ===== 下午时段 (12:00-16:00) =====
     TimePeriod.AFTERNOON: [
         SharingType.NEWS.value,        # 第1次：新闻热搜
         SharingType.KNOWLEDGE.value,   # 第2次：知识
-        SharingType.RECOMMENDATION.value,  # 第3次：推荐
     ],
 
-    # ===== 傍晚时段 (17:00-20:00) =====
+    # ===== 傍晚时段 (16:00-19:00) =====
     TimePeriod.EVENING: [
-        SharingType.NEWS.value,        # 第1次：新闻热搜
+        SharingType.RECOMMENDATION.value,  # 第1次：推荐
+        SharingType.NEWS.value,        # 第2次：新闻热搜
     ],
 
-    # ===== 夜晚时段 (20:00-24:00) =====
+    # ===== 夜晚时段 (19:00-24:00) =====
     TimePeriod.NIGHT: [
         SharingType.MOOD.value,        # 第1次：夜晚心情
         SharingType.GREETING.value,    # 第2次：晚安问候        
