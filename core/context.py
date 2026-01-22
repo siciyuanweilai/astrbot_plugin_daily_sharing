@@ -275,7 +275,7 @@ class ContextService:
     # ==================== 生活上下文 (Life Scheduler) ====================
     
     async def get_life_context(self) -> Optional[str]:
-        """获取生活上下文"""
+        """获取生活上下文 (支持解析 JSON 数据)"""
         if not self.life_conf.get("enable_life_context", True): 
             return None
             
@@ -284,12 +284,47 @@ class ContextService:
             
         if self._life_plugin and hasattr(self._life_plugin, 'get_life_context'):
             try: 
-                ctx = await self._life_plugin.get_life_context()
-                if ctx and len(ctx.strip()) > 10:
-                    return ctx
+                raw_data = await self._life_plugin.get_life_context()
+                
+                # 处理字典格式 (新的 Life Scheduler 返回结构)
+                if isinstance(raw_data, dict):
+                    return self._parse_life_data(raw_data)
+                
+                # 处理字符串格式 (旧的兼容)
+                if raw_data and isinstance(raw_data, str) and len(raw_data.strip()) > 10:
+                    return raw_data
             except Exception as e: 
                 logger.warning(f"[上下文] Life Scheduler 插件调用出错: {e}")
         return None
+
+    def _parse_life_data(self, data: dict) -> str:
+        """解析 Life Scheduler 返回的 JSON 数据为自然语言"""
+        try:
+            parts = []
+            
+            # 1. 天气
+            weather = data.get("weather", "")
+            if weather: parts.append(f"【今日天气】{weather}")
+            
+            # 2. 穿搭
+            outfit = data.get("outfit", "")
+            if outfit: parts.append(f"【今日穿搭】{outfit}")
+            
+            # 3. 风格与心情
+            meta = data.get("meta", {})
+            mood = meta.get("mood", "")
+            style = meta.get("style", "")
+            if mood or style:
+                parts.append(f"【今日风格】心情{mood}，走{style}")
+                
+            # 4. 日程详情
+            schedule = data.get("schedule", "")
+            if schedule: parts.append(f"【今日日程与状态】\n{schedule}")
+            
+            return "\n\n".join(parts)
+        except Exception as e:
+            logger.error(f"[上下文] 解析生活数据失败: {e}")
+            return str(data)
 
     def format_life_context(self, context: str, sharing_type: SharingType, is_group: bool, group_info: dict = None) -> str:
         """格式化生活上下文 (统一入口)"""

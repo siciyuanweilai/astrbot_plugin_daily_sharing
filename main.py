@@ -235,7 +235,7 @@ class DailySharingPlugin(Star):
                 
                 # 生成配图/语音
                 img_path = None
-                if self.image_conf.get("enable_image", False) and need_ai_image:
+                if self.image_conf.get("enable_image", False) and need_image:
                     allowed = self.image_conf.get("image_enabled_types", [])
                     if target_type_enum.value in allowed:
                         img_path = await self.image_service.generate_image(content, target_type_enum, life_ctx)
@@ -344,17 +344,45 @@ class DailySharingPlugin(Star):
             logger.error(f"[DailySharing] 设置 Cron 失败: {e}")
 
     async def _task_wrapper(self):
-        """任务包装器（防抖 + 锁）"""
+        """任务包装器（防抖 + 锁 + 随机延迟）"""
+        # === 随机延迟逻辑 ===
+        try:
+            # 从配置获取随机延迟分钟数，默认为 0
+            random_delay_min = int(self.basic_conf.get("cron_random_delay", 0))
+        except Exception:
+            random_delay_min = 0
+
+        if random_delay_min > 0:
+            # 计算延迟秒数 (0 到 max*60)
+            delay_seconds = random.randint(0, random_delay_min * 60)
+            if delay_seconds > 0:
+                trigger_time = datetime.now()
+                expected_time = trigger_time.timestamp() + delay_seconds
+                time_str = datetime.fromtimestamp(expected_time).strftime('%H:%M:%S')
+                
+                logger.info(f"[DailySharing] ⏰ 定时任务已触发，启用随机延迟策略。")
+                logger.info(f"[DailySharing] ⏳ 将延迟 {delay_seconds/60:.1f} 分钟，预计于 {time_str} 执行...")
+                
+                # 异步等待，不阻塞主线程
+                await asyncio.sleep(delay_seconds)
+
+        # === 核心执行逻辑 ===
         now = datetime.now()
+        
+        # 防抖检查：如果最近 60 秒内已经执行过（比如手动触发了，或在上一个任务等待期间执行了）
         if self._last_share_time:
-            if (now - self._last_share_time).total_seconds() < 5:
+            if (now - self._last_share_time).total_seconds() < 60:
+                logger.info("[DailySharing] 检测到近期已执行任务，跳过本次定时触发。")
                 return
         
         if self._lock.locked():
+            logger.warning("[DailySharing] 上一个任务正在进行中，跳过本次触发。")
             return
 
         async with self._lock:
             self._last_share_time = now
+            if random_delay_min > 0:
+                logger.info("[DailySharing] ⏳ 随机延迟结束，开始执行分享...")
             await self._execute_share()
 
     async def _execute_share(self, force_type: SharingType = None, news_source: str = None):

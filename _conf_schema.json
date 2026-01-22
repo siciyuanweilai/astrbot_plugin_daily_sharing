@@ -51,6 +51,12 @@
         "hint": "可用预设: morning(8点)/noon(12点)/afternoon(15点)/evening(19点)/night(22点)/twice(8,20点)/three_times(8,12,20点)，或完整cron表达式 0 8,20 * * *",
         "obvious_hint": true
       },
+      "cron_random_delay": {
+        "description": "定时随机延迟(分钟)",
+        "type": "int",
+        "default": 0,
+        "hint": "定时触发后，随机等待 0 到 N 分钟再发送。例如设为 30，则 8:00 触发后，实际发送时间在 8:00-8:30 之间随机。设为 0 表示准点发送。"
+      },
       "sharing_type": {
         "description": "分享类型模式",
         "type": "string",
