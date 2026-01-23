@@ -1,4 +1,4 @@
-# main.py
+
 import asyncio
 import json
 import random
@@ -58,6 +58,11 @@ class DailySharingPlugin(Star):
         self.llm_conf = self.config.get("llm_conf", {})
         self.receiver_conf = self.config.get("receiver", {})
         
+        # 运行日志记录条数 (默认50)
+        self.history_limit = int(self.basic_conf.get("history_limit", 50))
+        # 内容去重历史记录条数 (默认20)
+        self.topic_history_limit = int(self.basic_conf.get("topic_history_limit", 20))
+        
         # 锁与防抖
         self._lock = asyncio.Lock()
         self._last_share_time = None
@@ -82,12 +87,14 @@ class DailySharingPlugin(Star):
         self.news_service = NewsService(config)
         self.image_service = ImageService(context, config, self._call_llm_wrapper)
         
+        # 初始化 ContentService，传入 topic_history_limit
         self.content_service = ContentService(
             config, 
             self._call_llm_wrapper, 
             context,
             str(self.state_file),
-            self.news_service 
+            self.news_service,
+            topic_history_limit=self.topic_history_limit # 传递配置
         )
 
     async def initialize(self):
@@ -641,8 +648,9 @@ class DailySharingPlugin(Star):
 
     async def _append_history(self, record):
         self.sharing_history.append(record)
-        if len(self.sharing_history) > 50:
-            self.sharing_history = self.sharing_history[-50:]
+        # 使用配置中的 history_limit
+        if len(self.sharing_history) > self.history_limit:
+            self.sharing_history = self.sharing_history[-self.history_limit:]
         
         try:
             loop = asyncio.get_running_loop()

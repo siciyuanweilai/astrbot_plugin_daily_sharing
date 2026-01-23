@@ -1,4 +1,4 @@
-# core/news.py
+
 import random
 import aiohttp
 import asyncio

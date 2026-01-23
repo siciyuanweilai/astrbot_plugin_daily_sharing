@@ -57,6 +57,18 @@
         "default": 0,
         "hint": "定时触发后，随机等待 0 到 N 分钟再发送。例如设为 30，则 8:00 触发后，实际发送时间在 8:00-8:30 之间随机。设为 0 表示准点发送。"
       },
+      "history_limit": {
+        "description": "运行日志保留条数",
+        "type": "int",
+        "default": 50,
+        "hint": "插件内部记录的最近执行日志条数（用于 /分享 状态 查看）。"
+      },
+      "topic_history_limit": {
+        "description": "内容去重记忆条数",
+        "type": "int",
+        "default": 20,
+        "hint": "用于【知识】和【推荐】类型。Bot会记住最近N次分享过的主题，避免重复推荐相同的内容。"
+      },
       "sharing_type": {
         "description": "分享类型模式",
         "type": "string",
@@ -173,12 +185,6 @@
         "type": "bool",
         "default": true,
         "hint": "开启后，需要安装 astrbot_plugin_memos_integrator 插件插件才能使用，将分享内容写入对话历史，以便用户引用回复。"
-      },
-      "max_history_records": {
-        "description": "保留本地记录数",
-        "type": "int",
-        "default": 100,
-        "hint": "保留的分享历史记录数量"
       }
     }
   },

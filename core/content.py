@@ -1,4 +1,4 @@
-# core/content.py
+
 import random
 import json
 import os
@@ -45,7 +45,7 @@ REC_CATS = {
 }
 
 class ContentService:
-    def __init__(self, config: Dict, llm_func, context, state_file: str, news_service=None):
+    def __init__(self, config: Dict, llm_func, context, state_file: str, news_service=None, topic_history_limit: int = 20):
         """
         初始化内容生成服务
         """
@@ -54,6 +54,8 @@ class ContentService:
         self.context = context 
         self.state_file = state_file 
         self.news_service = news_service
+        # 接收并保存配置
+        self.topic_history_limit = topic_history_limit
         
         self.news_conf = self.config.get("news_conf", {})
         self.llm_conf = self.config.get("llm_conf", {})
@@ -183,9 +185,9 @@ class ContentService:
             summary = content_summary.split("\n")[0][:15].replace("推荐", "").replace("分享", "")
             history.append(summary)
             
-            # 只保留最近 20 条
-            if len(history) > 20:
-                history = history[-20:]
+            # 只保留最近N条 (使用配置参数)
+            if len(history) > self.topic_history_limit:
+                history = history[-self.topic_history_limit:]
             
             # 更新回 state
             state["targets_history"][target_id][key_type] = history
@@ -253,7 +255,7 @@ class ContentService:
 
         greeting_constraint = ""
         
-        # 清晨(6-8) -> 强制早安
+        # 清晨(6-9) -> 强制早安
         if period in [TimePeriod.MORNING]:
             greeting_constraint = "4. 文案开头必须带上温馨的早安问候"
             

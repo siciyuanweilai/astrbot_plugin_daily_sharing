@@ -1,4 +1,4 @@
-# config.py
+
 from enum import Enum
 
 class TimePeriod(Enum):

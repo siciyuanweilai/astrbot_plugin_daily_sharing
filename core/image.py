@@ -1,4 +1,4 @@
-# core/image.py
+
 import os
 import random
 from datetime import datetime
@@ -347,18 +347,12 @@ class ImageService:
                 self._aiimg_plugin_not_found = True
 
         if self._aiimg_plugin:
-            try:
-                # 从 gitee_aiimg 插件配置中读取尺寸，路径：config -> draw -> size
-                draw_conf = self._aiimg_plugin.config.get("draw", {})
-                target_size = draw_conf.get("size", "1024x1024") if isinstance(draw_conf, dict) else "1024x1024"
-                
-                # 正确的属性名是 `draw`，不是 `service`
+            try: 
+                target_size = self._aiimg_plugin.config.get("size", "1024x1024")
                 path_obj = await self._aiimg_plugin.draw.generate(prompt=prompt, size=target_size)
                 return str(path_obj)
                 
-            except Exception as e:
+            except Exception as e: 
                 logger.error(f"[DailySharing] 生成图片出错: {e}")
-                import traceback
-                logger.error(traceback.format_exc())
                 
         return None

@@ -1,4 +1,4 @@
-# core/context.py
+
 import datetime
 import time
 import re
@@ -27,12 +27,21 @@ class ContextService:
     # ==================== 基础辅助方法 ====================
 
     def _find_plugin(self, keyword: str):
-        """查找插件实例"""
+        """查找 life_scheduler 插件实例 """
         try:
             plugins = self.context.get_all_stars()
+            
             for plugin in plugins:
-                if keyword in getattr(plugin, "name", ""):
+                p_id = getattr(plugin, "id", "") or ""
+                p_name = getattr(plugin, "name", "") or ""
+                
+                if (keyword in p_id) or (keyword in p_name):
+                    if hasattr(plugin, "instance") and plugin.instance:
+                        return plugin.instance
+                    if hasattr(plugin, "star_instance") and plugin.star_instance:
+                        return plugin.star_instance
                     return getattr(plugin, "star_cls", None)
+                    
         except Exception as e:
             logger.warning(f"[上下文] 查找插件 '{keyword}' 错误: {e}")
         return None
@@ -40,14 +49,13 @@ class ContextService:
     def _get_memos_plugin(self):
         """懒加载获取 Memos 插件 (仅用于写入记录)"""
         if not self._memos_plugin:
-            self._memos_plugin = self._find_plugin("astrbot_plugin_memos_integrator")
+            self._memos_plugin = self._find_plugin("memos")
         return self._memos_plugin
 
     def _get_tts_plugin_inst(self):
         """获取 TTS 插件实例"""
         if not self._tts_plugin:
-            # 查找 astrbot_plugin_tts_emotion_router
-            self._tts_plugin = self._find_plugin("astrbot_plugin_tts_emotion_router")
+            self._tts_plugin = self._find_plugin("tts_emotion")
         return self._tts_plugin
 
     def _is_group_chat(self, target_umo: str) -> bool:
@@ -280,21 +288,52 @@ class ContextService:
             return None
             
         if not self._life_plugin: 
+            # 尝试用 "life_scheduler" 关键字查找
             self._life_plugin = self._find_plugin("life_scheduler")
-            
-        if self._life_plugin and hasattr(self._life_plugin, 'get_life_context'):
+        
+        plugin = self._life_plugin
+        if not plugin:
+            return None
+
+        # --- 策略 A: 如果对方有 get_life_context 方法 (兼容未来版本) ---
+        if hasattr(plugin, 'get_life_context'):
             try: 
-                raw_data = await self._life_plugin.get_life_context()
-                
-                # 处理字典格式 (新的 Life Scheduler 返回结构)
+                raw_data = await plugin.get_life_context()
                 if isinstance(raw_data, dict):
                     return self._parse_life_data(raw_data)
-                
-                # 处理字符串格式 (旧的兼容)
-                if raw_data and isinstance(raw_data, str) and len(raw_data.strip()) > 10:
+                if isinstance(raw_data, str) and len(raw_data.strip()) > 10:
                     return raw_data
             except Exception as e: 
-                logger.warning(f"[上下文] Life Scheduler 插件调用出错: {e}")
+                logger.warning(f"[上下文] Life Scheduler 方法调用出错: {e}")
+
+        # --- 策略 B: 直接读取内部 data_mgr 和 generator ---
+        if hasattr(plugin, "data_mgr") and hasattr(plugin, "generator"):
+            try:
+                now = datetime.datetime.now()
+                # 尝试获取数据
+                data = plugin.data_mgr.get(now)
+                
+                # 如果没有数据，尝试主动生成
+                if not data:
+                    logger.info("[上下文] LifeScheduler 无今日数据，尝试主动触发生成...")
+                    try:
+                        # 生成器是 async 的
+                        data = await plugin.generator.generate_schedule(now, None)
+                    except Exception as gen_e:
+                        logger.warning(f"[上下文] 主动生成日程失败: {gen_e}")
+
+                # 检查数据有效性 (data 是 ScheduleData dataclass 对象)
+                if data and getattr(data, "status", "") == "ok":
+                    raw_dict = {
+                        "outfit": getattr(data, "outfit", ""),
+                        "schedule": getattr(data, "schedule", ""),
+                        "weather": "",
+                        "meta": {}
+                    }
+                    return self._parse_life_data(raw_dict)
+            except Exception as e:
+                logger.warning(f"[上下文] 读取 Life Scheduler 内部数据出错: {e}")
+        
         return None
 
     def _parse_life_data(self, data: dict) -> str:
@@ -623,14 +662,12 @@ class ContextService:
     async def record_bot_reply_to_history(self, target_umo: str, content: str, image_desc: str = None):
         """
         将 Bot 主动发送的消息写入 AstrBot 框架的对话历史中。
-        这样用户后续回复时，LLM 能知道 Bot 刚才说了什么。
         """
         try:
             # 1. 获取 ConversationManager
             conv_manager = self.context.conversation_manager
             
             # 2. 获取或创建会话 ID
-            # target_umo 格式如 "QQ:GroupMessage:123456"
             conversation_id = await conv_manager.get_curr_conversation_id(target_umo)
             
             if not conversation_id:
@@ -650,7 +687,7 @@ class ContextService:
             # 4. 构造 Assistant 消息 (包含图片描述)
             final_content = content
             if image_desc:
-                # 【修改】不再截断，记录完整描述，防止细节丢失
+                # 不再截断，记录完整描述，防止细节丢失
                 final_content += f"\n\n[发送了一张配图: {image_desc}]"
 
             # 注意：这里 role 是 assistant，因为是机器人说的
