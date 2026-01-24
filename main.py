@@ -40,9 +40,14 @@ CMD_CN_MAP = {
 # 新闻源中文映射表
 SOURCE_CN_MAP = {v['name']: k for k, v in NEWS_SOURCE_MAP.items()}
 SOURCE_CN_MAP.update({
-    "知乎": "zhihu", "微博": "weibo", "B站": "bili", 
-    "小红书": "xiaohongshu", "抖音": "douyin", 
-    "头条": "toutiao", "百度": "baidu", "腾讯": "tencent"
+    "知乎": "zhihu", 
+    "微博": "weibo", 
+    "B站": "bili", 
+    "小红书": "xiaohongshu", 
+    "抖音": "douyin", 
+    "头条": "toutiao", 
+    "百度": "baidu", 
+    "腾讯": "tencent"
 })
 
 @register("daily_sharing", "四次元未来", "定时主动分享所见所闻", "1.0.0")

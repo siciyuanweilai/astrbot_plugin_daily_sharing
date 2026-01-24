@@ -47,7 +47,7 @@ class ContextService:
         return None
 
     def _get_memos_plugin(self):
-        """懒加载获取 Memos 插件 (仅用于写入记录)"""
+        """获取 Memos 插件 (仅用于写入记录)"""
         if not self._memos_plugin:
             self._memos_plugin = self._find_plugin("memos")
         return self._memos_plugin
@@ -279,7 +279,7 @@ class ContextService:
         except Exception as e:
             logger.error(f"[DailySharing] 调用 TTS 插件出错: {e}")
             return None
-
+    
     # ==================== 生活上下文 (Life Scheduler) ====================
     
     async def get_life_context(self) -> Optional[str]:
@@ -295,44 +295,16 @@ class ContextService:
         if not plugin:
             return None
 
-        # --- 策略 A: 如果对方有 get_life_context 方法 (兼容未来版本) ---
+        # 调用插件接口
         if hasattr(plugin, 'get_life_context'):
             try: 
                 raw_data = await plugin.get_life_context()
+                
                 if isinstance(raw_data, dict):
                     return self._parse_life_data(raw_data)
-                if isinstance(raw_data, str) and len(raw_data.strip()) > 10:
-                    return raw_data
+                
             except Exception as e: 
                 logger.warning(f"[上下文] Life Scheduler 方法调用出错: {e}")
-
-        # --- 策略 B: 直接读取内部 data_mgr 和 generator ---
-        if hasattr(plugin, "data_mgr") and hasattr(plugin, "generator"):
-            try:
-                now = datetime.datetime.now()
-                # 尝试获取数据
-                data = plugin.data_mgr.get(now)
-                
-                # 如果没有数据，尝试主动生成
-                if not data:
-                    logger.info("[上下文] LifeScheduler 无今日数据，尝试主动触发生成...")
-                    try:
-                        # 生成器是 async 的
-                        data = await plugin.generator.generate_schedule(now, None)
-                    except Exception as gen_e:
-                        logger.warning(f"[上下文] 主动生成日程失败: {gen_e}")
-
-                # 检查数据有效性 (data 是 ScheduleData dataclass 对象)
-                if data and getattr(data, "status", "") == "ok":
-                    raw_dict = {
-                        "outfit": getattr(data, "outfit", ""),
-                        "schedule": getattr(data, "schedule", ""),
-                        "weather": "",
-                        "meta": {}
-                    }
-                    return self._parse_life_data(raw_dict)
-            except Exception as e:
-                logger.warning(f"[上下文] 读取 Life Scheduler 内部数据出错: {e}")
         
         return None
 

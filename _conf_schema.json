@@ -301,7 +301,7 @@
         "hint": "开启后，所有配图都会包含Bot的外貌特征（无论内容是否涉及自己）。与'从不包含'互斥，推荐保持默认的智能判断模式"
       },
       "image_never_include_self": {
-        "description": "AI配图从不包含人物形",
+        "description": "AI配图从不包含人物形象",
         "type": "bool",
         "default": false,
         "hint": "开启后，所有配图都只展示场景（永远不包含人物）。与'始终包含'互斥，推荐保持默认的智能判断模式"
