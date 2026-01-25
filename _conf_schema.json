@@ -184,7 +184,7 @@
         "description": "记录分享到memos会话历史",
         "type": "bool",
         "default": true,
-        "hint": "开启后，需要安装 astrbot_plugin_memos_integrator 插件插件才能使用，将分享内容写入对话历史，以便用户引用回复。"
+        "hint": "开启后，需要安装 astrbot_plugin_memos_integrator 插件才能使用，将分享内容写入对话历史，以便用户引用回复。"
       }
     }
   },
