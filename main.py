@@ -1,4 +1,3 @@
-
 import asyncio
 import json
 import random
@@ -12,7 +11,7 @@ from astrbot.api import logger
 from astrbot.api.star import Context, Star, register, StarTools
 from astrbot.api.event import filter, AstrMessageEvent, MessageChain
 from astrbot.api import AstrBotConfig
-from astrbot.api.message_components import Record
+from astrbot.api.message_components import Record, Video 
 from .config import TimePeriod, SharingType, SHARING_TYPE_SEQUENCES, CRON_TEMPLATES, NEWS_SOURCE_MAP
 from .core.news import NewsService
 from .core.image import ImageService
@@ -50,7 +49,7 @@ SOURCE_CN_MAP.update({
     "腾讯": "tencent"
 })
 
-@register("daily_sharing", "四次元未来", "定时主动分享所见所闻", "1.0.0")
+@register("daily_sharing", "四次元未来", "定时主动分享所见所闻", "2.0.0")
 class DailySharingPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -92,14 +91,13 @@ class DailySharingPlugin(Star):
         self.news_service = NewsService(config)
         self.image_service = ImageService(context, config, self._call_llm_wrapper)
         
-        # 初始化 ContentService，传入 topic_history_limit
         self.content_service = ContentService(
             config, 
             self._call_llm_wrapper, 
             context,
             str(self.state_file),
             self.news_service,
-            topic_history_limit=self.topic_history_limit # 传递配置
+            topic_history_limit=self.topic_history_limit
         )
 
     async def initialize(self):
@@ -112,7 +110,7 @@ class DailySharingPlugin(Star):
         try:
             if self.scheduler.running:
                 self.scheduler.shutdown(wait=False)
-            logger.info("[DailySharing] 🛑 旧的定时任务调度器已停止")
+            logger.info("[DailySharing] 旧的定时任务调度器已停止")
         except Exception as e:
             logger.error(f"[DailySharing] 停止插件出错: {e}")        
 
@@ -123,7 +121,7 @@ class DailySharingPlugin(Star):
         has_targets = self.receiver_conf.get("groups") or self.receiver_conf.get("users")
         
         if not has_targets:
-            logger.warning("[DailySharing] ⚠️ 未配置接收对象 (receiver)")
+            logger.warning("[DailySharing] 未配置接收对象 (receiver)")
 
         if self.config.get("enable_auto_sharing", False):
             cron = self.basic_conf.get("sharing_cron", "0 8,20 * * *")
@@ -144,6 +142,7 @@ class DailySharingPlugin(Star):
         source: str = None, 
         get_image: bool = False,
         need_image: bool = False,
+        need_video: bool = False,
         need_voice: bool = False
     ):
         """
@@ -153,52 +152,70 @@ class DailySharingPlugin(Star):
         Args:
             share_type(string): 分享类型。必须是以下之一：'问候', '新闻', '心情', '知识', '推荐'。
             source(string): 仅当 share_type 为'新闻'时有效。指定新闻平台。支持：微博, 知乎, B站, 抖音, 头条, 百度, 腾讯, 小红书。如果不指定则留空。
-            get_image(boolean): 仅当 share_type 为'新闻'时有效。如果用户明确想看“图片”、“长图”或“截图”时设为 True。默认为 False (即只看文字摘要)。
+            get_image(boolean): 仅当 share_type 为'新闻'时有效。如果用户明确想看“图片”、“长图”或“截图”时设为 True。默认为 False。
             need_image(boolean): 是否需要AI为这段文案配图。默认为 False。仅当用户明确说“配图”、“带图”、“发张图”时，才将其设为 True。
+            need_video(boolean): 是否需要AI为这段文案生成视频。默认为 False。仅当用户明确说“视频”、“动态图”、“动起来”时，才将其设为 True。
             need_voice(boolean): 是否需要将文案转为语音(TTS)发送。默认为 False。仅当用户明确提到“语音”、“朗读”、“念给我听”时，设为 True。
         """
-        
         # 1. 防抖检查
-        request_id = f"share_{event.get_sender_id()}"
         if self._lock.locked():
-             return "正如火如荼地准备中，请稍后..."
-        
-        # 2. 参数清洗与映射
-        target_type_enum = None
-        
-        # 映射分享类型 (中文 -> 枚举)
-        if share_type in CMD_CN_MAP:
-            target_type_enum = CMD_CN_MAP[share_type]
-        else:
-            # 模糊匹配尝试
-            for k, v in CMD_CN_MAP.items():
-                if k in share_type:
-                    target_type_enum = v
-                    break
-            if not target_type_enum:
-                return f"不支持的分享类型：{share_type}。支持：问候, 新闻, 心情, 知识, 推荐。"
+            await event.send(event.plain_result("正如火如荼地准备中，请稍后..."))
+            return ""
 
-        # 映射新闻源 (中文 -> key)
-        news_src_key = None
-        if target_type_enum == SharingType.NEWS and source:
-            # 尝试直接匹配
-            if source in SOURCE_CN_MAP:
-                news_src_key = SOURCE_CN_MAP[source]
-            # 尝试在 map 的 values 中找 (处理 LLM 可能传英文 key 的情况)
-            elif source in NEWS_SOURCE_MAP:
-                news_src_key = source
-            else:
-                # 模糊匹配
-                for name, key in SOURCE_CN_MAP.items():
-                    if name in source or source in name:
-                        news_src_key = key
-                        break
-        
-        # 3. 执行逻辑
+        # 2. 启动后台异步任务 ("Fire and Forget")
+        asyncio.create_task(
+            self._async_daily_share_task(
+                event, share_type, source, get_image, need_image, need_video, need_voice
+            )
+        )
+
+        # 3. 直接返回空字符串，让 LLM 闭嘴，不再生成回复
+        return ""
+
+    async def _async_daily_share_task(
+        self,
+        event: AstrMessageEvent,
+        share_type: str,
+        source: str,
+        get_image: bool,
+        need_image: bool,
+        need_video: bool,
+        need_voice: bool
+    ):
+        """实际执行分享逻辑的后台任务"""
         try:
-            # 场景 A: 获取新闻长图 (直接发送图片，不走 LLM 生成文本流程)
+            # 参数清洗与映射
+            target_type_enum = None
+            
+            # 映射分享类型 (中文 -> 枚举)
+            if share_type in CMD_CN_MAP:
+                target_type_enum = CMD_CN_MAP[share_type]
+            else:
+                # 模糊匹配尝试
+                for k, v in CMD_CN_MAP.items():
+                    if k in share_type:
+                        target_type_enum = v
+                        break
+                if not target_type_enum:
+                    # 错误提示直接发给用户
+                    await event.send(event.plain_result(f"不支持的分享类型：{share_type}。支持：问候, 新闻, 心情, 知识, 推荐。"))
+                    return
+
+            # 映射新闻源 (中文 -> key)
+            news_src_key = None
+            if target_type_enum == SharingType.NEWS and source:
+                if source in SOURCE_CN_MAP:
+                    news_src_key = SOURCE_CN_MAP[source]
+                elif source in NEWS_SOURCE_MAP:
+                    news_src_key = source
+                else:
+                    for name, key in SOURCE_CN_MAP.items():
+                        if name in source or source in name:
+                            news_src_key = key
+                            break
+            
+            # 场景 A: 获取新闻长图 (直接发送图片)
             if target_type_enum == SharingType.NEWS and get_image:
-                # 如果没指定源，让 service 自动选一个
                 if not news_src_key:
                     news_src_key = self.news_service.select_news_source()
                 
@@ -206,17 +223,14 @@ class DailySharingPlugin(Star):
                 
                 # 发送图片
                 await event.send(event.image_result(img_url))
-                return f"已发送{src_name}图片。"
+                # 现在因为 LLM 已结束，不需要返回，或者也可以发一条文本
+                return
 
-            # 场景 B: 标准流程 (生成文案 + 可选配图 + 可选语音)
+            # 场景 B: 标准流程 (生成文案 + 可选配图/视频 + 可选语音)
             else:
-                src_info = f" ({NEWS_SOURCE_MAP[news_src_key]['name']})" if news_src_key else ""
-                
-                # 获取上下文
+                # 获取上下文 ID
                 uid = event.get_sender_id()
-                # 统一格式 adapter:type:id
                 if not ":" in str(uid):
-                    # 尝试从 event 构建标准 UMO ID
                     target_umo = event.unified_msg_origin
                 else:
                     target_umo = uid
@@ -243,34 +257,49 @@ class DailySharingPlugin(Star):
                 )
                 
                 if not content:
-                    return "内容生成失败，请稍后再试。"
+                    await event.send(event.plain_result("内容生成失败，请稍后再试。"))
+                    return
                 
-                # 生成配图/语音
+                # 生成配图/视频
                 img_path = None
-                if self.image_conf.get("enable_image", False) and need_image:
+                video_url = None
+                
+                should_gen_visual = False
+                if self.image_conf.get("enable_ai_image", False):
+                    if need_image or need_video:
+                        should_gen_visual = True
+                    
+                if should_gen_visual:
                     allowed = self.image_conf.get("image_enabled_types", [])
                     if target_type_enum.value in allowed:
+                        # 生成图片
                         img_path = await self.image_service.generate_image(content, target_type_enum, life_ctx)
+                        
+                        # 生成视频
+                        if img_path and need_video and self.image_conf.get("enable_ai_video", False):
+                            video_url = await self.image_service.generate_video_from_image(img_path, content)
 
+                # 生成语音
                 audio_path = None
                 if self.tts_conf.get("enable_tts", False) and need_voice:
                     audio_path = await self.ctx_service.text_to_speech(content, target_umo, target_type_enum, period)
 
                 # 发送
-                await self._send(target_umo, content, img_path, audio_path)
+                await self._send(target_umo, content, img_path, audio_path, video_url)
                 
                 # 记录上下文
                 img_desc = self.image_service.get_last_description()
                 await self.ctx_service.record_bot_reply_to_history(target_umo, content, image_desc=img_desc)
                 await self.ctx_service.record_to_memos(target_umo, content, img_desc)
                 
-                return f"已成功分享{share_type}内容。"
+                # 任务结束，不需要返回任何值
 
         except Exception as e:
-            logger.error(f"[DailySharing] Tool error: {e}")
+            logger.error(f"[DailySharing] Async Task Error: {e}")
             import traceback
             logger.error(traceback.format_exc())
-            return f"执行出错: {str(e)}"
+            # 发生严重错误时通知用户
+            await event.send(event.plain_result(f"执行出错: {str(e)}"))
 
     async def _call_llm_wrapper(self, prompt: str, system_prompt: str = None, timeout: int = 60, max_retries: int = 2) -> Optional[str]:
         """LLM 调用包装器"""
@@ -317,11 +346,11 @@ class DailySharingPlugin(Star):
             except Exception as e:
                 err_str = str(e)
                 if "PROHIBITED_CONTENT" in err_str or "blocked" in err_str:
-                    logger.error(f"[DailySharing] ❌ 内容被模型安全策略拦截 (敏感词): {prompt[:50]}...")
+                    logger.error(f"[DailySharing] 内容被模型安全策略拦截 (敏感词): {prompt[:50]}...")
                     return None 
 
                 if "401" in str(e):
-                    logger.error(f"[DailySharing] ❌ LLM 失败。请检查 API Key。")
+                    logger.error(f"[DailySharing] LLM 失败。请检查 API Key。")
                     return None
                 
                 logger.error(f"[DailySharing] LLM异常 (尝试 {attempt+1}): {e}")
@@ -372,8 +401,8 @@ class DailySharingPlugin(Star):
                 expected_time = trigger_time.timestamp() + delay_seconds
                 time_str = datetime.fromtimestamp(expected_time).strftime('%H:%M:%S')
                 
-                logger.info(f"[DailySharing] ⏰ 定时任务已触发，启用随机延迟策略。")
-                logger.info(f"[DailySharing] ⏳ 将延迟 {delay_seconds/60:.1f} 分钟，预计于 {time_str} 执行...")
+                logger.info(f"[DailySharing] 定时任务已触发，启用随机延迟策略。")
+                logger.info(f"[DailySharing] 将延迟 {delay_seconds/60:.1f} 分钟，预计于 {time_str} 执行...")
                 
                 # 异步等待，不阻塞主线程
                 await asyncio.sleep(delay_seconds)
@@ -394,7 +423,7 @@ class DailySharingPlugin(Star):
         async with self._lock:
             self._last_share_time = now
             if random_delay_min > 0:
-                logger.info("[DailySharing] ⏳ 随机延迟结束，开始执行分享...")
+                logger.info("[DailySharing] 随机延迟结束，开始执行分享...")
             await self._execute_share()
 
     async def _execute_share(self, force_type: SharingType = None, news_source: str = None):
@@ -421,7 +450,7 @@ class DailySharingPlugin(Star):
             if uid:
                 targets.append(f"{adapter_id}:FriendMessage:{uid}")
         if not targets:
-            logger.warning("[DailySharing] ⚠️ 未配置接收对象，请在配置页填写群号或QQ号")
+            logger.warning("[DailySharing] 未配置接收对象，请在配置页填写群号或QQ号")
             return
 
         for uid in targets:
@@ -449,21 +478,27 @@ class DailySharingPlugin(Star):
                         "timestamp": datetime.now().isoformat(),
                         "target": uid,
                         "type": stype.value,
-                        "content": "❌ 生成失败 (LLM无响应)",
+                        "content": "生成失败 (LLM无响应)",
                         "success": False
                     })
                     continue
                 
-                # --- 生成多媒体素材 (图片 & 语音) ---
+                # --- 生成多媒体素材 (图片 & 视频 & 语音) ---
                 
                 # 1. 配图生成逻辑
                 img_path = None
+                video_url = None
                 enable_img_global = self.image_conf.get("enable_ai_image", False)
                 img_allowed_types = self.image_conf.get("image_enabled_types", ["greeting", "mood", "knowledge", "recommendation"])
                 
                 if enable_img_global:
                     if stype.value in img_allowed_types:
                         img_path = await self.image_service.generate_image(content, stype, life_ctx)
+                        # 尝试生成视频
+                        if img_path and self.image_conf.get("enable_ai_video", False):
+                            video_allowed = self.image_conf.get("video_enabled_types", ["greeting", "mood"])
+                            if stype.value in video_allowed:
+                                video_url = await self.image_service.generate_video_from_image(img_path, content)
                     else:
                          logger.info(f"[DailySharing] 当前类型 {stype.value} 不在配图允许列表，跳过作图。")
 
@@ -480,7 +515,7 @@ class DailySharingPlugin(Star):
                         logger.info(f"[DailySharing] 当前类型 {stype.value} 不在语音允许列表，跳过 TTS。")
 
                 # --- 发送消息 ---
-                await self._send(uid, content, img_path, audio_path)
+                await self._send(uid, content, img_path, audio_path, video_url)
                 
                 # --- 获取图片描述并写入 AstrBot 聊天上下文 ---
                 img_desc = self.image_service.get_last_description()
@@ -504,8 +539,8 @@ class DailySharingPlugin(Star):
                 import traceback
                 logger.error(traceback.format_exc())
 
-    async def _send(self, uid, text, img_path, audio_path=None):
-        """发送消息（支持分开发送，支持语音）"""
+    async def _send(self, uid, text, img_path, audio_path=None, video_url=None):
+        """发送消息（支持分开发送，支持语音和视频）"""
         try:
             separate_img = self.image_conf.get("separate_text_and_image", True)
             prefer_audio_only = self.tts_conf.get("prefer_audio_only", False)
@@ -519,15 +554,15 @@ class DailySharingPlugin(Star):
             # 1. 发送文字（如果需要）
             if should_send_text:
                 text_chain = MessageChain().message(text)
-                # 如果图片不分开发送，且没有语音（因为如果有语音，图片最好单独发），则合并图片
-                if img_path and not separate_img and not audio_path:
+                # 如果图片不分开发送，且没有语音，且没有视频（视频无法合并），则合并图片
+                if img_path and not video_url and not separate_img and not audio_path:
                     if img_path.startswith("http"): text_chain.url_image(img_path)
                     else: text_chain.file_image(img_path)
                 
                 await self.context.send_message(uid, text_chain)
                 
                 # 如果后续还有消息，进行随机延迟
-                if audio_path or (img_path and separate_img):
+                if audio_path or ((img_path or video_url) and separate_img):
                     await self._random_sleep()
 
             # 2. 发送语音（如果有）
@@ -536,19 +571,26 @@ class DailySharingPlugin(Star):
                 audio_chain.chain.append(Record(file=audio_path))
                 await self.context.send_message(uid, audio_chain)
                 
-                # 如果后续还有图片，延迟
-                if img_path and separate_img:
+                # 如果后续还有视觉媒体，延迟
+                if (img_path or video_url) and separate_img:
                     await self._random_sleep()
             
-            # 3. 发送图片（如果需要单独发送，或者因为有语音而被迫单独发送）
-            # 逻辑：只要图片还没发（separate_img 为真，或者虽然 separate_img 为假但因为有语音没能合并），就发
-            img_not_sent_yet = img_path and (separate_img or audio_path)
-            
-            if img_not_sent_yet:
-                img_chain = MessageChain()
-                if img_path.startswith("http"): img_chain.url_image(img_path)
-                else: img_chain.file_image(img_path)
-                await self.context.send_message(uid, img_chain)
+            # 3. 发送视觉媒体（视频优先，其次图片）
+            if video_url:
+                # 发送视频
+                video_chain = MessageChain()
+                # 使用 Video 组件
+                video_chain.chain.append(Video.fromURL(video_url))
+                await self.context.send_message(uid, video_chain)
+            elif img_path:
+                # 发送图片（如果视频没生成，或者视频关闭）
+                # 逻辑：只要图片还没发（separate_img 为真，或者虽然 separate_img 为假但因为有语音没能合并），就发
+                img_not_sent_yet = separate_img or audio_path
+                if img_not_sent_yet:
+                    img_chain = MessageChain()
+                    if img_path.startswith("http"): img_chain.url_image(img_path)
+                    else: img_chain.file_image(img_path)
+                    await self.context.send_message(uid, img_chain)
 
         except Exception as e:
             logger.error(f"[DailySharing] 发送消息给 {uid} 失败: {e}")
@@ -681,7 +723,7 @@ class DailySharingPlugin(Star):
         parts = msg.split()
         
         if len(parts) == 1:
-            yield event.plain_result("❌ 指令格式错误，请指定参数。")
+            yield event.plain_result("指令格式错误，请指定参数。")
             return
         arg = parts[1].lower()
         if arg == "状态":
@@ -758,14 +800,14 @@ class DailySharingPlugin(Star):
         self._setup_cron(cron)
         if not self.scheduler.running: self.scheduler.start()
         
-        yield event.plain_result("✅ 自动分享已启用")
+        yield event.plain_result("自动分享已启用")
 
     async def _cmd_disable(self, event: AstrMessageEvent):
         """禁用插件"""
         self.config["enable_auto_sharing"] = False
         await self._save_config_file()
         self.scheduler.remove_all_jobs()
-        yield event.plain_result("❌ 自动分享已禁用")
+        yield event.plain_result("自动分享已禁用")
 
     async def _cmd_status(self, event: AstrMessageEvent):
         """查看详细状态"""
@@ -789,9 +831,9 @@ class DailySharingPlugin(Star):
                 lines.append(f"• {ts} [{t_cn}] {content_preview}")
             hist_txt = "\n".join(lines)
 
-        msg = f"""📊 每日分享状态
+        msg = f"""每日分享状态
 ================
-运行状态: {'✅ 启用' if enabled else '❌ 禁用'}
+运行状态: {'启用' if enabled else '禁用'}
 Cron规则: {cron}
 当前时段: {self._get_curr_period().value}
 
@@ -808,7 +850,7 @@ Cron规则: {cron}
     async def _cmd_reset_seq(self, event: AstrMessageEvent):
         """重置序列"""
         await self._save_state({"sequence_index": 0, "last_period": None})
-        yield event.plain_result("✅ 序列已重置")
+        yield event.plain_result("序列已重置")
 
     async def _cmd_view_seq(self, event: AstrMessageEvent):
         """查看序列详情"""
@@ -828,7 +870,7 @@ Cron规则: {cron}
         state = await self._load_state()
         idx = state.get("sequence_index", 0)
         
-        txt = f"🔄 当前时段: {period.value}\n"
+        txt = f"当前时段: {period.value}\n"
         for i, t_raw in enumerate(seq):
             mark = "👉 " if i == idx else "   "
             t_cn = TYPE_CN_MAP.get(t_raw, t_raw)
@@ -837,7 +879,7 @@ Cron规则: {cron}
 
     async def _cmd_help(self, event: AstrMessageEvent):
         """帮助菜单"""
-        yield event.plain_result("""📚 每日分享插件帮助:
+        yield event.plain_result("""每日分享插件帮助:
 /分享 [类型] - 立即执行 (类型: 问候/新闻/心情/知识/推荐)
 /分享 新闻 [源] - 获取指定平台热搜 (如: 微博/B站/头条/百度)
 /分享 新闻 [源] 图片 - 获取热搜长图 (如: /分享 新闻 微博 图片)

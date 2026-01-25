@@ -1,4 +1,3 @@
-
 import os
 import random
 from datetime import datetime
@@ -27,6 +26,16 @@ class ImageService:
         elif 16 <= hour < 19: return TimePeriod.EVENING
         else: return TimePeriod.NIGHT
 
+    def _ensure_plugin(self):
+        """确保获取到绘图插件实例"""
+        if not self._aiimg_plugin and not self._aiimg_plugin_not_found:
+            for p in self.context.get_all_stars():
+                if p.name == "astrbot_plugin_gitee_aiimg":
+                    self._aiimg_plugin = p.star_cls
+                    break
+            if not self._aiimg_plugin: 
+                self._aiimg_plugin_not_found = True
+
     # ==================== 主入口 ====================
     async def generate_image(self, content: str, sharing_type: SharingType, life_context: str = None) -> Optional[str]:
         if not self.img_conf.get("enable_ai_image", False): return None
@@ -39,7 +48,7 @@ class ImageService:
         if involves_self and life_context:
             outfit_info = await self._extract_outfit(life_context)
             if outfit_info:
-                logger.debug(f"[DailySharing] 🎨 使用智能提取的穿搭: {outfit_info}")
+                logger.debug(f"[DailySharing] 使用智能提取的穿搭: {outfit_info}")
 
         # 生成 Prompt (传入 life_context)
         prompt = await self._generate_image_prompt(content, sharing_type, involves_self, outfit_info, life_context)
@@ -54,10 +63,46 @@ class ImageService:
 
         # 调用画图插件
         return await self._call_aiimg(prompt)
+    
+    async def generate_video_from_image(self, image_path: str, content: str) -> Optional[str]:
+        """使用生成的图片生成视频 (Grok)"""
+        # 检查是否开启视频
+        if not self.img_conf.get("enable_ai_video", False): return None
+        
+        self._ensure_plugin()
+        if not self._aiimg_plugin:
+            logger.warning("[DailySharing] 未找到Gitee插件，无法生成视频")
+            return None
+        
+        if not hasattr(self._aiimg_plugin, "video"):
+            logger.warning("[DailySharing] Gitee插件版本过低或未启用视频功能")
+            return None
+
+        try:
+            # 读取图片二进制
+            if not os.path.exists(image_path):
+                return None
+                
+            with open(image_path, "rb") as f:
+                image_bytes = f.read()
+
+            # 构建视频提示词 (简单描述动效即可，Grok会自动理解图片)
+            # 复用之前的图片描述，加上动效词
+            video_prompt = f"{self._last_image_description}, cinematic motion, slow pan, high quality video"
+            
+            logger.info(f"[DailySharing] 正在将配图转换为视频...")
+            video_url = await self._aiimg_plugin.video.generate_video_url(
+                prompt=video_prompt,
+                image_bytes=image_bytes
+            )
+            return video_url
+
+        except Exception as e:
+            logger.error(f"[DailySharing] 视频生成失败: {e}")
+            return None
 
     def get_last_description(self) -> Optional[str]:
         d = self._last_image_description
-        self._last_image_description = None
         return d
 
     # ==================== 智能判断逻辑 ====================
@@ -65,10 +110,8 @@ class ImageService:
         """检测内容是否涉及'自己'"""
         # 配置强制模式
         if self.img_conf.get("image_always_include_self", False):
-            logger.debug("[DailySharing] 配置：始终包含自己")
             return True
         if self.img_conf.get("image_never_include_self", False):
-            logger.debug("[DailySharing] 配置：从不包含自己")
             return False
 
         # LLM 智能判断
@@ -108,12 +151,12 @@ class ImageService:
 
     # ==================== 穿搭与外貌 ====================
     async def _extract_outfit(self, life_ctx: str) -> Optional[str]:
-        """从生活上下文提取穿搭 - 深度优化版"""
+        """从生活上下文提取穿搭"""
         period = self._get_current_period()
         is_night = period in [TimePeriod.NIGHT, TimePeriod.DAWN]
         
         # 定义时间段约束，防止晚上提取到白天的衣服
-        time_constraint = "【深夜/休息模式】：忽略白天外出服装，仅提取睡衣、家居服或浴袍。" if is_night else "【白天/活动模式】：提取外出的日常穿搭，忽略睡衣。"
+        time_constraint = "【深夜/休息模式】：忽略白天外出服装，仅提取上衣、下装、袜子、睡衣或家居服。" if is_night else "【白天/活动模式】：提取外出的日常穿搭，忽略睡衣。"
 
         prompt = f"""
 你是一个 AI 绘图提示词优化专家。你的任务是将用户的【日记式穿搭文本】转化为【AI 视觉提示词】。
@@ -127,9 +170,7 @@ class ImageService:
    - 推荐格式：使用 '穿着xxx外套，敞开露出内搭xxx' 或 '外穿xxx，内搭xxx'。
    - 严禁将外套和内搭简单并列，防止画面材质混淆（例如不要说：'香芋紫毛衣，棒球服'，要说：'棒球服外套，内搭香芋紫毛衣'）。
 3. 【保留关键细节】：保留物体的数量（如'双'马尾）、颜色、材质（如'马海毛'、'丝绒'）和形状。
-4. 【去除噪音】：
-   - 删除情绪描写（如'心情好'）。
-   - 删除看不见的贴身衣物（如'光腿神器'、'保暖内衣'、'秋裤'），除非它是作为外穿打底裤描述的。
+4. 【去除噪音】：删除情绪描写（如'心情好'）、天气原因。
 5. 【禁止比喻】：删除比喻句（如'像路人甲'），只保留物体本身的视觉特征。
 6. 【保留鞋袜】：在此阶段保留所有鞋子和袜子的描述（构图剪裁将在后续步骤处理）。
 7. 【输出格式】：直接输出清洗后的中文视觉描述字符串，用逗号分隔，不要任何解释。
@@ -258,7 +299,7 @@ class ImageService:
         # 构建生活状态描述，供LLM参考场景
         life_info_str = ""
         if life_context:
-            life_info_str = f"\n【重要：当前生活状态/日程】\n{life_context}\n\n💡 构图指示：如果【分享内容】没有明确提到地点，请务必根据【生活状态】来设定背景场景（例如：日程是'在咖啡馆'，背景就画咖啡馆）。"
+            life_info_str = f"\n【重要：当前生活状态/日程】\n{life_context}\n\n构图指示：如果【分享内容】没有明确提到地点，请务必根据【生活状态】来设定背景场景（例如：日程是'在咖啡馆'，背景就画咖啡馆）。"
 
         if involves_self:
             # ================= 画人模式 =================
@@ -271,7 +312,7 @@ class ImageService:
             outfit_constraint = ""
             if outfit_info:
                 filtered = await self._smart_filter_outfit(outfit_info, comp_desc)
-                outfit_constraint = f"\n\n【穿搭信息】\n原始穿搭：{outfit_info}\n过滤后穿搭：{filtered}\n💡 请使用过滤后的穿搭生成提示词，必须准确描述发型数量（如双丸子头）和衣服特征。"
+                outfit_constraint = f"\n\n【穿搭信息】\n原始穿搭：{outfit_info}\n过滤后穿搭：{filtered}\n请使用过滤后的穿搭生成提示词，必须准确描述发型数量（如双丸子头）和衣服特征。"
 
             system_prompt = f"""你是一个AI绘画提示词专家。
 请根据用户的分享内容、当前时间段、以及生活状态，生成适合的场景、动作、穿搭描述。
@@ -338,13 +379,7 @@ class ImageService:
 
     async def _call_aiimg(self, prompt: str) -> Optional[str]:
         # 插件查找逻辑
-        if not self._aiimg_plugin and not self._aiimg_plugin_not_found:
-            for p in self.context.get_all_stars():
-                if p.name == "astrbot_plugin_gitee_aiimg":
-                    self._aiimg_plugin = p.star_cls
-                    break
-            if not self._aiimg_plugin: 
-                self._aiimg_plugin_not_found = True
+        self._ensure_plugin()
 
         if self._aiimg_plugin:
             try: 

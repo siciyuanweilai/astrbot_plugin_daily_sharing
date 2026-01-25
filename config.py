@@ -1,4 +1,3 @@
-
 from enum import Enum
 
 class TimePeriod(Enum):
@@ -73,54 +72,73 @@ NEWS_SOURCE_MAP = {
     },
 }
 
-# 时间段新闻源偏好
+# 时间段新闻源偏好 
 NEWS_TIME_PREFERENCES = {
+    # 早晨：偏向生活方式、通勤阅读、硬新闻
     TimePeriod.MORNING: {
-        "xiaohongshu": 0.3, 
-        "weibo": 0.25,
-        "toutiao": 0.2,
-        "baidu": 0.1,
-        "bili": 0.1,
-        "zhihu": 0.05,
-    },
-    TimePeriod.FORENOON: {
-        "xiaohongshu": 0.3, 
-        "weibo": 0.25,
-        "toutiao": 0.2,
-        "baidu": 0.1,
-        "bili": 0.1,
-        "zhihu": 0.05,
-    },    
-    TimePeriod.AFTERNOON: {
-        "douyin": 0.3,
-        "zhihu": 0.2,
-        "baidu": 0.15,
+        "xiaohongshu": 0.25, 
+        "weibo": 0.20,
         "toutiao": 0.15,
-        "bili": 0.1,
-        "xiaohongshu": 0.1,
+        "baidu": 0.10,
+        "bili": 0.10,
+        "douyin": 0.10,
+        "tencent": 0.05,
+        "zhihu": 0.05,
     },
+    # 上午：偏向资讯、工作摸鱼
+    TimePeriod.FORENOON: {
+        "weibo": 0.20,
+        "toutiao": 0.15,
+        "zhihu": 0.15,
+        "baidu": 0.10,
+        "tencent": 0.10,
+        "xiaohongshu": 0.10,
+        "bili": 0.10,
+        "douyin": 0.10,
+    },    
+    # 下午：偏向娱乐视频、吃瓜、深度阅读
+    TimePeriod.AFTERNOON: {
+        "douyin": 0.25,
+        "zhihu": 0.15,
+        "weibo": 0.10,
+        "bili": 0.10,
+        "baidu": 0.10,
+        "toutiao": 0.10,
+        "xiaohongshu": 0.10,
+        "tencent": 0.10,
+    },
+    # 傍晚：偏向放松、下班娱乐、长视频
     TimePeriod.EVENING: {
-        "bili": 0.3,
-        "weibo": 0.2,
-        "tencent": 0.15,
-        "douyin": 0.15,
-        "zhihu": 0.1,
-        "baidu": 0.1,
-    },
-    TimePeriod.NIGHT: {
-        "douyin": 0.35,
         "bili": 0.25,
-        "weibo": 0.2,
-        "xiaohongshu": 0.1,
+        "weibo": 0.15,
+        "douyin": 0.15,
+        "tencent": 0.15,
+        "xiaohongshu": 0.10,
+        "zhihu": 0.10,
+        "baidu": 0.05,
+        "toutiao": 0.05,
+    },
+    # 深夜：偏向短视频、社区讨论
+    TimePeriod.NIGHT: {
+        "douyin": 0.30,
+        "bili": 0.20,
+        "weibo": 0.15,
+        "xiaohongshu": 0.10,
+        "baidu": 0.10,
         "zhihu": 0.05,
         "tencent": 0.05,
+        "toutiao": 0.05,
     },
+    # 凌晨：偏向种草、短视频、emo时刻
     TimePeriod.DAWN: {
-        "xiaohongshu": 0.4,
-        "bili": 0.3,
-        "weibo": 0.1,
-        "zhihu": 0.1,
-        "toutiao": 0.1,
+        "xiaohongshu": 0.30,
+        "bili": 0.20,
+        "douyin": 0.15,
+        "zhihu": 0.10,
+        "weibo": 0.10,
+        "toutiao": 0.05,
+        "baidu": 0.05,
+        "tencent": 0.05,
     },
 }
 

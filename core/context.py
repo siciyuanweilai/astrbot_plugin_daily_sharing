@@ -98,7 +98,7 @@ class ContextService:
         pm = self.context.platform_manager
         all_insts = []
 
-        # 2. 获取所有实例 (List/Dict 兼容性读取)
+        # 2. 获取所有实例
         try:
             # 尝试直接访问 .insts 属性
             if hasattr(pm, "insts"):
@@ -157,7 +157,7 @@ class ContextService:
             return valid_candidates[0]
 
         # 5. 真没找到
-        logger.warning(f"[DailySharing] ❌ 未找到任何可用的 Bot 实例。")
+        logger.warning(f"[DailySharing] 未找到任何可用的 Bot 实例。")
         return None
 
     # ==================== TTS 集成 ====================
@@ -167,7 +167,7 @@ class ContextService:
         根据分享类型、时间段和文本内容，决定 TTS 的情绪字符串。
         """
         
-        # === 1. 扩充关键词库 ===
+        # === 扩充关键词库 ===
         
         happy_keywords = [
             "开心", "快乐", "高兴", "喜悦", "愉快", "兴奋", "喜欢", "棒", "不错", "哈哈", 
@@ -190,7 +190,7 @@ class ContextService:
             "遗憾", "可惜", "哀悼", "去世", "逝世", "痛苦", ":(", "😢"
         ]
 
-        # === 2. 优先根据关键词判断强情绪 ===
+        # === 优先根据关键词判断强情绪 ===
         
         for k in angry_keywords:
             if k in content: return "angry"
@@ -359,7 +359,7 @@ class ContextService:
 
         if allow_detail:
             # 如果允许细节，直接返回完整上下文
-            return f"\n\n【你的当前状态】\n{context}\n💡 (注意：这是群聊，你可以提及上述状态，但请保持自然，不要像汇报工作一样)\n"
+            return f"\n\n【你的当前状态】\n{context}\n(注意：这是群聊，你可以提及上述状态，但请保持自然，不要像汇报工作一样)\n"
 
         # --- 以下为默认隐私模式（脱敏） ---
 
@@ -382,16 +382,16 @@ class ContextService:
         # === 针对不同类型的 Prompt ===
         
         if sharing_type == SharingType.GREETING:
-            return f"\n\n【你的状态】\n{full_status}\n💡 结合天气、时段(早/晚)和忙闲状态，自然地向大家打招呼\n"
+            return f"\n\n【你的状态】\n{full_status}\n结合天气、时段(早/晚)和忙闲状态，自然地向大家打招呼\n"
             
         elif sharing_type == SharingType.NEWS:
-            return f"\n\n【当前场景】\n{full_status}\n💡 结合你当前的状态(如忙碌/休闲/天气)自然地分享新闻\n"
+            return f"\n\n【当前场景】\n{full_status}\n结合你当前的状态(如忙碌/休闲/天气)自然地分享新闻\n"
             
         elif sharing_type in (SharingType.KNOWLEDGE, SharingType.RECOMMENDATION):
-            return f"\n\n【当前场景】\n{full_status}\n💡 结合你当前的状态(如工作中/休息中)来切入分享\n"
+            return f"\n\n【当前场景】\n{full_status}\n结合你当前的状态(如工作中/休息中)来切入分享\n"
 
         elif sharing_type == SharingType.MOOD:
-            return f"\n\n【你的状态】\n{full_status}\n💡 可以简单分享心情（结合天气或忙闲），但不要过于私人\n"
+            return f"\n\n【你的状态】\n{full_status}\n可以简单分享心情（结合天气或忙闲），但不要过于私人\n"
             
         return ""
 
@@ -400,13 +400,13 @@ class ContextService:
         # 私聊直接使用完整上下文 (context)，让 LLM 知道所有细节
         
         if sharing_type == SharingType.GREETING:
-            return f"\n\n【你的真实状态】\n{context}\n\n💡 请根据上面的真实日程（天气、穿搭、正在做什么）来打招呼\n"
+            return f"\n\n【你的真实状态】\n{context}\n\n请根据上面的真实日程（天气、穿搭、正在做什么）来打招呼\n"
             
         elif sharing_type == SharingType.MOOD:
-            return f"\n\n【你现在的状态】\n{context}\n\n💡 可以结合当前的穿搭、天气、具体心情、约会/工作安排等分享感受\n"
+            return f"\n\n【你现在的状态】\n{context}\n\n可以结合当前的穿搭、天气、具体心情、约会/工作安排等分享感受\n"
             
         elif sharing_type == SharingType.NEWS:
-            return f"\n\n【你当前真实状态】\n{context}\n\n💡 你正在这个状态下偷闲刷手机，请根据当前状态合理描述（例如：工作时间就说是忙里偷闲；休息时间可以随意些）。\n"
+            return f"\n\n【你当前真实状态】\n{context}\n\n你正在这个状态下偷闲刷手机，请根据当前状态合理描述（例如：工作时间就说是忙里偷闲；休息时间可以随意些）。\n"
             
         elif sharing_type in (SharingType.KNOWLEDGE, SharingType.RECOMMENDATION):
             return (
@@ -586,22 +586,22 @@ class ContextService:
         topics = group_info.get("recent_topics", [])
         
         if sharing_type == SharingType.GREETING:
-            hint = "💡 群里正在热烈讨论，简短打个招呼即可" if discussing else "💡 可以活跃一下气氛"
-        elif sharing_type == SharingType.NEWS: hint = "💡 选择可能引起群内讨论的新闻"
-        elif sharing_type == SharingType.MOOD: hint = "💡 可以简单分享心情，但不要过于私人"
+            hint = "群里正在热烈讨论，简短打个招呼即可" if discussing else "可以活跃一下气氛"
+        elif sharing_type == SharingType.NEWS: hint = "选择可能引起群内讨论的新闻"
+        elif sharing_type == SharingType.MOOD: hint = "可以简单分享心情，但不要过于私人"
         else: hint = ""
         
         txt = f"\n\n【群聊状态】\n聊天热度: {intensity}\n消息数: {group_info.get('message_count', 0)} 条\n"
-        if discussing: txt += "⚠️ 群里正在热烈讨论中！\n"
+        if discussing: txt += "群里正在热烈讨论中！\n"
         if topics: txt += "\n【最近话题】\n" + "\n".join([f"• {t}..." for t in topics[-3:]])
         return txt + f"\n{hint}\n"
 
     def _format_private_chat_for_prompt(self, messages: List[Dict], sharing_type: SharingType) -> str:
         max_length = 500
-        if sharing_type == SharingType.GREETING: hint = "💡 可以根据最近的对话内容打招呼"
-        elif sharing_type == SharingType.MOOD: hint = "💡 可以延续最近的话题或感受"
-        elif sharing_type == SharingType.NEWS: hint = "💡 可以根据对方的兴趣选择新闻"
-        else: hint = "💡 可以自然地延续最近的对话"
+        if sharing_type == SharingType.GREETING: hint = "可以根据最近的对话内容打招呼"
+        elif sharing_type == SharingType.MOOD: hint = "可以延续最近的话题或感受"
+        elif sharing_type == SharingType.NEWS: hint = "可以根据对方的兴趣选择新闻"
+        else: hint = "可以自然地延续最近的对话"
         
         lines = []
         total_len = 0
@@ -676,7 +676,7 @@ class ContextService:
             # 5. 写回数据库
             await conv_manager.update_conversation(target_umo, conversation_id, current_history)
             
-            logger.debug(f"[上下文] ✅ 已将主动分享内容(含配图描述)写入对话历史: {target_umo}")
+            logger.debug(f"[上下文] 已将主动分享内容(含配图描述)写入对话历史: {target_umo}")
             
         except Exception as e:
             logger.warning(f"[上下文] 写入对话历史失败: {e}")

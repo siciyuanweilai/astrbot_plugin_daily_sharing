@@ -1,4 +1,3 @@
-
 import random
 import json
 import os
@@ -11,7 +10,7 @@ from typing import Optional, Tuple, List, Dict
 from astrbot.api import logger
 from ..config import SharingType, TimePeriod
 
-# 新闻源配置
+# 新闻源配置 
 NEWS_SOURCE_MAP = {
     "zhihu": {"name": "知乎热榜", "icon": "📚"},
     "weibo": {"name": "微博热搜", "icon": "🔥"},
@@ -41,7 +40,7 @@ REC_CATS = {
     "电影": ["高分冷门", "烧脑科幻", "经典黑白", "是枝裕和风", "赛博朋克", "奥斯卡遗珠", "纪录片"],
     "音乐": ["后摇/纯音", "爵士/蓝调", "独立民谣", "CityPop", "古典入门", "电影原声", "小众乐队"],
     "动漫": ["治愈日常", "硬核科幻", "热血运动", "悬疑智斗", "吉卜力风", "今敏风格", "冷门佳作"],
-    "美食": ["地方特色小吃", "创意懒人菜", "季节限定", "深夜罪恶美食", "传统糕点", "异国风味"]
+    "美食": ["地方特色小吃", "创意懒人菜", "季节限定", "‌深夜治愈美食‌", "传统糕点", "异国风味"]
 }
 
 class ContentService:
@@ -210,16 +209,7 @@ class ContentService:
     # ==================== 生成逻辑 ====================
 
     async def _gen_greeting(self, period: TimePeriod, ctx: dict):
-        emojis = {
-            TimePeriod.DAWN: "🌃", 
-            TimePeriod.MORNING: "🌅",
-            TimePeriod.FORENOON: "☀️",
-            TimePeriod.AFTERNOON: "☕",
-            TimePeriod.EVENING: "🌇",
-            TimePeriod.NIGHT: "🌙",
-        }
         p_label = ctx['period_label']
-        p_emoji = emojis.get(period, "✨")
         is_group = ctx['is_group']
         
         # 0. 获取配置
@@ -292,14 +282,14 @@ class ContentService:
 2. 基于当前真实时间问候
 3. 忽略群聊历史，直接开启新问候
 {greeting_constraint} 
-5. {'简短（50-80字）' if is_group else '可适当长一些（50-80字）'}
-6. 直接输出内容，不要解释  
+5. {'简短（50-80字）' if is_group else '可适当长一些（50-100字）'}
+6. 直接输出内容，不要解释
 
 请生成{p_label}问候："""
 
         res = await self.call_llm(prompt=prompt, system_prompt=ctx['persona'])
         if res:
-            return f"{p_emoji} {res}"
+            return f"{res}"
         return None  
 
     async def _gen_mood(self, period, ctx):
@@ -365,10 +355,9 @@ class ContentService:
 1. 以你的人设性格说话，真实自然
 2. 分享此刻的感受、想法或小感悟
 3. 忽略群聊历史，直接开启新话题
-4. 可适当用emoji（1-2个）
-5. 基于当前真实时间感悟
-6. 字数：{'50-80字' if is_group else '50-80字'}
-7. 直接输出内容
+4. 基于当前真实时间感悟
+5. 字数：{'50-80字' if is_group else '50-100字'}
+6. 直接输出内容
 你的随想："""
         
         return await self.call_llm(prompt=prompt, system_prompt=ctx['persona'])
@@ -386,7 +375,6 @@ class ContentService:
         news_list, source_key = news_data
         source_config = NEWS_SOURCE_MAP.get(source_key, {"name": "热搜", "icon": "📰"})
         source_name = source_config["name"]
-        icon = source_config["icon"]
         
         raw_share_count = self.news_conf.get("news_share_count", "1-2")
         try:
@@ -474,16 +462,15 @@ class ContentService:
 3. {'对每条' if share_count > 1 else '对这条'}热搜要有自己的真实观点，不只是转述
 4. 观点真诚，避免过度情绪化或标题党式表达
 5. {'群聊中简洁有重点' if is_group else '私聊可以详细展开想法，并结合你当下的状态'}
-6. 适当使用emoji（1-2个）
-7. 用【】标注热搜标题
-8. {'字数：120-150字' if is_group else '字数：150-200字'}
-9. 直接输出分享内容
+6. 用【】标注热搜标题
+7. {'字数：120-150字' if is_group else '字数：150-200字'}
+8. 直接输出分享内容
 直接输出："""
 
         res = await self.call_llm(prompt=prompt, system_prompt=ctx['persona'], timeout=60)
         
         if res:
-            return f"{icon} {res}"
+            return f"{res}"
         return None 
 
     async def _gen_knowledge(self, ctx: dict):
@@ -548,7 +535,7 @@ class ContentService:
         if is_group:
             address_rule = "面向群友，可以使用'大家'、'你们'。"
         else:
-            address_rule = "【重要：私聊模式】🚫 严禁使用'大家'、'你们'、'各位'。✅ 必须把你当做在和单个朋友聊天，使用'你'（例如：'你知道吗...'）。"
+            address_rule = "【重要：私聊模式】严禁使用'大家'、'你们'、'各位'。必须把你当做在和单个朋友聊天，使用'你'（例如：'你知道吗...'）。"
 
         # 场景融合指令
         context_instruction = ""
@@ -602,9 +589,8 @@ class ContentService:
 2. {'语气轻松简洁' if is_group else '可以详细展开，带点个人见解'}。
 3. 可以加入你的个人感想或小评论
 4. 用【】将核心关键词【{target_keyword}】括起来。
-5. 可以适当用emoji（1-2个）
-6. {'字数：100-150字' if is_group else '字数：150-200字'}。
-7. 直接输出分享内容。
+5. {'字数：100-150字' if is_group else '字数：150-200字'}。
+6. 直接输出分享内容。
 """
         
         res = await self.call_llm(prompt=prompt, system_prompt=ctx['persona'])
@@ -621,7 +607,7 @@ class ContentService:
                     await self._update_history("knowledge", res[:10], target_id)
             except: pass
             
-            return f"📚 知识类型: {main_cat} - {sub_cat}\n\n{res}"
+            return f"知识类型: {main_cat} - {sub_cat}\n\n{res}"
         return None
 
     async def _gen_rec(self, ctx: dict):
@@ -701,7 +687,7 @@ class ContentService:
         if is_group:
              address_rule = "面向群友，推荐给'大家'。"
         else:
-             address_rule = "【重要：私聊模式】🚫 严禁使用'大家'、'你们'。✅ 必须把对方当做唯一听众，使用'你'（例如：'推荐你看...'，'你一定会喜欢...'）。"
+             address_rule = "【重要：私聊模式】严禁使用'大家'、'你们'。必须把对方当做唯一听众，使用'你'（例如：'推荐你看...'，'你一定会喜欢...'）。"
 
         # 场景融合指令
         context_instruction = ""
@@ -749,10 +735,9 @@ class ContentService:
 2. 开头必须有明确的推荐表达
 3. 真诚推荐，避免营销号式的夸张表达
 4. 结合资料介绍它的亮点。
-5. 可以适当用emoji（1-2个）
-6. 务必用【】将推荐目标的名称【{target_work}】括起来。
-7. {'字数：80-120字' if is_group else '字数：120-180字'}。
-8. 直接输出推荐内容。
+5. 务必用【】将推荐目标的名称【{target_work}】括起来。
+6. {'字数：80-120字' if is_group else '字数：120-180字'}。
+7. 直接输出推荐内容。
 """
 
         res = await self.call_llm(prompt=prompt, system_prompt=ctx['persona'])
@@ -768,5 +753,5 @@ class ContentService:
                 else:
                     await self._update_history("rec", res[:10], target_id)
             except: pass
-            return f"💡 推荐类型: {rec_type} - {sub_style}\n\n{res}"
+            return f"推荐类型: {rec_type} - {sub_style}\n\n{res}"
         return None

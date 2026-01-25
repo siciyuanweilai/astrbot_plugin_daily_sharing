@@ -31,14 +31,14 @@ class NewsService:
             return source
         elif mode == "random": 
             source = random.choice(list(NEWS_SOURCE_MAP.keys()))
-            logger.info(f"[新闻] 🎲 完全随机: {NEWS_SOURCE_MAP[source]['name']}")
+            logger.info(f"[新闻] 完全随机: {NEWS_SOURCE_MAP[source]['name']}")
             return source
         elif mode == "config":
             c = self.conf.get("news_random_sources", ["zhihu", "weibo"])
             valid = [s for s in c if s in NEWS_SOURCE_MAP]
             if not valid: valid = ["zhihu"] 
             source = random.choice(valid)
-            logger.info(f"[新闻] 🎲 配置列表随机: {NEWS_SOURCE_MAP[source]['name']}")
+            logger.info(f"[新闻] 配置列表随机: {NEWS_SOURCE_MAP[source]['name']}")
             return source
         elif mode == "time_based": 
             return self._select_by_time()
@@ -74,7 +74,7 @@ class NewsService:
             TimePeriod.AFTERNOON: "下午", TimePeriod.EVENING: "傍晚", TimePeriod.NIGHT: "深夜"
         }.get(period, "现在")
         
-        logger.info(f"[新闻] 🎲 {period_label}智能选择: {NEWS_SOURCE_MAP[selected]['name']}")
+        logger.info(f"[新闻] {period_label}智能选择: {NEWS_SOURCE_MAP[selected]['name']}")
         return selected
 
     async def get_hot_news(self, specific_source: str = None) -> Optional[tuple]:
@@ -84,7 +84,7 @@ class NewsService:
 
         key = self.conf.get("nycnm_api_key", "").strip()
         if not key: 
-            logger.error("[新闻] ❌ 未配置柠柚API密钥！")
+            logger.error("[新闻] 未配置柠柚API密钥！")
             return None
 
         # 尝试主要源
@@ -121,7 +121,7 @@ class NewsService:
         
         res = await self._fetch_news(back_source, key)
         if res:
-            logger.info(f"[新闻] ✅ 备用源成功")
+            logger.info(f"[新闻] 备用源成功")
             return (res, back_source)
         
         logger.warning(f"[新闻] 所有新闻源均失败")
@@ -160,28 +160,28 @@ class NewsService:
                     if resp.status != 200: 
                         logger.warning(f"[新闻] API返回状态码: {resp.status}")
                         if resp.status in (401, 403):
-                            logger.error("[新闻] ❌ API密钥无效或已过期！")
+                            logger.error("[新闻] API密钥无效或已过期！")
                         return None
                     
                     data = await resp.json(content_type=None)
                     parsed = self._parse_response(data)
                     
                     if parsed:
-                        logger.info(f"[新闻] ✅ 成功获取 {len(parsed)} 条{source_name}")
+                        logger.info(f"[新闻] 成功获取 {len(parsed)} 条{source_name}")
                         return parsed
                     else:
-                        logger.warning(f"[新闻] ⚠️ 未能解析到新闻内容")
+                        logger.warning(f"[新闻] 未能解析到新闻内容")
                         logger.debug(f"[新闻] 原始数据: {str(data)[:300]}...")
                         return None
                         
         except asyncio.TimeoutError:
-            logger.error(f"[新闻] ⏱️ 请求超时: {source_name}")
+            logger.error(f"[新闻] 请求超时: {source_name}")
             return None
         except aiohttp.ClientError as e:
-            logger.error(f"[新闻] 🌐 网络请求失败: {e}")
+            logger.error(f"[新闻] 网络请求失败: {e}")
             return None
         except Exception as e:
-            logger.error(f"[新闻] ❌ 解析新闻失败: {e}", exc_info=True)
+            logger.error(f"[新闻] 解析新闻失败: {e}", exc_info=True)
             return None
 
     def _parse_response(self, data: Any) -> Optional[List[Dict]]:
@@ -242,7 +242,7 @@ class NewsService:
         key = self.conf.get("nycnm_api_key", "").strip()
         if not key: return None
 
-        # 清理关键词 (去掉书名号等)
+        # 清理关键词 
         keyword = keyword.replace("《", "").replace("》", "").replace("【", "").replace("】", "").strip()
         if not keyword: return None
         

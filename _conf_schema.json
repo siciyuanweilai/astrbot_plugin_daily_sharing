@@ -233,7 +233,7 @@
         "description": "获取新闻条数",
         "type": "int",
         "default": 5,
-        "hint": "从API获取的热搜条数（1-15），推荐5-10条。获取更多可增加随机选择范围"
+        "hint": "从API获取的热搜条数（1-20），推荐5-10条。获取更多可增加随机选择范围"
       },
       "news_share_count": {
         "description": "分享新闻条",
@@ -250,9 +250,9 @@
     }
   },
   "image_conf": {
-    "description": "🎨 配图与发送设置",
+    "description": "🎨 配图与视频设置",
     "type": "object",
-    "hint": "配置 AI 配图生成及图文发送方式。",
+    "hint": "配置 AI 配图、视频生成及图文发送方式。",
     "items": {
       "enable_ai_image": {
         "description": "启用AI配图",
@@ -268,43 +268,59 @@
           "options": ["greeting", "news", "mood", "knowledge", "recommendation"]
         },
         "default": ["greeting", "mood", "knowledge", "recommendation"],
-        "hint": "仅当分享类型在列表中时，才会生成图片。建议勾选心情、问候等需要氛围的类型。"
+        "hint": "仅当分享类型在列表中时，才会生成图片。"
+      },
+      "enable_ai_video": {
+        "description": "启用AI视频 (Grok)",
+        "type": "bool",
+        "default": false,
+        "hint": "需要 astrbot_plugin_gitee_aiimg 配置了 Grok Key。开启后，配图将尝试转换为5秒视频。"
+      },
+      "video_enabled_types": {
+        "description": "允许视频的类型",
+        "type": "list",
+        "items": {
+          "type": "string",
+          "options": ["greeting", "news", "mood", "knowledge", "recommendation"]
+        },
+        "default": ["greeting", "mood"],
+        "hint": "建议仅对【问候】或【心情】开启，新闻和知识类推荐用图片。"
       },
       "separate_text_and_image": {
         "description": "图文分开发送",
         "type": "bool",
         "default": true,
-        "hint": "开启后，文字和图片会分两条消息发送。关闭则将文字和图片一起发送。"
+        "hint": "开启后，文字和图片/视频会分两条消息发送。关闭则将文字和图片一起发送(视频无法合并，强制分开)。"
       },
       "separate_send_delay": {
         "description": "发送延迟(秒)",
         "type": "string",
         "default": "1.0-2.0",
-        "hint": "文字发送后，等待多久再发送图片。格式: '最小值-最大值'，如'1.0-2.0'表示随机等待1-2秒。模拟人类发送习惯，使消息更自然"
+        "hint": "文字发送后，等待多久再发送媒体。格式: '最小值-最大值'。"
       },
       "record_image_description": {
-        "description": "记录图片描述到memos会话历史",
+        "description": "记录描述到历史",
         "type": "bool",
         "default": true,
-        "hint": "开启后，需要安装 astrbot_plugin_memos_integrator 插件插件才能使用，会话历史中会包含图片的中文描述，让AI能理解图片内容并正确回答引用提问。关闭则仅标记[已发送配图]。"
+        "hint": "会话历史中会包含图片/视频的中文描述。"
       },
       "appearance_prompt": {
         "description": "AI配图的外貌提示词",
         "type": "text",
         "default": "",
-        "hint": "留空则从人设自动提取。支持中英文，例如: 女生，丸子头，棕色眼睛，short pink hair, blue eyes, petite, cute smile。"
+        "hint": "留空则从人设自动提取。"
       },
       "image_always_include_self": {
-        "description": "AI配图始终包含人物形象",
+        "description": "始终包含人物形象",
         "type": "bool",
         "default": false,
-        "hint": "开启后，所有配图都会包含Bot的外貌特征（无论内容是否涉及自己）。与'从不包含'互斥，推荐保持默认的智能判断模式"
+        "hint": "开启后，所有配图都会包含Bot的外貌特征。"
       },
       "image_never_include_self": {
-        "description": "AI配图从不包含人物形象",
+        "description": "从不包含人物形象",
         "type": "bool",
         "default": false,
-        "hint": "开启后，所有配图都只展示场景（永远不包含人物）。与'始终包含'互斥，推荐保持默认的智能判断模式"
+        "hint": "开启后，所有配图都只展示场景。"
       }
     }
   },
