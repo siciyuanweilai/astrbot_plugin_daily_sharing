@@ -1,4 +1,3 @@
-
 import random
 import aiohttp
 import asyncio
@@ -19,7 +18,8 @@ class NewsService:
         elif 9 <= hour < 12: return TimePeriod.FORENOON
         elif 12 <= hour < 16: return TimePeriod.AFTERNOON
         elif 16 <= hour < 19: return TimePeriod.EVENING
-        else: return TimePeriod.NIGHT
+        elif 19 <= hour < 22: return TimePeriod.NIGHT
+        else: return TimePeriod.LATE_NIGHT
 
     def select_news_source(self) -> str:
         """选择主新闻源"""
@@ -70,8 +70,13 @@ class NewsService:
             selected = random.choices(list(prefs.keys()), weights=list(prefs.values()), k=1)[0]
             
         period_label = {
-            TimePeriod.DAWN: "凌晨", TimePeriod.MORNING: "早晨",
-            TimePeriod.AFTERNOON: "下午", TimePeriod.EVENING: "傍晚", TimePeriod.NIGHT: "深夜"
+            TimePeriod.DAWN: "凌晨", 
+            TimePeriod.MORNING: "早晨",
+            TimePeriod.FORENOON: "上午",
+            TimePeriod.AFTERNOON: "下午", 
+            TimePeriod.EVENING: "傍晚", 
+            TimePeriod.NIGHT: "夜晚", 
+            TimePeriod.LATE_NIGHT: "深夜"
         }.get(period, "现在")
         
         logger.info(f"[新闻] {period_label}智能选择: {NEWS_SOURCE_MAP[selected]['name']}")

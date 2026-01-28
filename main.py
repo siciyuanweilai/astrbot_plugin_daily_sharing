@@ -62,14 +62,20 @@ class DailySharingPlugin(Star):
         self.llm_conf = self.config.get("llm_conf", {})
         self.receiver_conf = self.config.get("receiver", {})
         
-        # 运行日志记录条数 (默认50)
-        self.history_limit = int(self.basic_conf.get("history_limit", 50))
-        # 内容去重历史记录条数 (默认20)
-        self.topic_history_limit = int(self.basic_conf.get("topic_history_limit", 20))
+        # 分享内容记录条数 (固定100)
+        self.history_limit = 100
+        # 内容去重历史记录条数 (默认50)
+        self.topic_history_limit = int(self.basic_conf.get("topic_history_limit", 50))
         
         # 锁与防抖
         self._lock = asyncio.Lock()
         self._last_share_time = None
+        
+        # 生命周期标志位 (防止重载时旧实例复活)
+        self._is_terminated = False
+
+        # 任务追踪 (用于生命周期清理)
+        self._bg_tasks = set()
         
         # 数据路径
         self.data_dir = StarTools.get_data_dir("astrbot_plugin_daily_sharing")
@@ -103,21 +109,39 @@ class DailySharingPlugin(Star):
     async def initialize(self):
         """初始化插件"""
         self.sharing_history = await self._load_history() 
-        asyncio.create_task(self._delayed_init())
+        # 将初始化任务纳入管理，确保卸载时可以被取消
+        task = asyncio.create_task(self._delayed_init())
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
 
     async def terminate(self):
         """插件卸载/重载时的清理逻辑"""
+        self._is_terminated = True 
         try:
+            # 1. 停止调度器
             if self.scheduler.running:
                 self.scheduler.shutdown(wait=False)
-            logger.info("[DailySharing] 旧的定时任务调度器已停止")
+            
+            # 2. 取消所有后台任务
+            for task in self._bg_tasks:
+                if not task.done():
+                    task.cancel()
+            
+            logger.info("[DailySharing] 插件已停止，清理资源完成")
         except Exception as e:
             logger.error(f"[DailySharing] 停止插件出错: {e}")        
 
     async def _delayed_init(self):
         """延迟初始化逻辑"""
-        await asyncio.sleep(3)
+        try:
+            await asyncio.sleep(3)
+        except asyncio.CancelledError:
+            return 
         
+        # 再次检查终止状态，防止僵尸实例启动调度器
+        if self._is_terminated:
+            return
+
         has_targets = self.receiver_conf.get("groups") or self.receiver_conf.get("users")
         
         if not has_targets:
@@ -126,7 +150,9 @@ class DailySharingPlugin(Star):
         if self.config.get("enable_auto_sharing", False):
             cron = self.basic_conf.get("sharing_cron", "0 8,20 * * *")
             self._setup_cron(cron)
-            if not self.scheduler.running:
+            
+            # 只有在未终止且未运行的情况下才启动
+            if not self._is_terminated and not self.scheduler.running:
                 self.scheduler.start()
             logger.info("[DailySharing] 定时任务已启动")
         else:
@@ -157,17 +183,21 @@ class DailySharingPlugin(Star):
             need_video(boolean): 是否需要AI为这段文案生成视频。默认为 False。仅当用户明确说“视频”、“动态图”、“动起来”时，才将其设为 True。
             need_voice(boolean): 是否需要将文案转为语音(TTS)发送。默认为 False。仅当用户明确提到“语音”、“朗读”、“念给我听”时，设为 True。
         """
+        if self._is_terminated: return ""
+
         # 1. 防抖检查
         if self._lock.locked():
             await event.send(event.plain_result("正如火如荼地准备中，请稍后..."))
             return ""
 
-        # 2. 启动后台异步任务 ("Fire and Forget")
-        asyncio.create_task(
+        # 2. 启动后台异步任务
+        task = asyncio.create_task(
             self._async_daily_share_task(
                 event, share_type, source, get_image, need_image, need_video, need_voice
             )
         )
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
 
         # 3. 直接返回空字符串，让 LLM 闭嘴，不再生成回复
         return ""
@@ -219,11 +249,13 @@ class DailySharingPlugin(Star):
                 if not news_src_key:
                     news_src_key = self.news_service.select_news_source()
                 
-                img_url, src_name = self.news_service.get_hot_news_image_url(news_src_key)
-                
-                # 发送图片
-                await event.send(event.image_result(img_url))
-                # 现在因为 LLM 已结束，不需要返回，或者也可以发一条文本
+                try:
+                    img_url, src_name = self.news_service.get_hot_news_image_url(news_src_key)
+                    # 发送图片
+                    await event.send(event.image_result(img_url))
+                except Exception as e:
+                    logger.error(f"[DailySharing] 获取新闻图片失败: {e}")
+                    await event.send(event.plain_result(f"获取新闻长图失败，请稍后再试。"))
                 return
 
             # 场景 B: 标准流程 (生成文案 + 可选配图/视频 + 可选语音)
@@ -260,29 +292,56 @@ class DailySharingPlugin(Star):
                     await event.send(event.plain_result("内容生成失败，请稍后再试。"))
                     return
                 
-                # 生成配图/视频
+                # ================= 视觉生成逻辑 (图片/视频) =================
                 img_path = None
                 video_url = None
                 
+                # 判断是否生成: 只要总开关开启，且(用户明确要求 OR 类型在允许列表中)
+                enable_global = self.image_conf.get("enable_ai_image", False)
+                
                 should_gen_visual = False
-                if self.image_conf.get("enable_ai_image", False):
+                if enable_global:
                     if need_image or need_video:
+                        # 1. 用户明确要求：强制生成 (无视类型白名单)
                         should_gen_visual = True
-                    
+                    else:
+                        # 2. 用户未要求：检查类型白名单
+                        allowed = self.image_conf.get("image_enabled_types", [])
+                        if target_type_enum.value in allowed:
+                            should_gen_visual = True
+
                 if should_gen_visual:
-                    allowed = self.image_conf.get("image_enabled_types", [])
-                    if target_type_enum.value in allowed:
-                        # 生成图片
-                        img_path = await self.image_service.generate_image(content, target_type_enum, life_ctx)
-                        
-                        # 生成视频
-                        if img_path and need_video and self.image_conf.get("enable_ai_video", False):
+                    # 生成图片
+                    img_path = await self.image_service.generate_image(content, target_type_enum, life_ctx)
+                    
+                    # 生成视频 (如果明确要求视频，或类型在视频白名单中)
+                    if img_path and self.image_conf.get("enable_ai_video", False):
+                        should_gen_video = False
+                        if need_video:
+                            should_gen_video = True
+                        else:
+                            video_allowed = self.image_conf.get("video_enabled_types", [])
+                            if target_type_enum.value in video_allowed:
+                                should_gen_video = True
+                                
+                        if should_gen_video:
                             video_url = await self.image_service.generate_video_from_image(img_path, content)
 
-                # 生成语音
+                # ================= 语音生成逻辑 (TTS) =================
                 audio_path = None
-                if self.tts_conf.get("enable_tts", False) and need_voice:
-                    audio_path = await self.ctx_service.text_to_speech(content, target_umo, target_type_enum, period)
+                if self.tts_conf.get("enable_tts", False):
+                    should_gen_voice = False
+                    if need_voice:
+                        # 1. 用户明确要求：强制生成
+                        should_gen_voice = True
+                    else:
+                        # 2. 检查白名单
+                        tts_allowed = self.tts_conf.get("tts_enabled_types", [])
+                        if target_type_enum.value in tts_allowed:
+                            should_gen_voice = True
+                            
+                    if should_gen_voice:
+                        audio_path = await self.ctx_service.text_to_speech(content, target_umo, target_type_enum, period)
 
                 # 发送
                 await self._send(target_umo, content, img_path, audio_path, video_url)
@@ -292,10 +351,9 @@ class DailySharingPlugin(Star):
                 await self.ctx_service.record_bot_reply_to_history(target_umo, content, image_desc=img_desc)
                 await self.ctx_service.record_to_memos(target_umo, content, img_desc)
                 
-                # 任务结束，不需要返回任何值
 
         except Exception as e:
-            logger.error(f"[DailySharing] Async Task Error: {e}")
+            logger.error(f"[DailySharing] 异步任务错误: {e}")
             import traceback
             logger.error(traceback.format_exc())
             # 发生严重错误时通知用户
@@ -303,6 +361,13 @@ class DailySharingPlugin(Star):
 
     async def _call_llm_wrapper(self, prompt: str, system_prompt: str = None, timeout: int = 60, max_retries: int = 2) -> Optional[str]:
         """LLM 调用包装器"""
+        if self._is_terminated: return None
+        
+        # 确保 system_prompt 不为 None
+        # 防止底层库执行 len(None) 报错 "object of type 'NoneType' has no len()"
+        if system_prompt is None:
+            system_prompt = ""
+
         provider_id = self.llm_conf.get("llm_provider_id", "")
         
         # 自动探测 Provider 
@@ -323,6 +388,7 @@ class DailySharingPlugin(Star):
         actual_timeout = max(timeout, config_timeout)
 
         for attempt in range(max_retries + 1):
+            if self._is_terminated: return None
             try:
                 resp = await asyncio.wait_for(
                     self.context.llm_generate(
@@ -363,6 +429,8 @@ class DailySharingPlugin(Star):
 
     def _setup_cron(self, cron_str):
         """设置 Cron 任务"""
+        if self._is_terminated: return
+        
         try:
             if self.scheduler.get_job("auto_share"):
                 self.scheduler.remove_job("auto_share")
@@ -386,48 +454,69 @@ class DailySharingPlugin(Star):
 
     async def _task_wrapper(self):
         """任务包装器（防抖 + 锁 + 随机延迟）"""
-        # === 随机延迟逻辑 ===
+        if self._is_terminated: return
+        
+        task = asyncio.current_task()
+        self._bg_tasks.add(task)
+        
         try:
-            # 从配置获取随机延迟分钟数，默认为 0
-            random_delay_min = int(self.basic_conf.get("cron_random_delay", 0))
-        except Exception:
-            random_delay_min = 0
+            # 随机延迟逻辑
+            try:
+                # 从配置获取随机延迟分钟数，默认为 0
+                random_delay_min = int(self.basic_conf.get("cron_random_delay", 0))
+            except Exception:
+                random_delay_min = 0
 
-        if random_delay_min > 0:
-            # 计算延迟秒数 (0 到 max*60)
-            delay_seconds = random.randint(0, random_delay_min * 60)
-            if delay_seconds > 0:
-                trigger_time = datetime.now()
-                expected_time = trigger_time.timestamp() + delay_seconds
-                time_str = datetime.fromtimestamp(expected_time).strftime('%H:%M:%S')
-                
-                logger.info(f"[DailySharing] 定时任务已触发，启用随机延迟策略。")
-                logger.info(f"[DailySharing] 将延迟 {delay_seconds/60:.1f} 分钟，预计于 {time_str} 执行...")
-                
-                # 异步等待，不阻塞主线程
-                await asyncio.sleep(delay_seconds)
-
-        # === 核心执行逻辑 ===
-        now = datetime.now()
-        
-        # 防抖检查：如果最近 60 秒内已经执行过（比如手动触发了，或在上一个任务等待期间执行了）
-        if self._last_share_time:
-            if (now - self._last_share_time).total_seconds() < 60:
-                logger.info("[DailySharing] 检测到近期已执行任务，跳过本次定时触发。")
-                return
-        
-        if self._lock.locked():
-            logger.warning("[DailySharing] 上一个任务正在进行中，跳过本次触发。")
-            return
-
-        async with self._lock:
-            self._last_share_time = now
+            # 1. 延迟逻辑移动到锁外，避免长时间占用锁导致交互阻塞
             if random_delay_min > 0:
-                logger.info("[DailySharing] 随机延迟结束，开始执行分享...")
-            await self._execute_share()
+                # 计算延迟秒数 (0 到 max*60)
+                delay_seconds = random.randint(0, random_delay_min * 60)
+                if delay_seconds > 0:
+                    trigger_time = datetime.now()
+                    expected_time = trigger_time.timestamp() + delay_seconds
+                    time_str = datetime.fromtimestamp(expected_time).strftime('%H:%M:%S')
+                    
+                    logger.info(f"[DailySharing] 定时任务已触发，启用随机延迟策略。")
+                    logger.info(f"[DailySharing] 将延迟 {delay_seconds/60:.1f} 分钟，预计于 {time_str} 执行...")
+                    
+                    try:
+                        await asyncio.sleep(delay_seconds)
+                    except asyncio.CancelledError:
+                        return
 
-    async def _execute_share(self, force_type: SharingType = None, news_source: str = None):
-        """执行分享的主流程"""
+            if self._is_terminated: return
+
+            # 核心执行逻辑
+            now = datetime.now()
+            
+            # 防抖检查
+            if self._last_share_time:
+                if (now - self._last_share_time).total_seconds() < 60:
+                    logger.info("[DailySharing] 检测到近期已执行任务，跳过本次定时触发。")
+                    return
+            
+            if self._lock.locked():
+                logger.warning("[DailySharing] 上一个任务正在进行中，跳过本次触发。")
+                return
+
+            async with self._lock:
+                self._last_share_time = now
+                if random_delay_min > 0:
+                    logger.info("[DailySharing] 随机延迟结束，开始执行分享...")
+                await self._execute_share()
+                
+        finally:
+            self._bg_tasks.discard(task)
+
+    async def _execute_share(self, force_type: SharingType = None, news_source: str = None, specific_target: str = None):
+        """执行分享的主流程
+        Args:
+            force_type: 强制指定类型，不使用轮询逻辑
+            news_source: 新闻源
+            specific_target: 指定发送目标（不使用配置文件中的接收列表），通常用于指令手动触发
+        """
+        if self._is_terminated: return
+
         period = self._get_curr_period()
         if force_type:
             stype = force_type
@@ -442,24 +531,34 @@ class DailySharingPlugin(Star):
             news_data = await self.news_service.get_hot_news(news_source)
 
         targets = []
-        adapter_id = self.receiver_conf.get("adapter_id", "QQ")
-        for gid in self.receiver_conf.get("groups", []):
-            if gid:
-                targets.append(f"{adapter_id}:GroupMessage:{gid}")
-        for uid in self.receiver_conf.get("users", []):
-            if uid:
-                targets.append(f"{adapter_id}:FriendMessage:{uid}")
+        
+        # 1. 确定发送目标
+        if specific_target:
+            # 如果指定了目标（手动指令触发），只发给它
+            targets.append(specific_target)
+        else:
+            # 否则定时任务或广播，从配置加载
+            adapter_id = self.receiver_conf.get("adapter_id", "QQ")
+            for gid in self.receiver_conf.get("groups", []):
+                if gid:
+                    targets.append(f"{adapter_id}:GroupMessage:{gid}")
+            for uid in self.receiver_conf.get("users", []):
+                if uid:
+                    targets.append(f"{adapter_id}:FriendMessage:{uid}")
+        
         if not targets:
-            logger.warning("[DailySharing] 未配置接收对象，请在配置页填写群号或QQ号")
+            logger.warning("[DailySharing] 未配置接收对象，且未指定目标，请在配置页填写群号或QQ号")
             return
 
         for uid in targets:
+            if self._is_terminated: break
             try:
                 is_group = "group" in uid.lower() or "room" in uid.lower() or "guild" in uid.lower()
                 
                 hist_data = await self.ctx_service.get_history_data(uid, is_group)
                 if is_group and "group_info" in hist_data:
-                    if not self.ctx_service.check_group_strategy(hist_data["group_info"]):
+                    # 手动触发时通常忽略策略检查，但自动触发时需要检查
+                    if not specific_target and not self.ctx_service.check_group_strategy(hist_data["group_info"]):
                         logger.info(f"[DailySharing] 因策略跳过群组 {uid}")
                         continue
 
@@ -483,7 +582,7 @@ class DailySharingPlugin(Star):
                     })
                     continue
                 
-                # --- 生成多媒体素材 (图片 & 视频 & 语音) ---
+                # 生成多媒体素材 (图片 & 视频 & 语音) 
                 
                 # 1. 配图生成逻辑
                 img_path = None
@@ -514,21 +613,21 @@ class DailySharingPlugin(Star):
                     else:
                         logger.info(f"[DailySharing] 当前类型 {stype.value} 不在语音允许列表，跳过 TTS。")
 
-                # --- 发送消息 ---
+                # 发送消息
                 await self._send(uid, content, img_path, audio_path, video_url)
                 
-                # --- 获取图片描述并写入 AstrBot 聊天上下文 ---
+                # 获取图片描述并写入 AstrBot 聊天上下文
                 img_desc = self.image_service.get_last_description()
                 await self.ctx_service.record_bot_reply_to_history(uid, content, image_desc=img_desc)
 
-                # --- 记录与历史 ---
+                # 记录与历史
                 await self.ctx_service.record_to_memos(uid, content, img_desc)
 
                 await self._append_history({
                     "timestamp": datetime.now().isoformat(),
                     "target": uid,
                     "type": stype.value,
-                    "content": content[:50] + "...",
+                    "content": content[:100] + "...", 
                     "success": True
                 })
                 
@@ -541,6 +640,8 @@ class DailySharingPlugin(Star):
 
     async def _send(self, uid, text, img_path, audio_path=None, video_url=None):
         """发送消息（支持分开发送，支持语音和视频）"""
+        if self._is_terminated: return
+
         try:
             separate_img = self.image_conf.get("separate_text_and_image", True)
             prefer_audio_only = self.tts_conf.get("prefer_audio_only", False)
@@ -597,6 +698,8 @@ class DailySharingPlugin(Star):
 
     async def _random_sleep(self):
         """随机延迟"""
+        if self._is_terminated: return
+
         delay_str = self.image_conf.get("separate_send_delay", "1.0-2.0")
         try:
             if "-" in str(delay_str):
@@ -616,7 +719,8 @@ class DailySharingPlugin(Star):
         if 9 <= h < 12: return TimePeriod.FORENOON
         if 12 <= h < 16: return TimePeriod.AFTERNOON
         if 16 <= h < 19: return TimePeriod.EVENING
-        return TimePeriod.NIGHT
+        if 19 <= h < 22: return TimePeriod.NIGHT
+        return TimePeriod.LATE_NIGHT
 
     @staticmethod
     def _read_json_sync(path):
@@ -660,6 +764,7 @@ class DailySharingPlugin(Star):
             TimePeriod.AFTERNOON: "afternoon_sequence",
             TimePeriod.EVENING: "evening_sequence",
             TimePeriod.NIGHT: "night_sequence",
+            TimePeriod.LATE_NIGHT: "late_night_sequence",
             TimePeriod.DAWN: "dawn_sequence"
         }
         
@@ -695,7 +800,6 @@ class DailySharingPlugin(Star):
 
     async def _append_history(self, record):
         self.sharing_history.append(record)
-        # 使用配置中的 history_limit
         if len(self.sharing_history) > self.history_limit:
             self.sharing_history = self.sharing_history[-self.history_limit:]
         
@@ -723,9 +827,19 @@ class DailySharingPlugin(Star):
         parts = msg.split()
         
         if len(parts) == 1:
-            yield event.plain_result("指令格式错误，请指定参数。")
+            yield event.plain_result("指令格式错误，请指定参数。\n示例：/分享 新闻")
             return
+            
         arg = parts[1].lower()
+        
+        # 判断是否是广播模式
+        is_broadcast = "广播" in parts
+        
+        # 确定发送目标
+        # 如果不是广播，就只发给当前会话
+        current_uid = event.unified_msg_origin
+        specific_target = None if is_broadcast else current_uid
+        
         if arg == "状态":
             async for res in self._cmd_status(event): yield res
         elif arg == "开启":
@@ -740,11 +854,13 @@ class DailySharingPlugin(Star):
             async for res in self._cmd_help(event): yield res
             
         elif arg in ["自动", "auto"]:
-            yield event.plain_result("正在生成并发送分享内容 (自动类型)...")
-            await self._execute_share(None)
+            target_desc = "配置的所有私聊和群聊" if is_broadcast else "当前会话"
+            yield event.plain_result(f"正在向{target_desc}生成并发送分享内容(自动类型)...")
+            await self._execute_share(None, specific_target=specific_target)
         else:
             if arg in CMD_CN_MAP:
                 force_type = CMD_CN_MAP[arg]
+                type_cn = TYPE_CN_MAP.get(force_type.value, arg)
                 
                 # ===== 新闻类型的特殊逻辑 (处理源和图片) =====
                 if force_type == SharingType.NEWS:
@@ -757,35 +873,47 @@ class DailySharingPlugin(Star):
                     
                     # 检查参数中是否包含 指定源
                     for p in parts[2:]:
-                        if p == "图片": continue 
+                        if p in ["图片", "广播"]: continue 
                         if p in SOURCE_CN_MAP:
                             news_src = SOURCE_CN_MAP[p]
                             break
                         elif p in NEWS_SOURCE_MAP:
                             news_src = p
                             break
+                            
                     # 如果是图片模式，直接发送图片，绕过 LLM
                     if is_image_mode:
-                        img_url, src_name = self.news_service.get_hot_news_image_url(news_src)
-                        yield event.plain_result(f"正在获取 [{src_name}] 图片...")
-                        yield event.image_result(img_url)
+                        try:
+                            if not news_src:
+                                news_src = self.news_service.select_news_source()
+                            
+                            img_url, src_name = self.news_service.get_hot_news_image_url(news_src)
+                            yield event.plain_result(f"正在获取 [{src_name}] 图片...")
+                            yield event.image_result(img_url)
+                        except Exception as e:
+                            logger.error(f"[DailySharing] 指令获取新闻图片失败: {e}")
+                            yield event.plain_result(f"获取图片失败: {e}")
                         return
+                        
                     # 正常的 LLM 文字新闻模式
-                    type_cn = TYPE_CN_MAP.get(force_type.value, arg)
                     src_info = f" ({NEWS_SOURCE_MAP[news_src]['name']})" if news_src else ""
-                    yield event.plain_result(f"正在生成并发送分享 [{type_cn}{src_info}] ...")
-                    await self._execute_share(force_type, news_source=news_src)
+                    target_desc = "配置的所有私聊和群聊" if is_broadcast else "当前会话"
+                    yield event.plain_result(f"正在向{target_desc}生成并发送分享{type_cn}{src_info} ...")
+                    
+                    await self._execute_share(force_type, news_source=news_src, specific_target=specific_target)
                     return
+                    
                 # 其他类型 (问候/心情等)
-                type_cn = TYPE_CN_MAP.get(force_type.value, arg)
-                yield event.plain_result(f"正在生成并发送分享 [{type_cn}] ...")
-                await self._execute_share(force_type)
+                target_desc = "配置的所有私聊和群聊" if is_broadcast else "当前会话"
+                yield event.plain_result(f"正在向{target_desc}生成并发送分享{type_cn} ...")
+                await self._execute_share(force_type, specific_target=specific_target)
                 return
             try:
                 force_type = SharingType(arg)
                 type_cn = TYPE_CN_MAP.get(force_type.value, arg)
-                yield event.plain_result(f"正在生成并发送分享 [{type_cn}] ...")
-                await self._execute_share(force_type)
+                target_desc = "配置的所有私聊和群聊" if is_broadcast else "当前会话"
+                yield event.plain_result(f"正在向{target_desc}生成并发送分享{type_cn} ...")
+                await self._execute_share(force_type, specific_target=specific_target)
             except ValueError:
                 yield event.plain_result(f"未知指令或无效类型: {arg}\n可用类型: 问候, 新闻, 心情, 知识, 推荐")
 
@@ -821,7 +949,8 @@ class DailySharingPlugin(Star):
         hist_txt = "无记录"
         if self.sharing_history:
             lines = []
-            for h in reversed(self.sharing_history[-3:]):
+            display_count = 5
+            for h in reversed(self.sharing_history[-display_count:]):
                 ts = h.get("timestamp", "")[5:16].replace("T", " ")
                 content_preview = h.get('content', '') or ""
                 
@@ -860,6 +989,7 @@ Cron规则: {cron}
             TimePeriod.AFTERNOON: "afternoon_sequence",
             TimePeriod.EVENING: "evening_sequence",
             TimePeriod.NIGHT: "night_sequence",
+            TimePeriod.LATE_NIGHT: "late_night_sequence",
             TimePeriod.DAWN: "dawn_sequence"
         }
         config_key = config_key_map.get(period)
@@ -880,9 +1010,10 @@ Cron规则: {cron}
     async def _cmd_help(self, event: AstrMessageEvent):
         """帮助菜单"""
         yield event.plain_result("""每日分享插件帮助:
-/分享 [类型] - 立即执行 (类型: 问候/新闻/心情/知识/推荐)
-/分享 新闻 [源] - 获取指定平台热搜 (如: 微博/B站/头条/百度)
-/分享 新闻 [源] 图片 - 获取热搜长图 (如: /分享 新闻 微博 图片)
+/分享 [类型] - 立即在当前会话生成分享 (类型: 问候/新闻/心情/知识/推荐)
+/分享 [类型] 广播 - 立即向所有配置的私聊和群聊分享
+/分享 新闻 [源] - 获取指定平台热搜
+/分享 新闻 [源] 图片 - 获取热搜长图
 /分享 状态 - 查看运行状态
 /分享 开启 - 启用自动分享
 /分享 关闭 - 禁用自动分享

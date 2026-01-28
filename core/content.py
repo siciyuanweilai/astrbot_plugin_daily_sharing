@@ -102,6 +102,67 @@ class ContentService:
             logger.error(traceback.format_exc())
             return None
 
+    # ==================== Agent 选题 ====================
+
+    async def _agent_brainstorm_topic(self, category_type: str, sub_category: str, history_str: str) -> Optional[str]:
+        """
+        选题 Agent：专门负责从给定的类别中，结合历史记录，避坑并选出一个有趣的、不重复的话题/作品名。
+        """
+        is_rec = category_type in REC_CATS # 判断是推荐还是知识
+        
+        if is_rec:
+            # === 推荐类 Prompt ===
+            constraint = ""
+            target_item_desc = "具体作品名称"
+            
+            if category_type == "美食":
+                target_item_desc = "具体食物名称"
+                constraint = """
+【严重警告 - 类别约束】
+你现在推荐的类别是【美食】。
+严禁推荐任何动漫、电影、游戏、书籍或小说作品！
+严禁推荐《食戟之灵》、《中华小当家》、《黄金神威》等番剧！
+必须输出一个【现实中存在的、可以吃的】具体食物名称（如：螺蛳粉、北京烤鸭、臭豆腐）。
+"""
+            
+            system_prompt = "你是一个品味独特的资深鉴赏家和推荐官。"
+            user_prompt = f"""
+任务：推荐一个【{sub_category}】风格的【{category_type}】{target_item_desc}。
+【已推荐过的列表(请绝对避开)】：{history_str}
+
+要求：
+1. 请优先选择【口碑极佳】的目标。
+2. 拒绝那些被推荐烂了的“教科书式标准答案”。
+3. 可以是经典名作，但最好能让人有“眼前一亮”或“值得重温”的感觉。
+4. 严禁输出上述“已推荐过的列表”中的内容，必须换一个新的。
+5. 只输出名称，不要书名号，不要解释，不要标点。
+{constraint}
+"""
+        else:
+            # === 知识类 Prompt ===
+            system_prompt = "你是一个眼光独到的科普博主和生活达人。"
+            user_prompt = f"""
+请输出一个属于【{category_type}-{sub_category}】领域的知识点关键词。
+【已分享过的列表(请绝对避开)】：{history_str}
+
+要求：
+1. 话题范围灵活：可以是【冷知识】、【常见误区】、【实用技巧】或【有趣现象】。
+2. 核心标准是“有趣”或“有用”：
+   - 如果是生活类，优先选实用性强的。
+   - 如果是科普类，优先选反直觉或颠覆认知的。
+   - 不要刻意追求“生僻难懂”，大众感兴趣的话题也可以。
+3. 严禁输出上述“已分享过的列表”中的内容，必须换一个新的。 
+4. 只输出关键词，不要任何解释，不要标点符号。
+"""
+
+        # 调用 LLM 
+        res = await self.call_llm(prompt=user_prompt, system_prompt=system_prompt, timeout=15)
+        if not res: return None
+        
+        # 清洗结果 (去除标点和多余空格)
+        topic = res.strip().split("\n")[0].replace("。", "").replace("《", "").replace("》", "")
+        return topic
+
     # ==================== 状态文件管理 ====================
     @staticmethod
     def _read_json_sync(path: str) -> dict:
@@ -146,7 +207,8 @@ class ContentService:
             TimePeriod.FORENOON: "上午",
             TimePeriod.AFTERNOON: "下午", 
             TimePeriod.EVENING: "傍晚",
-            TimePeriod.NIGHT: "深夜",
+            TimePeriod.NIGHT: "夜晚",      
+            TimePeriod.LATE_NIGHT: "深夜", 
         }
         return labels.get(period, "现在")
 
@@ -180,11 +242,11 @@ class ContentService:
             # 获取特定对象的历史列表
             history = state["targets_history"][target_id].get(key_type, [])
             
-            # 添加新记录（只保留前20个字作为特征）
+            # 添加新记录
             summary = content_summary.split("\n")[0][:15].replace("推荐", "").replace("分享", "")
             history.append(summary)
             
-            # 只保留最近N条 (使用配置参数)
+            # 只保留最近N条
             if len(history) > self.topic_history_limit:
                 history = history[-self.topic_history_limit:]
             
@@ -247,13 +309,13 @@ class ContentService:
         
         # 清晨(6-9) -> 强制早安
         if period in [TimePeriod.MORNING]:
-            greeting_constraint = "4. 文案开头必须带上温馨的早安问候"
+            greeting_constraint = "4. 文案开头必须带上温馨的早安问候，因为现在是早晨准备起床的时候。"
             
-        # 深夜(19-24) 和 凌晨(0-6) -> 强制晚安
-        elif period in [TimePeriod.NIGHT, TimePeriod.DAWN]:
-            greeting_constraint = "4. 文案末尾必须带上温馨的晚安问候"
-            
-        # 上午/下午/傍晚 -> 自然打招呼
+        # 深夜(22-24) 和 凌晨(0-6) -> 强制晚安
+        elif period in [TimePeriod.LATE_NIGHT, TimePeriod.DAWN]:
+            greeting_constraint = "4. 文案末尾必须带上温馨的晚安问候，因为现在是深夜准备睡觉的时候。"
+
+        # 上午/下午/傍晚/晚上 -> 自然打招呼
         else:
             greeting_constraint = "4. 就像平常聊天一样自然打招呼即可，不需要刻意说早安晚安"            
 
@@ -282,7 +344,7 @@ class ContentService:
 2. 基于当前真实时间问候
 3. 忽略群聊历史，直接开启新问候
 {greeting_constraint} 
-5. {'简短（50-80字）' if is_group else '可适当长一些（50-100字）'}
+5. {'简短（50-80字）' if is_group else '可适当长一些（80-100字）'}
 6. 直接输出内容，不要解释
 
 请生成{p_label}问候："""
@@ -318,21 +380,31 @@ class ContentService:
         resonance_guide = ""
         if is_group:
             resonance_guide = f"""
-【群聊共鸣策略 - 基于日程的"同频"】
-请不要使用刻板的时间情绪（如"早上一定困"、"晚上一定emo"），而是**深度挖掘你当前日程状态（见上方【生活状态】）背后的普世感受**：
-1. **若你当前【忙碌/工作/学习】**：
-   - 寻找"奋斗者"的共鸣：比如对咖啡的渴望、大脑过载的恍惚、解决难题后的短暂爽感、或是单纯的"不想干了"的小牢骚。
-   - *目标*：让正在搬砖的群友觉得"原来你也一样"。
-2. **若你当前【休闲/摸鱼/饮食】**：
-   - 寻找"享受当下"的共鸣：比如食物带来的瞬间治愈、被窝的引力、忙里偷闲的窃喜、或是对即将到来的周末/下班的期待。
-   - *目标*：成为群里的"气氛组"，带动轻松话题。
-3. **若你当前【运动/外出/通勤】**：
-   - 寻找"身体感官"的共鸣：比如早高峰的拥挤、运动后的酸爽与多巴胺、路边看到好看风景的惊喜。
+【群聊共鸣策略 - 日程中的"治愈微光"】
+请拒绝机械的时间报时（如"早上了"、"晚上了"），而是**捕捉你当前生活状态中那些微小但能抚慰人心的瞬间**。
+请根据你的【生活状态】选择对应策略：
+
+1. **若你当前【忙碌/工作/学习/攻坚】**：
+   - **寻找"缝隙中的安宁"**：不要单纯宣泄压力，而是分享你在忙乱中如何自我安抚。
+   - *示例*：忙得焦头烂额时偷喝的一口冰美式、解决难题后那一秒的长舒一口气、或是告诉大家“虽然很累，但我们在一点点变好”。
+   - *治愈目标*：给同样在奋斗的群友一种**“并肩作战的陪伴感”**，让他们觉得焦虑是被接纳的。
+
+2. **若你当前【休闲/摸鱼/饮食/宅家】**：
+   - **传递"允许暂停的松弛感"**：描述感官上的舒适细节，传递慢下来的权利。
+   - *示例*：窗帘透进来的光影、食物冒出的热气、被窝里安全的包裹感、或者是“就在此刻，世界与我无关”的窃喜。
+   - *治愈目标*：成为群里的**“精神充电站”**，让紧绷的人看到你的文字能感到一丝放松。
+
+3. **若你当前【运动/外出/通勤/散步】**：
+   - **捕捉"世界的生命力"**：跳出赶路的焦躁，分享你眼中的风景和生机。
+   - *示例*：耳机里的BGM和步伐踩点的瞬间、路边顽强开出的小花、晚霞落在建筑上的温柔、甚至是风吹过脸颊的真实触感。
+   - *治愈目标*：为群聊打开一扇窗，带去一点**“户外的氧气”**和对生活的热爱。
+
 **核心要求**：
-情绪必须**紧扣**你正在做的事情。不要为了强行共鸣而脱离你的人设日程。请将你的人设状态与这种大众情绪结合。
+情绪必须**源于你正在做的事**，但视角要**温柔且有力量**。不要说教，而是通过分享你的“小确幸”，治愈屏幕对面的人。
 """
         else:
             resonance_guide = "【私聊策略】像对亲密好友一样，分享一点私人的、细腻的小情绪，或者一个小秘密。"
+
 
         prompt = f"""
 【当前时间】{ctx['date_str']} {ctx['time_str']} ({ctx['period_label']})
@@ -493,30 +565,11 @@ class ContentService:
         
         logger.info(f"[内容服务] 知识方向: {main_cat} - {sub_cat}")
 
-        target_keyword = ""
-        baike_context = ""
-        
-        # 1. 快速生成一个关键词
-        pre_prompt = f"""
-请输出一个属于【{main_cat}-{sub_cat}】领域的知识点关键词。
-【已分享过的列表(请绝对避开)】
-{history_str}
-要求：
-1. 话题范围灵活：可以是【冷知识】、【常见误区】、【实用技巧】或【有趣现象】。
-2. 核心标准是“有趣”或“有用”：
-   - 如果是生活类，优先选实用性强的。
-   - 如果是科普类，优先选反直觉或颠覆认知的。
-   - 不要刻意追求“生僻难懂”，大众感兴趣的话题也可以。
-3. 严禁输出上述“已分享过的列表”中的内容，必须换一个新的。 
-4. 只输出关键词，不要任何解释，不要标点符号。
-"""
-        kw_res = await self.call_llm(prompt=pre_prompt, system_prompt="你是一个眼光独到的科普博主和生活达人。", timeout=15)
-        
-        if not kw_res:
+        # 使用 Agent Brainstorming
+        target_keyword = await self._agent_brainstorm_topic(main_cat, sub_cat, history_str)
+        if not target_keyword:
             logger.warning("[内容服务] 无法生成知识关键词，取消分享")
             return None
-
-        target_keyword = kw_res.strip().split("\n")[0].replace("。", "")
         
         # 2. 查百科 (增加兜底逻辑)
         info = await self.news_service.get_baike_info(target_keyword)
@@ -543,7 +596,7 @@ class ContentService:
              if allow_detail:
                  context_instruction = "- 场景处理：可以结合你当下的真实状态（如工作中、休息中）来引出这个知识点，让分享更有人情味。"
              else:
-                 context_instruction = "- 场景处理：**请完全忽略天气**，除非知识点与天气直接相关。如果状态忙碌，可以提一句“工作间隙看到这个”，否则直接分享知识即可。"
+                 context_instruction = "- 场景处理：**请完全忽略天气**，除非知识点与天气直接相关。如果状态忙碌，可以说“忙里偷闲推荐个”，否则直接分享知识即可。"
         else:
              context_instruction = """
 - **关联逻辑（重要）**：
@@ -568,7 +621,7 @@ class ContentService:
 {ctx['chat_hint']}
 
 【严重警告 - 拒绝尴尬开头】
-- 严禁说：“看大家聊得这么有文化”、“看你们都在聊XX”。
+- 严禁说：“看大家聊得这么有文化”、“看你们都在聊窝被窝”。
 - 直接切入知识点，就像你刚知道这个想告诉朋友一样。
 - 请完全忽略群聊的上下文，直接开启新话题。
 
@@ -630,45 +683,13 @@ class ContentService:
         
         logger.info(f"[内容服务] 推荐方向: {rec_type} ({sub_style})")
 
-        target_work = ""
+        # 使用 Agent Brainstorming
+        target_work = await self._agent_brainstorm_topic(rec_type, sub_style, history_str)
+        if not target_work:
+             logger.warning("[内容服务] 无法生成推荐作品名，取消分享")
+             return None
+
         baike_context = ""
-
-        # 针对“美食”类型进行特殊约束，防止推荐到动漫/游戏/电影
-        
-        target_item_desc = "作品名称"
-        food_constraint = ""
-        
-        if rec_type == "美食":
-            target_item_desc = "具体的食物名称"
-            food_constraint = """
-【严重警告 - 类别约束】
-你现在推荐的类别是【美食】。
-严禁推荐任何动漫、电影、游戏、书籍或小说作品！
-严禁推荐《食戟之灵》、《中华小当家》、《黄金神威》等番剧！
-必须输出一个【现实中存在的、可以吃的】具体食物名称（如：螺蛳粉、北京烤鸭、仰望星空派、臭豆腐）。
-"""
-
-        # 1. 快速生成一个作品/食物名
-        pre_prompt = f"""
-请推荐一个【{sub_style}】风格的【{rec_type}】{target_item_desc}。
-【已推荐过的列表(请绝对避开)】
-{history_str}
-要求：
-1. 请优先选择【口碑极佳】的目标。
-2. 拒绝那些被推荐烂了的“教科书式标准答案”。
-3. 可以是经典名作，但最好能让人有“眼前一亮”或“值得重温”的感觉。
-4. 严禁输出上述“已推荐过的列表”中的内容，必须换一个新的。
-5. 只输出名称，不要书名号，不要解释，不要标点。
-{food_constraint}
-"""
-
-        kw_res = await self.call_llm(prompt=pre_prompt, system_prompt="你是一个品味独特的资深鉴赏家。", timeout=15)
-        
-        if not kw_res:
-            logger.warning("[内容服务] 无法生成推荐作品名，取消分享")
-            return None
-
-        target_work = kw_res.strip().split("\n")[0].replace("。", "")
         
         # 2. 查百科 (增加兜底逻辑)
         info = await self.news_service.get_baike_info(target_work)

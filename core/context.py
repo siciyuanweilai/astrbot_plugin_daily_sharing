@@ -1,8 +1,8 @@
-
 import datetime
 import time
 import re
 import json 
+import asyncio
 from typing import Optional, Dict, Any, List
 from astrbot.api import logger
 from ..config import SharingType, TimePeriod 
@@ -23,11 +23,12 @@ class ContextService:
 
         self.image_conf = self.config.get("image_conf", {})
         self.tts_conf = self.config.get("tts_conf", {}) 
+        self.llm_conf = self.config.get("llm_conf", {}) 
 
     # ==================== 基础辅助方法 ====================
 
     def _find_plugin(self, keyword: str):
-        """查找 life_scheduler 插件实例 """
+        """查找插件实例 """
         try:
             plugins = self.context.get_all_stars()
             
@@ -100,7 +101,6 @@ class ContextService:
 
         # 2. 获取所有实例
         try:
-            # 尝试直接访问 .insts 属性
             if hasattr(pm, "insts"):
                 raw = pm.insts
                 if isinstance(raw, dict):
@@ -108,7 +108,6 @@ class ContextService:
                 elif isinstance(raw, list):
                     all_insts.extend(raw)
             
-            # 如果没找到，尝试调用 .get_insts() 方法
             if not all_insts and hasattr(pm, "get_insts") and callable(pm.get_insts):
                 raw = pm.get_insts()
                 if isinstance(raw, dict):
@@ -126,103 +125,85 @@ class ContextService:
 
         # 3. 遍历查找
         for inst in all_insts:
-            # 尝试获取 bot 对象
             bot = getattr(inst, "bot", None)
-            
-            # 如果 inst.bot 不存在，检查 inst 本身是否像一个 Bot (拥有 api 属性)
             if not bot and hasattr(inst, "api"):
                 bot = inst
             
             if not bot:
                 continue
             
-            # 收集有效候选
             valid_candidates.append(bot)
 
             inst_id = str(getattr(inst, "id", ""))
             inst_type = str(getattr(inst, "adapter_type", ""))
 
-            # 精确/模糊匹配
             if adapter_id and (adapter_id == inst_id or adapter_id == inst_type or adapter_id in inst_id):
                 return bot
 
-        # 4. 智能兜底 (如果名字没对上，但找到了 Bot，就用第一个)
+        # 4. 智能兜底
         if valid_candidates:
-            # 如果只有一个，直接用，不报错（这是最常见的情况）
             if len(valid_candidates) == 1:
                 return valid_candidates[0]
-            
-            # 如果有多个，用第一个，但记录一条 debug 日志
             logger.debug(f"[DailySharing] 未精确匹配适配器 '{adapter_id}'，将使用默认 Bot 实例。")
             return valid_candidates[0]
 
-        # 5. 真没找到
         logger.warning(f"[DailySharing] 未找到任何可用的 Bot 实例。")
         return None
 
     # ==================== TTS 集成 ====================
 
-    def _determine_emotion_raw(self, sharing_type: SharingType, period: TimePeriod, content: str = "") -> str:
+    async def _agent_analyze_sentiment(self, content: str, sharing_type: SharingType) -> str:
         """
-        根据分享类型、时间段和文本内容，决定 TTS 的情绪字符串。
+        使用 Agent 分析文本情感
         """
+        if not content: return "neutral"
         
-        # === 扩充关键词库 ===
-        
-        happy_keywords = [
-            "开心", "快乐", "高兴", "喜悦", "愉快", "兴奋", "喜欢", "棒", "不错", "哈哈", 
-            "lol", "great", "awesome", "happy", "joy", "excited", ":)", "😀",
-            "震惊", "惊爆", "突发", "奇迹", "不可思议", "没想到", "惊讶", "哇", "天啊", 
-            "surprise", "喜讯", "祝贺", "期待"
-        ]
-        
-        # 愤怒/生气
-        angry_keywords = [
-            "生气", "愤怒", "火大", "恼火", "气愤", "气死", "怒", "怒了", "angry", 
-            "furious", "mad", "rage", "annoyed", "nm", "tmd", "淦", "😡",
-            "怒斥", "谴责", "恶劣", "讨厌", "过分", "无语", "抵制"
-        ]
-        
-        # 悲伤/难过 
-        sad_keywords = [
-            "伤心", "难过", "沮丧", "低落", "悲伤", "哭", "流泪", "难受", "失望", 
-            "委屈", "心碎", "sad", "depress", "upset", "unhappy", "blue", "tear", 
-            "遗憾", "可惜", "哀悼", "去世", "逝世", "痛苦", ":(", "😢"
-        ]
+        # 1. 如果内容太短，不浪费 Token，直接用简单的 fallback
+        if len(content) < 5: return "neutral"
 
-        # === 优先根据关键词判断强情绪 ===
+        # 2. 构造 Prompt
+        system_prompt = """你是一个情感分析专家。
+任务：分析文本的情感基调，并从以下列表中选择最匹配的一个标签返回。
+标签列表：[happy, sad, angry, neutral, surprise]
+
+定义：
+- happy: 开心、兴奋、推荐、积极、治愈、期待、早安
+- sad: 难过、遗憾、深夜emo、疲惫、怀念、低落、晚安
+- angry: 生气、愤怒、吐槽、不爽、谴责
+- surprise: 震惊、不可思议、没想到、吃瓜
+- neutral: 客观陈述、平淡、普通问候、科普知识
+
+只输出标签单词，不要任何解释。"""
+
+        user_prompt = f"文本内容：{content[:300]}\n\n请分析情感标签："
         
-        for k in angry_keywords:
-            if k in content: return "angry"
+        try:
+            # 使用 context 自带的 llm_generate
+            provider_id = self.llm_conf.get("llm_provider_id", "")
             
-        for k in sad_keywords:
-            if k in content: return "sad"
+            # 设置较短的超时时间 (8秒)，防止 TTS 阻塞太久
+            resp = await asyncio.wait_for(
+                self.context.llm_generate(
+                    prompt=user_prompt, 
+                    system_prompt=system_prompt,
+                    chat_provider_id=provider_id if provider_id else None
+                ),
+                timeout=8 
+            )
             
-        for k in happy_keywords:
-            if k in content: return "happy"
+            if resp and hasattr(resp, 'completion_text'):
+                emotion = resp.completion_text.strip().lower()
+                # 清洗结果
+                for valid in ["happy", "sad", "angry", "surprise", "neutral"]:
+                    if valid in emotion:
+                        return valid
+                        
+        except Exception as e:
+            logger.debug(f"[Context] 情感分析 Agent 超时或出错: {e}，回退到默认逻辑")
         
-        # === 3. 根据业务类型和时间段判断基础情绪 (兜底策略) ===
-        
-        if sharing_type == SharingType.GREETING:
-            if period in [TimePeriod.DAWN, TimePeriod.MORNING, TimePeriod.EVENING]:
-                return "happy" 
-            elif period == TimePeriod.NIGHT:
-                return "sad"   
-            else:
-                return "happy"
-        
-        elif sharing_type == SharingType.MOOD:
-            if period == TimePeriod.NIGHT:
-                return "sad" 
-            else:
-                return "neutral"
-
-        elif sharing_type in [SharingType.NEWS, SharingType.KNOWLEDGE, SharingType.RECOMMENDATION]:
-            if sharing_type == SharingType.RECOMMENDATION:
-                return "happy"
-            else:
-                return "neutral" 
-
+        # 3. 兜底逻辑 (如果 Agent 失败)
+        if sharing_type == SharingType.RECOMMENDATION: return "happy"
+        if sharing_type == SharingType.GREETING: return "happy"
         return "neutral"
 
     async def text_to_speech(self, text: str, target_umo: str, sharing_type: SharingType = None, period: TimePeriod = None) -> Optional[str]:
@@ -239,18 +220,17 @@ class ContextService:
             logger.warning("[DailySharing] 未找到 TTS 插件 (astrbot_plugin_tts_emotion_router)，无法生成语音。")
             return None
 
-        # 3. 文本清洗与情感获取
+        # 3. 文本清洗
         final_text = text
+        # 正则替换：彻底清洗文本中可能存在的任何标签，只保留纯文本给 TTS
+        final_text = re.sub(r'\$\$(?:EMO:)?(?:happy|sad|angry|neutral|surprise)\$\$', '', final_text, flags=re.IGNORECASE).strip()
         
-        # 【正则替换】：彻底清洗文本中可能存在的任何标签，只保留纯文本给 TTS
-        final_text = re.sub(r'$$(EMO:)?(happy|sad|angry|neutral|surprise)$$', '', final_text, flags=re.IGNORECASE).strip()
-        
+        # 4. Agent 情感判断
         target_emotion = "neutral"
-        if sharing_type and period:
-            # 获取纯情绪字符串 (如 "happy")
-            target_emotion = self._determine_emotion_raw(sharing_type, period, text)
+        if sharing_type:
+            target_emotion = await self._agent_analyze_sentiment(final_text, sharing_type)
 
-        # 4. 调用生成
+        # 5. 调用生成
         try:
             session_state = None
             
@@ -258,11 +238,11 @@ class ContextService:
             if hasattr(tts_plugin, "_get_session_state"):
                 session_state = tts_plugin._get_session_state(target_umo)
                 
-                # 【注入情感】
+                # 注入情感
                 if target_emotion and target_emotion != "neutral":
                     if hasattr(session_state, "pending_emotion"):
                         session_state.pending_emotion = target_emotion
-                        logger.debug(f"[DailySharing] 已注入 TTS 情绪状态: {target_emotion}")
+                        logger.debug(f"[DailySharing] Agent 判定 TTS 情绪: {target_emotion}")
 
             logger.info(f"[DailySharing] 正在请求 TTS 生成: {final_text[:20]}... (情绪: {target_emotion})")
             
@@ -338,7 +318,7 @@ class ContextService:
             return str(data)
 
     def format_life_context(self, context: str, sharing_type: SharingType, is_group: bool, group_info: dict = None) -> str:
-        """格式化生活上下文 (统一入口)"""
+        """格式化生活上下文"""
         if not context: return ""
         
         if is_group:
@@ -659,7 +639,7 @@ class ContextService:
             # 4. 构造 Assistant 消息 (包含图片描述)
             final_content = content
             if image_desc:
-                # 不再截断，记录完整描述，防止细节丢失
+                # 记录完整描述，防止细节丢失
                 final_content += f"\n\n[发送了一张配图: {image_desc}]"
 
             # 注意：这里 role 是 assistant，因为是机器人说的

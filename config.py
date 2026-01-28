@@ -7,7 +7,8 @@ class TimePeriod(Enum):
     FORENOON = "forenoon"  # 上午 9-12
     AFTERNOON = "afternoon"  # 下午 12-16  
     EVENING = "evening"    # 傍晚 16-19  
-    NIGHT = "night"        # 深夜 19-24  
+    NIGHT = "night"        # 晚上 19-22
+    LATE_NIGHT = "late_night" # 深夜 22-24
 
 class SharingType(Enum):
     """分享类型"""
@@ -118,23 +119,33 @@ NEWS_TIME_PREFERENCES = {
         "baidu": 0.05,
         "toutiao": 0.05,
     },
-    # 深夜：偏向短视频、社区讨论
+    # 晚上 (19-22)：偏向娱乐、社区讨论、短视频
     TimePeriod.NIGHT: {
         "douyin": 0.30,
         "bili": 0.20,
-        "weibo": 0.15,
+        "weibo": 0.20,
         "xiaohongshu": 0.10,
         "baidu": 0.10,
         "zhihu": 0.05,
         "tencent": 0.05,
-        "toutiao": 0.05,
+    },
+    # 深夜 (22-24)：偏向情感、阅读、吃瓜、助眠
+    TimePeriod.LATE_NIGHT: {
+        "xiaohongshu": 0.25,
+        "zhihu": 0.20,
+        "bili": 0.20,
+        "douyin": 0.15,
+        "weibo": 0.10,
+        "baidu": 0.05,
+        "tencent": 0.05,
+        "toutiao": 0.00,
     },
     # 凌晨：偏向种草、短视频、emo时刻
     TimePeriod.DAWN: {
-        "xiaohongshu": 0.30,
+        "zhihu": 0.30,
         "bili": 0.20,
         "douyin": 0.15,
-        "zhihu": 0.10,
+        "xiaohongshu": 0.10,
         "weibo": 0.10,
         "toutiao": 0.05,
         "baidu": 0.05,
@@ -167,9 +178,15 @@ SHARING_TYPE_SEQUENCES = {
         SharingType.NEWS.value,        # 第2次：新闻热搜
     ],
 
-    # ===== 夜晚时段 (19:00-24:00) =====
+    # ===== 晚上时段 (19:00-22:00) =====
     TimePeriod.NIGHT: [
-        SharingType.MOOD.value,        # 第1次：夜晚心情
+        SharingType.RECOMMENDATION.value, # 第1次：推荐
+        SharingType.MOOD.value,           # 第2次：晚间闲聊
+    ],
+
+    # ===== 深夜时段 (22:00-24:00) =====
+    TimePeriod.LATE_NIGHT: [
+        SharingType.MOOD.value,        # 第1次：深夜心情
         SharingType.GREETING.value,    # 第2次：晚安问候        
     ],
 

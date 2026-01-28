@@ -55,18 +55,22 @@
         "description": "定时随机延迟(分钟)",
         "type": "int",
         "default": 0,
-        "hint": "定时触发后，随机等待 0 到 N 分钟再发送。例如设为 30，则 8:00 触发后，实际发送时间在 8:00-8:30 之间随机。设为 0 表示准点发送。"
-      },
-      "history_limit": {
-        "description": "运行日志保留条数",
-        "type": "int",
-        "default": 50,
-        "hint": "插件内部记录的最近执行日志条数（用于 /分享 状态 查看）。"
+        "slider": {
+            "min": 0,
+            "max": 30,
+            "step": 1
+        },
+        "hint": "定时触发后，随机等待 0 到 30 分钟再发送。例如 8:00 触发后，实际发送时间在 8:00-8:30 之间随机。设为 0 表示准点发送。"
       },
       "topic_history_limit": {
         "description": "内容去重记忆条数",
         "type": "int",
-        "default": 20,
+        "default": 50,
+        "slider": {
+            "min": 1,
+            "max": 100,
+            "step": 1
+        },        
         "hint": "用于【知识】和【推荐】类型。Bot会记住最近N次分享过的主题，避免重复推荐相同的内容。"
       },
       "sharing_type": {
@@ -76,6 +80,15 @@
         "options": ["auto", "greeting", "news", "mood", "knowledge", "recommendation"],
         "hint": "auto=按照下方配置的【时段序列】自动轮换（推荐） | 若选择具体类型，则永远只发该类型。"
       },
+      "dawn_sequence": {
+        "description": "【序列】凌晨时段 (00:00-06:00)",
+        "type": "list",
+        "items": {
+          "type": "string"
+        },
+        "default": ["mood"],
+        "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环执行。"        
+      },      
       "morning_sequence": {
         "description": "【序列】早晨时段 (06:00-09:00)",
         "type": "list",
@@ -113,21 +126,21 @@
         "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环执行。"        
       },
       "night_sequence": {
-        "description": "【序列】夜晚时段 (19:00-24:00)",
+        "description": "【序列】夜晚时段 (19:00-22:00)",
+        "type": "list",
+        "items": {
+          "type": "string"
+        },
+        "default": ["recommendation", "mood"],
+        "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环执行。"        
+      },
+      "late_night_sequence": {
+        "description": "【序列】深夜时段 (22:00-24:00)",
         "type": "list",
         "items": {
           "type": "string"
         },
         "default": ["mood", "greeting"],
-        "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环执行。"        
-      },
-      "dawn_sequence": {
-        "description": "【序列】凌晨时段 (00:00-06:00)",
-        "type": "list",
-        "items": {
-          "type": "string"
-        },
-        "default": ["mood"],
         "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环执行。"        
       }
     }
@@ -165,12 +178,22 @@
         "description": "私聊读取条数",
         "type": "int",
         "default": 10,
+        "slider": {
+            "min": 1,
+            "max": 30,
+            "step": 1
+        },         
         "hint": "私聊中获取的历史消息条数。推荐设置为 10-20 条以获取完整语境"
       },
       "group_chat_history_count": {
         "description": "群聊读取条数",
         "type": "int",
         "default": 20,
+        "slider": {
+            "min": 1,
+            "max": 50,
+            "step": 1
+        },          
         "hint": "群聊中获取的历史消息条数。推荐设置为 20-30 条，便于分析群聊热度和当前话题"
       },
       "group_share_strategy": {
@@ -233,6 +256,11 @@
         "description": "获取新闻条数",
         "type": "int",
         "default": 5,
+        "slider": {
+            "min": 1,
+            "max": 20,
+            "step": 1
+        },          
         "hint": "从API获取的热搜条数（1-20），推荐5-10条。获取更多可增加随机选择范围"
       },
       "news_share_count": {
@@ -245,6 +273,11 @@
         "description": "API超时(秒)",
         "type": "int",
         "default": 15,
+        "slider": {
+            "min": 1,
+            "max": 60,
+            "step": 1
+        },         
         "hint": "获取新闻热搜的超时时间"
       }
     }
@@ -260,6 +293,12 @@
         "default": false,
         "hint": "需要安装 astrbot_plugin_gitee_aiimg 插件才能使用。"
       },
+      "priority_text_over_schedule": {
+        "description": "文案主导构图",
+        "type": "bool",
+        "default": true,
+        "hint": "开启：文案说'在海边'就画海边，忽略日程表。关闭：严格遵守日程，文案说'想去海边'但日程在上班，则画办公室。"
+      },      
       "image_enabled_types": {
         "description": "允许配图的类型",
         "type": "list",
@@ -368,6 +407,11 @@
         "description": "生成超时(秒)",
         "type": "int",
         "default": 120,
+        "slider": {
+            "min": 1,
+            "max": 180,
+            "step": 1
+        },         
         "hint": "LLM生成内容的最大等待时间"
       },
       "use_persona": {
