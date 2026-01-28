@@ -1,6 +1,6 @@
 import datetime
 import time
-import re
+import re 
 import json 
 import asyncio
 from typing import Optional, Dict, Any, List
@@ -181,14 +181,14 @@ class ContextService:
             # 使用 context 自带的 llm_generate
             provider_id = self.llm_conf.get("llm_provider_id", "")
             
-            # 设置较短的超时时间 (8秒)，防止 TTS 阻塞太久
+            # 设置较长的超时时间 (15秒)
             resp = await asyncio.wait_for(
                 self.context.llm_generate(
                     prompt=user_prompt, 
                     system_prompt=system_prompt,
                     chat_provider_id=provider_id if provider_id else None
                 ),
-                timeout=8 
+                timeout=15 
             )
             
             if resp and hasattr(resp, 'completion_text'):
@@ -220,16 +220,24 @@ class ContextService:
             logger.warning("[DailySharing] 未找到 TTS 插件 (astrbot_plugin_tts_emotion_router)，无法生成语音。")
             return None
 
+        # 优先提取情感标签
+        target_emotion = "neutral"
+        
+        # 正则匹配 $$happy$$ 格式
+        emotion_match = re.search(r'\$\$(?:EMO:)?(happy|sad|angry|neutral|surprise)\$\$', text, flags=re.IGNORECASE)
+        if emotion_match:
+            target_emotion = emotion_match.group(1).lower()
+            logger.debug(f"[DailySharing] 检测到内置情感标签: {target_emotion}")
+        else:
+            # 如果没有标签，再尝试使用 Agent 分析 (仅作为后备)
+            if sharing_type:
+                target_emotion = await self._agent_analyze_sentiment(text, sharing_type)
+
         # 3. 文本清洗
         final_text = text
         # 正则替换：彻底清洗文本中可能存在的任何标签，只保留纯文本给 TTS
         final_text = re.sub(r'\$\$(?:EMO:)?(?:happy|sad|angry|neutral|surprise)\$\$', '', final_text, flags=re.IGNORECASE).strip()
         
-        # 4. Agent 情感判断
-        target_emotion = "neutral"
-        if sharing_type:
-            target_emotion = await self._agent_analyze_sentiment(final_text, sharing_type)
-
         # 5. 调用生成
         try:
             session_state = None
@@ -239,10 +247,10 @@ class ContextService:
                 session_state = tts_plugin._get_session_state(target_umo)
                 
                 # 注入情感
-                if target_emotion and target_emotion != "neutral":
+                if target_emotion:
                     if hasattr(session_state, "pending_emotion"):
                         session_state.pending_emotion = target_emotion
-                        logger.debug(f"[DailySharing] Agent 判定 TTS 情绪: {target_emotion}")
+                        logger.debug(f"[DailySharing] TTS 注入情绪: {target_emotion}")
 
             logger.info(f"[DailySharing] 正在请求 TTS 生成: {final_text[:20]}... (情绪: {target_emotion})")
             
@@ -636,8 +644,10 @@ class ContextService:
                 except Exception:
                     current_history = []
             
-            # 4. 构造 Assistant 消息 (包含图片描述)
-            final_content = content
+            # 清洗内容中的标签
+            clean_content = re.sub(r'\$\$(?:EMO:)?(?:happy|sad|angry|neutral|surprise)\$\$', '', content, flags=re.IGNORECASE).strip()
+            final_content = clean_content
+
             if image_desc:
                 # 记录完整描述，防止细节丢失
                 final_content += f"\n\n[发送了一张配图: {image_desc}]"
@@ -649,7 +659,7 @@ class ContextService:
             }
             current_history.append(bot_message)
             
-            # 可选：限制历史记录长度，防止无限膨胀 (例如保留最近 100 条)
+            # 限制历史记录长度，防止无限膨胀 (例如保留最近 100 条)
             if len(current_history) > 100:
                 current_history = current_history[-100:]
             
@@ -668,7 +678,10 @@ class ContextService:
         memos = self._get_memos_plugin()
         if memos:
             try:
-                full_text = content
+                # 清洗内容中的标签
+                clean_content = re.sub(r'\$\$(?:EMO:)?(?:happy|sad|angry|neutral|surprise)\$\$', '', content, flags=re.IGNORECASE).strip()
+                full_text = clean_content
+
                 if image_desc: 
                     tag = f"[配图: {image_desc}]" if self.image_conf.get("record_image_description", True) else "[已发送配图]"
                     full_text += f"\n{tag}"

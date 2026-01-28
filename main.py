@@ -2,6 +2,7 @@ import asyncio
 import json
 import random
 import os
+import re 
 from functools import partial
 from datetime import datetime
 from pathlib import Path
@@ -49,7 +50,7 @@ SOURCE_CN_MAP.update({
     "腾讯": "tencent"
 })
 
-@register("daily_sharing", "四次元未来", "定时主动分享所见所闻", "2.0.0")
+@register("daily_sharing", "四次元未来", "定时主动分享所见所闻", "3.2.0")
 class DailySharingPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -623,11 +624,14 @@ class DailySharingPlugin(Star):
                 # 记录与历史
                 await self.ctx_service.record_to_memos(uid, content, img_desc)
 
+                # 清洗历史记录内容中的情感标签
+                clean_content_for_log = re.sub(r'\$\$(?:EMO:)?(?:happy|sad|angry|neutral|surprise)\$\$', '', content, flags=re.IGNORECASE).strip()
+
                 await self._append_history({
                     "timestamp": datetime.now().isoformat(),
                     "target": uid,
                     "type": stype.value,
-                    "content": content[:100] + "...", 
+                    "content": clean_content_for_log[:100] + "...", 
                     "success": True
                 })
                 
@@ -646,6 +650,9 @@ class DailySharingPlugin(Star):
             separate_img = self.image_conf.get("separate_text_and_image", True)
             prefer_audio_only = self.tts_conf.get("prefer_audio_only", False)
             
+            # 清洗情感标签
+            clean_text = re.sub(r'\$\$(?:EMO:)?(?:happy|sad|angry|neutral|surprise)\$\$', '', text, flags=re.IGNORECASE).strip()
+            
             # 判断是否应该发送文字
             # 如果有语音，且开启了“仅发语音”，则不发文字
             should_send_text = True
@@ -653,8 +660,8 @@ class DailySharingPlugin(Star):
                 should_send_text = False
 
             # 1. 发送文字（如果需要）
-            if should_send_text:
-                text_chain = MessageChain().message(text)
+            if should_send_text and clean_text: 
+                text_chain = MessageChain().message(clean_text) 
                 # 如果图片不分开发送，且没有语音，且没有视频（视频无法合并），则合并图片
                 if img_path and not video_url and not separate_img and not audio_path:
                     if img_path.startswith("http"): text_chain.url_image(img_path)
@@ -1019,3 +1026,4 @@ Cron规则: {cron}
 /分享 关闭 - 禁用自动分享
 /分享 重置序列 - 重置当前发送序列
 /分享 查看序列 - 查看当前时段序列""")
+
