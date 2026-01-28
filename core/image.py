@@ -265,14 +265,24 @@ class ImageService:
             if action: prompts.append(action)
 
             # D. 决定镜头 (人物版)
+            # 提取公共判断：是否存在明确的主体（物品）
+            subject_str = visuals.get("subject", "")
+            has_subj = subject_str and subject_str not in ["无", "N/A", "None", ""]
+
             if sharing_type == SharingType.GREETING: 
                 comp_desc = "半身像, 面对镜头, 眼神交流, 背景虚化"
             elif sharing_type == SharingType.MOOD: 
                 comp_desc = "特写, 脸部聚焦, 情绪表达, 景深效果"
             elif sharing_type == SharingType.NEWS: 
-                comp_desc = "中景, 生活快照, 看手机或屏幕" if not action else "中景, 生活快照"      
+                if not action and not has_subj:
+                    comp_desc = "中景, 生活快照, 看手机或屏幕"
+                else:
+                    comp_desc = "中景, 生活快照"
             elif sharing_type == SharingType.RECOMMENDATION: 
-                comp_desc = "中景, 展示物品, 手部特写, 聚焦物体" if not action else "中景, 聚焦物体"
+                if not action and not has_subj:
+                    comp_desc = "中景, 展示物品, 手部特写, 聚焦物体"
+                else:
+                    comp_desc = "中景, 聚焦物体"
             else: 
                 comp_desc = "中景, 自然姿态"
 
