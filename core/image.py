@@ -53,7 +53,7 @@ class ImageService:
         now = datetime.now()
         curr_hour = now.hour
         period = self._get_current_period()
-        is_night = period in [TimePeriod.NIGHT, TimePeriod.LATE_NIGHT, TimePeriod.DAWN]
+        is_night = period in [TimePeriod.LATE_NIGHT, TimePeriod.DAWN]
         
         # 1. 基础时间光影库 
         if period == TimePeriod.DAWN: 
