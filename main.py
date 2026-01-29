@@ -172,8 +172,8 @@ class DailySharingPlugin(Star):
     async def _delayed_init_bots(self):
         """延迟初始化 Bot 缓存"""
         try:
-            # 等待 15 秒，确保 AstrBot 核心和适配器完全加载
-            await asyncio.sleep(15)
+            # 等待 30 秒，确保 AstrBot 核心和适配器完全加载
+            await asyncio.sleep(30)
             if self._is_terminated: return
             
             # 调用 ContextService 进行 Bot 扫描
