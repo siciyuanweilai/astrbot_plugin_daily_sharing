@@ -188,7 +188,7 @@
       "deep_history_max_count": {
         "description": "【群聊】回溯最大条数",
         "type": "int",
-        "default": 80,
+        "default": 50,
         "slider": {
             "min": 20,
             "max": 200,
