@@ -155,6 +155,11 @@ NEWS_TIME_PREFERENCES = {
 
 # 分享类型序列
 SHARING_TYPE_SEQUENCES = {
+    # ===== 凌晨时段 (0:00-6:00) =====
+    TimePeriod.DAWN: [
+        SharingType.MOOD.value,        # 深夜心情（通常不设置定时）
+    ],
+        
     # ===== 早晨时段 (06:00-09:00) =====
     TimePeriod.MORNING: [
         SharingType.GREETING.value,    # 第1次：早安问候
@@ -188,10 +193,5 @@ SHARING_TYPE_SEQUENCES = {
     TimePeriod.LATE_NIGHT: [
         SharingType.MOOD.value,        # 第1次：深夜心情
         SharingType.GREETING.value,    # 第2次：晚安问候        
-    ],
-
-    # ===== 凌晨时段 (0:00-6:00) =====
-    TimePeriod.DAWN: [
-        SharingType.MOOD.value,        # 深夜心情（通常不设置定时）
     ],
 }

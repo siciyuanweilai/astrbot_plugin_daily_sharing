@@ -169,32 +169,60 @@
         "hint": "开启后，群聊中也会提到Bot的具体日程安排，关闭则仅显示抽象状态。"
       },
       "enable_chat_history": {
-        "description": "启用私聊历史记录",
+        "description": "启用聊天历史记录",
         "type": "bool",
         "default": true,
-        "hint": "开启后，私聊分享内容会根据最近的聊天历史生成，能够延续话题、符合对方兴趣。推荐开启"
+        "hint": "开启后，Bot会读取最近的聊天记录，以生成更符合上下文的分享内容。"
       },
-      "chat_history_count": {
-        "description": "私聊读取条数",
+      "enable_deep_history": {
+        "description": "启用深度回溯(翻页)",
+        "type": "bool",
+        "default": true,
+        "hint": "专为NapCat/OneBot11优化。开启后，Bot会尝试翻页获取更早的历史消息，以便理解长跨度的上下文。"
+      },
+      "deep_history_hours": {
+        "description": "回溯时间范围(小时)",
         "type": "int",
-        "default": 10,
+        "default": 4,
         "slider": {
             "min": 1,
-            "max": 30,
+            "max": 24,
             "step": 1
-        },         
-        "hint": "私聊中获取的历史消息条数。推荐设置为 10-20 条以获取完整语境"
+        },
+        "hint": "Bot会读取过去N小时内的消息（群聊和私聊都受此时间限制）。"
       },
-      "group_chat_history_count": {
-        "description": "群聊读取条数",
+      "deep_history_max_count": {
+        "description": "【群聊】回溯最大条数",
+        "type": "int",
+        "default": 80,
+        "slider": {
+            "min": 20,
+            "max": 200,
+            "step": 10
+        },
+        "hint": "群聊消息量大，建议设置 50-100 条以理解上下文。"
+      },
+      "private_history_count": {
+        "description": "【私聊】回溯最大条数",
         "type": "int",
         "default": 20,
         "slider": {
-            "min": 1,
-            "max": 50,
-            "step": 1
-        },          
-        "hint": "群聊中获取的历史消息条数。推荐设置为 20-30 条，便于分析群聊热度和当前话题"
+            "min": 5,
+            "max": 100,
+            "step": 5
+        },         
+        "hint": "私聊语境较慢，建议设置 20-30 条以理解上下文。"
+      },
+      "group_intensity_check_count": {
+        "description": "群聊热度判断范围",
+        "type": "int",
+        "default": 30,
+        "slider": {
+            "min": 10,
+            "max": 100,
+            "step": 5
+        },
+        "hint": "Bot看最近多少条消息来判断热闹程度。数值越小，只要有人说话Bot就觉得热闹（敏感）；数值越大，需要持续刷屏Bot才觉得热闹（稳重）。"
       },
       "group_share_strategy": {
         "description": "群聊分享策略",

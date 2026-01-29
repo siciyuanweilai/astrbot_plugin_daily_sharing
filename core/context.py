@@ -7,10 +7,22 @@ from typing import Optional, Dict, Any, List
 from astrbot.api import logger
 from ..config import SharingType, TimePeriod 
 
+try:
+    from astrbot.core.agent.message import (
+        AssistantMessageSegment,
+        UserMessageSegment,
+        TextPart,
+    )
+    HAS_NEW_MESSAGE_API = True
+except ImportError:
+    HAS_NEW_MESSAGE_API = False
+
 class ContextService:
     def __init__(self, context_obj, config):
         self.context = context_obj
         self.config = config
+        self.bot_map = {} 
+
         self._life_plugin = None
         self._memos_plugin = None
         self._tts_plugin = None
@@ -48,7 +60,7 @@ class ContextService:
         return None
 
     def _get_memos_plugin(self):
-        """获取 Memos 插件 (仅用于写入记录)"""
+        """获取 Memos 插件"""
         if not self._memos_plugin:
             self._memos_plugin = self._find_plugin("memos")
         return self._memos_plugin
@@ -85,69 +97,72 @@ class ContextService:
         except:
             return None, None
 
+    # ==================== Bot 实例管理 ====================
+
+    async def init_bots(self):
+        """
+        初始化 Bot 实例缓存
+        """
+        logger.info("[DailySharing] 正在初始化 Bot 实例缓存...")
+        try:
+            # 获取平台管理器
+            pm = getattr(self.context, "platform_manager", None)
+            if not pm:
+                logger.warning("[DailySharing] 无法获取 PlatformManager，Bot 获取可能受限。")
+                return
+
+            # 获取所有平台实例 
+            platforms = []
+            if hasattr(pm, "get_insts"):
+                platforms = pm.get_insts() 
+            elif hasattr(pm, "insts"):
+                raw = pm.insts
+                platforms = list(raw.values()) if isinstance(raw, dict) else raw
+
+            count = 0
+            for platform in platforms:
+                # 获取 Bot 客户端对象
+                bot_client = None
+                if hasattr(platform, "get_client"):
+                    bot_client = platform.get_client()
+                elif hasattr(platform, "bot"):
+                    bot_client = platform.bot
+                
+                # 获取平台 ID
+                p_id = None
+                if hasattr(platform, "metadata") and hasattr(platform.metadata, "id"):
+                    p_id = platform.metadata.id
+                elif hasattr(platform, "id"):
+                    p_id = platform.id
+                
+                if bot_client and p_id:
+                    self.bot_map[str(p_id)] = bot_client
+                    count += 1
+                    logger.debug(f"[DailySharing] 发现并缓存 Bot 实例: {p_id} -> {type(bot_client).__name__}")
+            
+            logger.info(f"[DailySharing] Bot 缓存初始化完成，共发现 {count} 个实例。")
+            
+        except Exception as e:
+            logger.error(f"[DailySharing] Bot 初始化失败: {e}", exc_info=True)
+
     def _get_bot_instance(self, adapter_id: str):
         """
-        获取 Bot 实例 
+        从缓存中获取 Bot 实例
         """
-        # 1. 尝试 Context 的标准方法
-        if hasattr(self.context, "get_bot"):
-            try:
-                bot = self.context.get_bot(adapter_id)
-                if bot: return bot
-            except: pass
+        if adapter_id:
+            return self.bot_map.get(adapter_id)
 
-        pm = self.context.platform_manager
-        all_insts = []
+        if self.bot_map:
+            if len(self.bot_map) == 1:
+                return list(self.bot_map.values())[0]
 
-        # 2. 获取所有实例
-        try:
-            if hasattr(pm, "insts"):
-                raw = pm.insts
-                if isinstance(raw, dict):
-                    all_insts.extend(list(raw.values()))
-                elif isinstance(raw, list):
-                    all_insts.extend(raw)
-            
-            if not all_insts and hasattr(pm, "get_insts") and callable(pm.get_insts):
-                raw = pm.get_insts()
-                if isinstance(raw, dict):
-                    all_insts.extend(list(raw.values()))
-                elif isinstance(raw, list):
-                    all_insts.extend(raw)
-
-        except Exception as e:
-            logger.warning(f"[DailySharing] 获取实例列表失败: {e}")
-
-        if not all_insts:
+            logger.error(
+                f"[DailySharing] 存在多个 Bot 实例 {list(self.bot_map.keys())} 但未指定 adapter_id，"
+                "无法确定使用哪个实例。"
+            )
             return None
 
-        valid_candidates = []
-
-        # 3. 遍历查找
-        for inst in all_insts:
-            bot = getattr(inst, "bot", None)
-            if not bot and hasattr(inst, "api"):
-                bot = inst
-            
-            if not bot:
-                continue
-            
-            valid_candidates.append(bot)
-
-            inst_id = str(getattr(inst, "id", ""))
-            inst_type = str(getattr(inst, "adapter_type", ""))
-
-            if adapter_id and (adapter_id == inst_id or adapter_id == inst_type or adapter_id in inst_id):
-                return bot
-
-        # 4. 智能兜底
-        if valid_candidates:
-            if len(valid_candidates) == 1:
-                return valid_candidates[0]
-            logger.debug(f"[DailySharing] 未精确匹配适配器 '{adapter_id}'，将使用默认 Bot 实例。")
-            return valid_candidates[0]
-
-        logger.warning(f"[DailySharing] 未找到任何可用的 Bot 实例。")
+        logger.warning("[DailySharing] 没有任何可用的 Bot 实例。")
         return None
 
     # ==================== TTS 集成 ====================
@@ -242,7 +257,6 @@ class ContextService:
         try:
             session_state = None
             
-            # 直接操作 TTS 插件的 Session State
             if hasattr(tts_plugin, "_get_session_state"):
                 session_state = tts_plugin._get_session_state(target_umo)
                 
@@ -357,7 +371,7 @@ class ContextService:
         for line in lines:
             if '天气' in line or '温度' in line: weather = line.strip()
             elif '时段' in line: period = line.strip()
-            elif '今日计划' in line or '约会' in line: busy = True
+            elif '今日计划' in line: busy = True 
         
         # 构建状态描述列表
         status_parts = []
@@ -405,12 +419,92 @@ class ContextService:
             
         return ""
 
-    # ==================== 聊天历史 ====================
+    async def _fetch_deep_history(self, bot, target_id: int, is_group: bool, hours: int = 4, max_count: int = 100) -> List[Dict]:
+        """
+        深度分页获取历史 (NapCat/OneBot v11 通用版，支持群聊和私聊)
+        """
+        all_messages = []
+        target_seq = 0 
+        cutoff_time = time.time() - (hours * 3600)
+        
+        # 限制轮数
+        # 增加到 30 轮，确保在 max_count 很大时也能跑完（假设每轮获取 20-50 条）
+        max_rounds = 30 
+        
+        action = "get_group_msg_history" if is_group else "get_friend_msg_history"
+        id_key = "group_id" if is_group else "user_id"
+
+        for _ in range(max_rounds):
+            if len(all_messages) >= max_count:
+                break
+                
+            try:
+                # 动态计算本次请求数量
+                remaining = max_count - len(all_messages)
+                req_count = min(remaining, 50)
+                req_count = max(req_count, 20)
+                
+                params = {
+                    id_key: target_id,
+                    "count": req_count, 
+                }
+                if target_seq > 0:
+                    params["message_seq"] = target_seq
+                
+                resp = await bot.api.call_action(action, **params)
+                
+                if isinstance(resp, dict):
+                    batch_msgs = resp.get("messages", [])
+                elif isinstance(resp, list):
+                    batch_msgs = resp
+                else:
+                    break
+                    
+                if not batch_msgs:
+                    break
+
+                oldest_in_batch = batch_msgs[0]
+                current_oldest_time = oldest_in_batch.get("time", 0)
+                target_seq = oldest_in_batch.get("message_seq")
+                
+                # 添加到总列表
+                all_messages.extend(batch_msgs)
+                
+                # 时间判断
+                if current_oldest_time < cutoff_time:
+                    break
+                
+                # 安全检查：如果 target_seq 为空或为0，防止死循环
+                if not target_seq:
+                    break
+                    
+            except Exception as e:
+                logger.debug(f"[DailySharing] 获取聊天历史记录中断 ({'群' if is_group else '私'}): {e}")
+                break
+        
+        # 去重
+        seen_ids = set()
+        unique_msgs = []
+        for msg in all_messages:
+            mid = msg.get("message_id")
+            if not mid:
+                mid = f"{msg.get('time')}-{msg.get('sender', {}).get('user_id')}"
+            
+            if mid not in seen_ids:
+                seen_ids.add(mid)
+                unique_msgs.append(msg)
+        
+        # 确保按时间正序排列 (旧 -> 新)
+        unique_msgs.sort(key=lambda x: x.get("time", 0))
+        
+        # 截取最近的 max_count 条
+        return unique_msgs[-max_count:]
 
     async def get_history_data(self, target_umo: str, is_group: bool = None) -> Dict[str, Any]:
         """
-        获取聊天历史 
+        获取聊天历史记录
         """
+        # 1. 基础开关检查
         if not self.history_conf.get("enable_chat_history", True):
             return {}
             
@@ -423,86 +517,71 @@ class ContextService:
             return {}
 
         bot = self._get_bot_instance(adapter_id)
-
-        if not bot:
-            return {}
-
-        limit = 20
+        if not bot: return {}
         
-        try:
-            logger.info(f"[DailySharing] 正在读取 {real_id} 的历史记录...")
-            messages = []
+        enable_deep = self.history_conf.get("enable_deep_history", True)
+        history_hours = int(self.history_conf.get("deep_history_hours", 4))
+        
+        if is_group:
+            # 群聊使用 deep_history_max_count (默认80)
+            max_count = int(self.history_conf.get("deep_history_max_count", 80))
+        else:
+            # 私聊使用 private_history_count (默认20)
+            max_count = int(self.history_conf.get("private_history_count", 20))
             
-            if is_group:
-                # === 群聊逻辑 ===
-                try:
-                    payloads = {"group_id": int(real_id), "count": limit}
-                    result = await bot.api.call_action("get_group_msg_history", **payloads)
+        try:
+            logger.info(f"[DailySharing] 正在获取 {real_id} 的聊天历史记录 (模式: {'群聊' if is_group else '私聊'}, 目标: {max_count}条)...")
+            messages = []
+            raw_msgs = []
+
+            try:
+                if enable_deep:
+                    # === 深度模式 (通用) ===
+                    raw_msgs = await self._fetch_deep_history(
+                        bot, 
+                        int(real_id), 
+                        is_group=is_group,
+                        hours=history_hours, 
+                        max_count=max_count
+                    )
+                    logger.info(f"[DailySharing] 聊天历史记录获取成功: {len(raw_msgs)} 条")
+                else:
+                    # === 简单模式 (非深度) ===
+                    action = "get_group_msg_history" if is_group else "get_friend_msg_history"
+                    key = "group_id" if is_group else "user_id"
                     
-                    raw_msgs = []
-                    if result and isinstance(result, dict):
-                        raw_msgs = result.get("messages", [])
-                    elif result and isinstance(result, list):
-                        raw_msgs = result
+                    # 修正：直接使用配置的 max_count，不再强行限制 100
+                    req_count = max_count 
                     
-                    self_id = str(bot.self_id) if hasattr(bot, "self_id") else ""
-
-                    for msg in raw_msgs:
-                        sender_id = str(msg.get("sender", {}).get("user_id", ""))
-                        raw_content = ""
-                        if "message" in msg and isinstance(msg["message"], list):
-                            raw_content = "".join(
-                                seg["data"]["text"] for seg in msg["message"] if seg["type"] == "text"
-                            ).strip()
-                        elif "raw_message" in msg:
-                            raw_content = msg["raw_message"]
-
-                        if not raw_content: continue
-                        role = "assistant" if sender_id == self_id else "user"
-                        ts = msg.get("time", time.time())
-                        ts_str = datetime.datetime.fromtimestamp(ts).isoformat()
-                        messages.append({"role": role, "content": raw_content, "timestamp": ts_str, "user_id": sender_id})
-
-                    if messages:
-                        logger.info(f"[DailySharing] 群聊历史获取成功: {len(messages)} 条")
-                    else:
-                        logger.warning(f"[DailySharing] 群聊历史为空 (API返回了数据但解析后为0，或群内无新消息)")
-
-                except Exception as e:
-                    logger.warning(f"[DailySharing] 获取群聊历史失败: {e} (可能是当前适配器不支持 get_group_msg_history)")
-
-            else:
-                # === 私聊逻辑 ===
-                try:
-                    payloads = {"user_id": int(real_id), "count": limit}
-                    result = await bot.api.call_action("get_friend_msg_history", **payloads)
-                    raw_msgs = result.get("messages", [])
+                    payloads = {key: int(real_id), "count": req_count}
                     
-                    self_id = str(bot.self_id) if hasattr(bot, "self_id") else ""
+                    result = await bot.api.call_action(action, **payloads)
+                    raw_msgs = result.get("messages", []) if isinstance(result, dict) else (result or [])
 
-                    for msg in raw_msgs:
-                        sender_data = msg.get("sender", {})
-                        msg_uid = str(sender_data.get("user_id", ""))
-                        
-                        raw_content = ""
-                        if "message" in msg and isinstance(msg["message"], list):
-                            raw_content = "".join(
-                                seg["data"]["text"] for seg in msg["message"] if seg["type"] == "text"
-                            ).strip()
-                        elif "raw_message" in msg:
-                            raw_content = msg["raw_message"]
+            except Exception as e:
+                logger.warning(f"[DailySharing] 获取聊天历史记录失败: {e}")
+                return {}
 
-                        if not raw_content: continue
+            self_id = str(bot.self_id) if hasattr(bot, "self_id") else ""
 
-                        role = "assistant" if msg_uid == self_id else "user"
-                        ts = msg.get("time", time.time())
-                        ts_str = datetime.datetime.fromtimestamp(ts).isoformat()
-                        messages.append({"role": role, "content": raw_content, "timestamp": ts_str, "user_id": msg_uid})
-                        
-                    logger.info(f"[DailySharing] 私聊历史获取成功: {len(messages)} 条")
+            for msg in raw_msgs:
+                sender_data = msg.get("sender", {})
+                msg_uid = str(sender_data.get("user_id", ""))
+                
+                raw_content = ""
+                if "message" in msg and isinstance(msg["message"], list):
+                    raw_content = "".join(
+                        seg["data"]["text"] for seg in msg["message"] if seg["type"] == "text"
+                    ).strip()
+                elif "raw_message" in msg:
+                    raw_content = msg["raw_message"]
 
-                except Exception as e:
-                    logger.debug(f"[DailySharing] 私聊历史 API 获取失败: {e}")
+                if not raw_content: continue
+                
+                role = "assistant" if msg_uid == self_id else "user"
+                ts = msg.get("time", time.time())
+                ts_str = datetime.datetime.fromtimestamp(ts).isoformat()
+                messages.append({"role": role, "content": raw_content, "timestamp": ts_str, "user_id": msg_uid})
 
             if not messages: return {}
 
@@ -517,45 +596,81 @@ class ContextService:
             return {}
 
     def _analyze_group_chat(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
-        """分析群聊"""
+        """分析群聊热度"""
         if not messages: return {}
         try:
+            # 1. 读取配置的“判断基准数” (例如 30)
+            check_count = int(self.history_conf.get("group_intensity_check_count", 30))
+            
+            # 2. 设定“有效时间窗口” (例如最近 20 分钟)
+            active_window_seconds = 20 * 60 
+            now = time.time()
+            cutoff_time = now - active_window_seconds
+
+            # 3. 统计有效消息
+            active_msgs_count = 0
             user_count = {}
             topics = []
-            timestamps = []
             
-            for msg in messages:
-                if msg.get("role") == "user":
-                    uid = msg.get("user_id", "unknown")
-                    user_count[uid] = user_count.get(uid, 0) + 1
-                
-                content = msg.get("content", "")
-                if len(content) > 5: topics.append(content[:50])
-                if msg.get("timestamp"): timestamps.append(msg.get("timestamp"))
-            
-            active_users = sorted(user_count.items(), key=lambda x: x[1], reverse=True)[:3]
-            cnt = len(messages)
-            intensity = "high" if cnt > 10 else "medium" if cnt > 5 else "low"
-            
-            is_discussing = False
-            if timestamps:
+            # 只看最近 N 条，减少计算量，但后续要过滤时间
+            consideration_msgs = messages[- (check_count * 2):] if len(messages) > (check_count * 2) else messages
+
+            last_msg_time = 0
+
+            for msg in consideration_msgs:
+                # 解析时间
+                ts_str = msg.get("timestamp", "")
                 try:
-                    last_ts = timestamps[-1]
-                    if isinstance(last_ts, str): last = datetime.datetime.fromisoformat(last_ts)
-                    else: last = last_ts
-                    if isinstance(last, (int, float)): last = datetime.datetime.fromtimestamp(last)
-                    if (datetime.datetime.now() - last).total_seconds() < 600: is_discussing = True
-                except: pass
+                    ts = datetime.datetime.fromisoformat(ts_str).timestamp()
+                except:
+                    ts = 0
+                
+                if ts > last_msg_time: last_msg_time = ts
+
+                # 只有在最近 20 分钟内的消息才计入热度
+                if ts >= cutoff_time:
+                    active_msgs_count += 1
+                    
+                    # 统计活跃用户
+                    if msg.get("role") == "user":
+                        uid = msg.get("user_id", "unknown")
+                        user_count[uid] = user_count.get(uid, 0) + 1
+                    
+                    # 收集话题
+                    content = msg.get("content", "")
+                    if len(content) > 5: topics.append(content[:50])
+
+            # 4. 排序活跃用户
+            active_users = sorted(user_count.items(), key=lambda x: x[1], reverse=True)[:3]
+            
+            # 5. 动态阈值判定
+            # 如果配置是 30：
+            # High:   20分钟内消息 > 15 条 (30 * 0.5)
+            threshold_high = check_count * 0.5 
+            # Medium: 20分钟内消息 > 5 条  (30 * 0.16)
+            threshold_medium = check_count * 0.16 
+            
+            if active_msgs_count > threshold_high:
+                intensity = "high"
+            elif active_msgs_count > threshold_medium:
+                intensity = "medium"
+            else:
+                intensity = "low"
+            
+            # 6. 辅助判断：是否正在讨论 (最后一条消息在 10 分钟内)
+            is_discussing = False
+            if last_msg_time > 0 and (now - last_msg_time) < 600:
+                is_discussing = True
             
             return {
-                "recent_topics": topics[-5:],
+                "recent_topics": topics[-5:], # 最近的话题
                 "active_users": [u for u, c in active_users],
                 "chat_intensity": intensity,
-                "message_count": cnt,
+                "message_count": active_msgs_count, # 返回的是“有效时间内”的消息数
                 "is_discussing": is_discussing,
             }
         except Exception as e:
-            logger.warning(f"[DailySharing] 分析群聊出错: {e}")
+            logger.warning(f"[DailySharing] 分析群聊热度出错: {e}")
             return {}
 
     def format_history_prompt(self, history_data: Dict, sharing_type: SharingType) -> str:
@@ -579,9 +694,9 @@ class ContextService:
         elif sharing_type == SharingType.MOOD: hint = "可以简单分享心情，但不要过于私人"
         else: hint = ""
         
-        txt = f"\n\n【群聊状态】\n聊天热度: {intensity}\n消息数: {group_info.get('message_count', 0)} 条\n"
+        txt = f"\n\n【群聊状态】\n聊天热度: {intensity}\n近期消息数: {group_info.get('message_count', 0)} 条\n"
         if discussing: txt += "群里正在热烈讨论中！\n"
-        if topics: txt += "\n【最近话题】\n" + "\n".join([f"• {t}..." for t in topics[-3:]])
+        if topics: txt += "\n【最近话题】\n" + "\n".join([f"• {t}..." for t in topics[-5:]])
         return txt + f"\n{hint}\n"
 
     def _format_private_chat_for_prompt(self, messages: List[Dict], sharing_type: SharingType) -> str:
@@ -622,51 +737,42 @@ class ContextService:
     async def record_bot_reply_to_history(self, target_umo: str, content: str, image_desc: str = None):
         """
         将 Bot 主动发送的消息写入 AstrBot 框架的对话历史中。
+        (仅支持新版 AstrBot 消息 API)
         """
+        if not target_umo: return
+
+        # 检查是否支持新版 API
+        if not HAS_NEW_MESSAGE_API:
+            logger.warning("[上下文] 当前 AstrBot 版本过低，不支持新的消息历史写入 API (UserMessageSegment)。请升级 AstrBot。")
+            return
+
+        # 1. 预处理内容
+        clean_content = re.sub(r'\$\$(?:EMO:)?(?:happy|sad|angry|neutral|surprise)\$\$', '', content, flags=re.IGNORECASE).strip()
+        final_content = clean_content
+        if image_desc:
+            final_content += f"\n\n[发送了一张配图: {image_desc}]"
+
+        # 虚拟的用户提示词（因为是Bot主动发起，需要模拟一个用户请求来保持对话成对）
+        user_prompt = "请发送今天的每日分享内容。"
+
         try:
-            # 1. 获取 ConversationManager
             conv_manager = self.context.conversation_manager
             
-            # 2. 获取或创建会话 ID
+            # 获取或创建会话 ID
             conversation_id = await conv_manager.get_curr_conversation_id(target_umo)
-            
             if not conversation_id:
-                # 如果是全新的会话，初始化一个
                 conversation_id = await conv_manager.new_conversation(target_umo)
             
-            # 3. 获取现有历史
-            conversation = await conv_manager.get_conversation(target_umo, conversation_id)
+            # 使用新版 API (AstrBot v3.3+)
+            user_msg = UserMessageSegment(content=[TextPart(text=user_prompt)])
+            assistant_msg = AssistantMessageSegment(content=[TextPart(text=final_content)])
             
-            current_history = []
-            if conversation and conversation.history:
-                try:
-                    current_history = json.loads(conversation.history)
-                except Exception:
-                    current_history = []
-            
-            # 清洗内容中的标签
-            clean_content = re.sub(r'\$\$(?:EMO:)?(?:happy|sad|angry|neutral|surprise)\$\$', '', content, flags=re.IGNORECASE).strip()
-            final_content = clean_content
-
-            if image_desc:
-                # 记录完整描述，防止细节丢失
-                final_content += f"\n\n[发送了一张配图: {image_desc}]"
-
-            # 注意：这里 role 是 assistant，因为是机器人说的
-            bot_message = {
-                "role": "assistant", 
-                "content": final_content
-            }
-            current_history.append(bot_message)
-            
-            # 限制历史记录长度，防止无限膨胀 (例如保留最近 100 条)
-            if len(current_history) > 100:
-                current_history = current_history[-100:]
-            
-            # 5. 写回数据库
-            await conv_manager.update_conversation(target_umo, conversation_id, current_history)
-            
-            logger.debug(f"[上下文] 已将主动分享内容(含配图描述)写入对话历史: {target_umo}")
+            await conv_manager.add_message_pair(
+                cid=conversation_id,
+                user_message=user_msg,
+                assistant_message=assistant_msg,
+            )
+            logger.debug(f"[上下文] 已写入历史: {target_umo}")
             
         except Exception as e:
             logger.warning(f"[上下文] 写入对话历史失败: {e}")

@@ -19,7 +19,7 @@ from .core.image import ImageService
 from .core.content import ContentService
 from .core.context import ContextService
 
-# 类型汉化映射表
+# 类型中文映射表
 TYPE_CN_MAP = {
     "greeting": "问候",
     "news": "新闻",
@@ -50,7 +50,7 @@ SOURCE_CN_MAP.update({
     "腾讯": "tencent"
 })
 
-@register("daily_sharing", "四次元未来", "定时主动分享所见所闻", "3.2.0")
+@register("daily_sharing", "四次元未来", "定时主动分享所见所闻", "3.4.0")
 class DailySharingPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -106,6 +106,11 @@ class DailySharingPlugin(Star):
             self.news_service,
             topic_history_limit=self.topic_history_limit
         )
+        
+        # 启动延迟初始化 Bot 缓存的任务
+        bot_init_task = asyncio.create_task(self._delayed_init_bots())
+        self._bg_tasks.add(bot_init_task)
+        bot_init_task.add_done_callback(self._bg_tasks.discard)
 
     async def initialize(self):
         """初始化插件"""
@@ -133,7 +138,7 @@ class DailySharingPlugin(Star):
             logger.error(f"[DailySharing] 停止插件出错: {e}")        
 
     async def _delayed_init(self):
-        """延迟初始化逻辑"""
+        """延迟初始化逻辑 (调度器)"""
         try:
             await asyncio.sleep(3)
         except asyncio.CancelledError:
@@ -158,6 +163,20 @@ class DailySharingPlugin(Star):
             logger.info("[DailySharing] 定时任务已启动")
         else:
             logger.info("[DailySharing] 自动分享已禁用")
+
+    async def _delayed_init_bots(self):
+        """延迟初始化 Bot 缓存"""
+        try:
+            # 等待 15 秒，确保 AstrBot 核心和适配器完全加载
+            await asyncio.sleep(15)
+            if self._is_terminated: return
+            
+            # 调用 ContextService 进行 Bot 扫描
+            await self.ctx_service.init_bots()
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"[DailySharing] Bot 初始化任务出错: {e}")
 
     # ==================== 核心逻辑 (LLM调用与任务) ====================
 
@@ -297,7 +316,7 @@ class DailySharingPlugin(Star):
                 img_path = None
                 video_url = None
                 
-                # 判断是否生成: 只要总开关开启，且(用户明确要求 OR 类型在允许列表中)
+                # 判断是否生成: 只要总开关开启，且(用户明确要求，或类型在允许列表中)
                 enable_global = self.image_conf.get("enable_ai_image", False)
                 
                 should_gen_visual = False
@@ -687,8 +706,12 @@ class DailySharingPlugin(Star):
             if video_url:
                 # 发送视频
                 video_chain = MessageChain()
-                # 使用 Video 组件
-                video_chain.chain.append(Video.fromURL(video_url))
+                # 判断是本地文件还是网络URL
+                if video_url.startswith("http"):
+                    video_chain.chain.append(Video.fromURL(video_url))
+                else:
+                    # 如果是本地路径，使用 fromFile
+                    video_chain.chain.append(Video.fromFileSystem(video_url))              
                 await self.context.send_message(uid, video_chain)
             elif img_path:
                 # 发送图片（如果视频没生成，或者视频关闭）
