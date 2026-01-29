@@ -11,12 +11,6 @@
     "description": "配置自动发送的目标（QQ号/群号）",
     "type": "object",
     "items": {
-      "adapter_id": {
-        "title": "适配器ID",
-        "type": "string",
-        "default": "aiocqhttp",
-        "description": "AstrBot平台适配器ID（机器人名称）"
-      },
       "groups": {
         "title": "群聊列表",
         "type": "list",
