@@ -50,7 +50,7 @@ SOURCE_CN_MAP.update({
     "腾讯": "tencent"
 })
 
-@register("daily_sharing", "四次元未来", "定时主动分享所见所闻", "3.4.0")
+@register("daily_sharing", "四次元未来", "定时主动分享所见所闻", "3.4.3")
 class DailySharingPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -74,6 +74,9 @@ class DailySharingPlugin(Star):
         
         # 生命周期标志位 (防止重载时旧实例复活)
         self._is_terminated = False
+        
+        # === 修复：缓存 Adapter ID ===
+        self._cached_adapter_id = None 
 
         # 任务追踪 (用于生命周期清理)
         self._bg_tasks = set()
@@ -115,7 +118,6 @@ class DailySharingPlugin(Star):
     async def initialize(self):
         """初始化插件"""
         self.sharing_history = await self._load_history() 
-        # 将初始化任务纳入管理，确保卸载时可以被取消
         task = asyncio.create_task(self._delayed_init())
         self._bg_tasks.add(task)
         task.add_done_callback(self._bg_tasks.discard)
@@ -148,7 +150,10 @@ class DailySharingPlugin(Star):
         if self._is_terminated:
             return
 
-        has_targets = self.receiver_conf.get("groups") or self.receiver_conf.get("users")
+        has_targets = False
+        if self.receiver_conf:
+            if self.receiver_conf.get("groups") or self.receiver_conf.get("users"):
+                has_targets = True
         
         if not has_targets:
             logger.warning("[DailySharing] 未配置接收对象 (receiver)")
@@ -529,12 +534,7 @@ class DailySharingPlugin(Star):
             self._bg_tasks.discard(task)
 
     async def _execute_share(self, force_type: SharingType = None, news_source: str = None, specific_target: str = None):
-        """执行分享的主流程
-        Args:
-            force_type: 强制指定类型，不使用轮询逻辑
-            news_source: 新闻源
-            specific_target: 指定发送目标（不使用配置文件中的接收列表），通常用于指令手动触发
-        """
+        """执行分享的主流程"""
         if self._is_terminated: return
 
         period = self._get_curr_period()
@@ -554,18 +554,23 @@ class DailySharingPlugin(Star):
         
         # 1. 确定发送目标
         if specific_target:
-            # 如果指定了目标（手动指令触发），只发给它
             targets.append(specific_target)
         else:
-            # 否则定时任务或广播，从配置加载
-            adapter_id = self.receiver_conf.get("adapter_id", "QQ")
-            for gid in self.receiver_conf.get("groups", []):
-                if gid:
-                    targets.append(f"{adapter_id}:GroupMessage:{gid}")
-            for uid in self.receiver_conf.get("users", []):
-                if uid:
-                    targets.append(f"{adapter_id}:FriendMessage:{uid}")
-        
+            if self.receiver_conf:
+                # 尝试获取 Adapter ID
+                default_adapter_id = self._cached_adapter_id
+                
+                # 如果缓存为空（定时任务先于指令触发），尝试兜底
+                if not default_adapter_id:
+                     default_adapter_id = "aiocqhttp"
+                     logger.warning("[DailySharing] 尚未缓存 Adapter ID，使用默认值 'aiocqhttp'。")
+
+                if default_adapter_id:
+                    for gid in self.receiver_conf.get("groups", []):
+                        if gid: targets.append(f"{default_adapter_id}:GroupMessage:{gid}")
+                    for uid in self.receiver_conf.get("users", []):
+                        if uid: targets.append(f"{default_adapter_id}:FriendMessage:{uid}")
+
         if not targets:
             logger.warning("[DailySharing] 未配置接收对象，且未指定目标，请在配置页填写群号或QQ号")
             return
@@ -856,6 +861,15 @@ class DailySharingPlugin(Star):
         msg = event.message_str.strip()
         parts = msg.split()
         
+        # === 修复：指令触发时缓存 Adapter ID ===
+        try:
+            if event.unified_msg_origin:
+                adapter_id = event.unified_msg_origin.split(":")[0]
+                if adapter_id:
+                    self._cached_adapter_id = adapter_id
+        except Exception:
+            pass
+        
         if len(parts) == 1:
             yield event.plain_result("指令格式错误，请指定参数。\n示例：/分享 新闻")
             return
@@ -1049,4 +1063,3 @@ Cron规则: {cron}
 /分享 关闭 - 禁用自动分享
 /分享 重置序列 - 重置当前发送序列
 /分享 查看序列 - 查看当前时段序列""")
-
