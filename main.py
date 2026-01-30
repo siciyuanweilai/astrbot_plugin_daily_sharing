@@ -18,6 +18,7 @@ from .core.news import NewsService
 from .core.image import ImageService
 from .core.content import ContentService
 from .core.context import ContextService
+from .core.db import DatabaseManager 
 
 # 类型中文映射表
 TYPE_CN_MAP = {
@@ -50,7 +51,7 @@ SOURCE_CN_MAP.update({
     "腾讯": "tencent"
 })
 
-@register("daily_sharing", "四次元未来", "定时主动分享所见所闻", "3.6.0")
+@register("daily_sharing", "四次元未来", "定时主动分享所见所闻", "4.0.0")
 class DailySharingPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -63,10 +64,8 @@ class DailySharingPlugin(Star):
         self.llm_conf = self.config.get("llm_conf", {})
         self.receiver_conf = self.config.get("receiver", {})
         
-        # 分享内容记录条数 (固定100)
+        # 分享内容记录条数 (用于内存缓存，固定100)
         self.history_limit = 100
-        # 内容去重历史记录条数 (默认50)
-        self.topic_history_limit = int(self.basic_conf.get("topic_history_limit", 50))
         
         # 锁与防抖
         self._lock = asyncio.Lock()
@@ -90,24 +89,21 @@ class DailySharingPlugin(Star):
         config_dir.mkdir(parents=True, exist_ok=True)
         self.config_file = config_dir / "astrbot_plugin_daily_sharing_config.json"
         
-        self.state_file = self.data_dir / "sharing_state.json"
-        self.history_file = self.data_dir / "sharing_history.json"
-        
-        # 历史记录缓存
-        self.sharing_history = []
+        # 数据库初始化
+        self.db = DatabaseManager(self.data_dir)
         
         # 初始化服务层
         self.ctx_service = ContextService(context, config)
         self.news_service = NewsService(config)
         self.image_service = ImageService(context, config, self._call_llm_wrapper)
         
+        # 初始化内容服务
         self.content_service = ContentService(
             config, 
             self._call_llm_wrapper, 
             context,
-            str(self.state_file),
-            self.news_service,
-            topic_history_limit=self.topic_history_limit
+            self.db, 
+            self.news_service
         )
         
         # 启动延迟初始化 Bot 缓存的任务
@@ -117,7 +113,6 @@ class DailySharingPlugin(Star):
 
     async def initialize(self):
         """初始化插件"""
-        self.sharing_history = await self._load_history() 
         task = asyncio.create_task(self._delayed_init())
         self._bg_tasks.add(task)
         task.add_done_callback(self._bg_tasks.discard)
@@ -149,6 +144,13 @@ class DailySharingPlugin(Star):
         # 再次检查终止状态，防止僵尸实例启动调度器
         if self._is_terminated:
             return
+
+        # 启动时清理一次过期数据
+        try:
+            days_limit = self.content_service.dedup_days
+            await self.db.clean_expired_data(days_limit)
+        except Exception:
+            pass
 
         has_targets = False
         if self.receiver_conf:
@@ -387,11 +389,6 @@ class DailySharingPlugin(Star):
         """LLM 调用包装器"""
         if self._is_terminated: return None
         
-        # 确保 system_prompt 不为 None
-        # 防止底层库执行 len(None) 报错 "object of type 'NoneType' has no len()"
-        if system_prompt is None:
-            system_prompt = ""
-
         provider_id = self.llm_conf.get("llm_provider_id", "")
         
         # 自动探测 Provider 
@@ -470,20 +467,27 @@ class DailySharingPlugin(Star):
                     replace_existing=True,
                     max_instances=1  
                 )
-                logger.info(f"[DailySharing] 定时任务已设定: {actual_cron}")
+                logger.debug(f"[DailySharing] 定时任务已设定: {actual_cron}")
             else:
                 logger.error(f"[DailySharing] 无效的 Cron 表达式: {cron_str}")
         except Exception as e:
             logger.error(f"[DailySharing] 设置 Cron 失败: {e}")
 
     async def _task_wrapper(self):
-        """任务包装器（防抖 + 锁 + 随机延迟）"""
+        """任务包装器（防抖 + 锁 + 随机延迟 + 数据清理）"""
         if self._is_terminated: return
         
         task = asyncio.current_task()
         self._bg_tasks.add(task)
         
         try:
+            # 执行数据库自动清理
+            try:
+                days_limit = self.content_service.dedup_days
+                await self.db.clean_expired_data(days_limit)
+            except Exception as e:
+                logger.warning(f"[DailySharing] 数据库清理失败: {e}")
+
             # 随机延迟逻辑
             try:
                 # 从配置获取随机延迟分钟数，默认为 0
@@ -548,7 +552,7 @@ class DailySharingPlugin(Star):
         news_data = None
         
         # 加载状态以获取上次的新闻源
-        state = await self._load_state()
+        state = await self.db.get_state("global", {})
         last_news_source = state.get("last_news_source")
 
         if stype == SharingType.NEWS:
@@ -561,8 +565,7 @@ class DailySharingPlugin(Star):
             # 如果获取成功，更新状态中的 last_news_source
             if news_data:
                 actual_source = news_data[1]
-                state["last_news_source"] = actual_source
-                await self._save_state(state)
+                await self.db.update_state_dict("global", {"last_news_source": actual_source})
 
         targets = []
         
@@ -626,13 +629,12 @@ class DailySharingPlugin(Star):
                 
                 if not content:
                     logger.warning(f"[DailySharing] 内容生成失败 {uid}")
-                    await self._append_history({
-                        "timestamp": datetime.now().isoformat(),
-                        "target": uid,
-                        "type": stype.value,
-                        "content": "生成失败 (LLM无响应)",
-                        "success": False
-                    })
+                    await self.db.add_sent_history(
+                        target_id=uid,
+                        sharing_type=stype.value,
+                        content="生成失败 (LLM无响应)",
+                        success=False
+                    )
                     continue
                 
                 # 生成多媒体素材 (图片 & 视频 & 语音) 
@@ -679,13 +681,12 @@ class DailySharingPlugin(Star):
                 # 清洗历史记录内容中的情感标签
                 clean_content_for_log = re.sub(r'\$\$(?:EMO:)?(?:happy|sad|angry|neutral|surprise)\$\$', '', content, flags=re.IGNORECASE).strip()
 
-                await self._append_history({
-                    "timestamp": datetime.now().isoformat(),
-                    "target": uid,
-                    "type": stype.value,
-                    "content": clean_content_for_log[:100] + "...", 
-                    "success": True
-                })
+                await self.db.add_sent_history(
+                    target_id=uid,
+                    sharing_type=stype.value,
+                    content=clean_content_for_log[:100] + "...",
+                    success=True
+                )
                 
                 await asyncio.sleep(2) 
 
@@ -785,38 +786,37 @@ class DailySharingPlugin(Star):
         if 19 <= h < 22: return TimePeriod.NIGHT
         return TimePeriod.LATE_NIGHT
 
-    @staticmethod
-    def _read_json_sync(path):
-        if path.exists():
-            with open(path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        return None
+    def _get_period_range_str(self, period: TimePeriod) -> str:
+        """获取时段对应的时间范围字符串"""
+        return {
+            TimePeriod.DAWN: "00:00-06:00",            
+            TimePeriod.MORNING: "06:00-09:00",
+            TimePeriod.FORENOON: "09:00-12:00",
+            TimePeriod.AFTERNOON: "12:00-16:00",
+            TimePeriod.EVENING: "16:00-19:00",
+            TimePeriod.NIGHT: "19:00-22:00",
+            TimePeriod.LATE_NIGHT: "22:00-24:00"
+        }.get(period, "")
 
     @staticmethod
     def _write_json_sync(path, data):
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
-    async def _load_state(self) -> dict:
+    async def _save_config_file(self):
         try:
             loop = asyncio.get_running_loop()
-            data = await loop.run_in_executor(None, self._read_json_sync, self.state_file)
-            return data if data else {"sequence_index": 0, "last_period": None}
-        except Exception: 
-            return {"sequence_index": 0, "last_period": None}
-
-    async def _save_state(self, state):
-        try:
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, self._write_json_sync, self.state_file, state)
-        except Exception: pass
+            await loop.run_in_executor(None, self._write_json_sync, self.config_file, self.config)
+        except Exception as e:
+            logger.error(f"[DailySharing] 保存配置失败: {e}")
 
     async def _decide_type_with_state(self, current_period: TimePeriod) -> SharingType:
         conf_type = self.basic_conf.get("sharing_type", "auto")
         if conf_type != "auto":
             try: return SharingType(conf_type)
             except: pass
-        state = await self._load_state() 
+        
+        state = await self.db.get_state("global", {})
         
         if state.get("last_period") != current_period.value:
             state["sequence_index"] = 0
@@ -842,42 +842,16 @@ class DailySharingPlugin(Star):
         
         selected = seq[idx]
         
-        state["last_period"] = current_period.value
-        state["sequence_index"] = (idx + 1) % len(seq)
-        state["last_timestamp"] = datetime.now().isoformat()
-        state["last_type"] = selected
-        
-        await self._save_state(state) 
+        updates = {
+            "last_period": current_period.value,
+            "sequence_index": (idx + 1) % len(seq),
+            "last_timestamp": datetime.now().isoformat(),
+            "last_type": selected
+        }
+        await self.db.update_state_dict("global", updates)
         
         try: return SharingType(selected)
         except: return SharingType.GREETING
-
-    # ==================== 历史记录管理 ====================
-
-    async def _load_history(self):
-        try:
-            loop = asyncio.get_running_loop()
-            data = await loop.run_in_executor(None, self._read_json_sync, self.history_file)
-            return data if data else []
-        except: return []
-
-    async def _append_history(self, record):
-        self.sharing_history.append(record)
-        if len(self.sharing_history) > self.history_limit:
-            self.sharing_history = self.sharing_history[-self.history_limit:]
-        
-        try:
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, self._write_json_sync, self.history_file, self.sharing_history)
-        except Exception as e:
-            logger.error(f"[DailySharing] 保存历史记录失败: {e}")
-
-    async def _save_config_file(self):
-        try:
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, self._write_json_sync, self.config_file, self.config)
-        except Exception as e:
-            logger.error(f"[DailySharing] 保存配置失败: {e}")
 
     # ==================== 统一命令入口 ====================
     @filter.command("分享")
@@ -889,7 +863,7 @@ class DailySharingPlugin(Star):
         msg = event.message_str.strip()
         parts = msg.split()
         
-        # 指令触发时缓存 Adapter ID 
+        # 指令触发时缓存 Adapter ID
         try:
             if event.unified_msg_origin:
                 adapter_id = event.unified_msg_origin.split(":")[0]
@@ -924,7 +898,37 @@ class DailySharingPlugin(Star):
             async for res in self._cmd_view_seq(event): yield res
         elif arg == "帮助":
             async for res in self._cmd_help(event): yield res
-            
+        
+        elif arg == "指定序列":
+            if len(parts) > 2 and parts[2].isdigit():
+                target_idx = int(parts[2])
+                
+                period = self._get_curr_period()
+                config_key_map = {
+                    TimePeriod.MORNING: "morning_sequence",
+                    TimePeriod.FORENOON: "forenoon_sequence",
+                    TimePeriod.AFTERNOON: "afternoon_sequence",
+                    TimePeriod.EVENING: "evening_sequence",
+                    TimePeriod.NIGHT: "night_sequence",
+                    TimePeriod.LATE_NIGHT: "late_night_sequence",
+                    TimePeriod.DAWN: "dawn_sequence"
+                }
+                config_key = config_key_map.get(period)
+                seq = self.basic_conf.get(config_key, [])
+                if not seq:
+                    seq = SHARING_TYPE_SEQUENCES.get(period, [])
+
+                if 0 <= target_idx < len(seq):
+                    await self.db.update_state_dict("global", {"sequence_index": target_idx})
+                    
+                    t_raw = seq[target_idx]
+                    t_cn = TYPE_CN_MAP.get(t_raw, t_raw)
+                    yield event.plain_result(f"已切换下一次自动分享：{target_idx}. {t_cn}")
+                else:
+                    yield event.plain_result(f"序号无效，当前时段[{period.value}] 范围: 0 ~ {len(seq)-1}")
+            else:
+                yield event.plain_result("格式错误，请带上序号。例如：/分享 指定序列 1")
+
         elif arg in ["自动", "auto"]:
             target_desc = "配置的所有私聊和群聊" if is_broadcast else "当前会话"
             yield event.plain_result(f"正在向{target_desc}生成并发送分享内容(自动类型)...")
@@ -1011,24 +1015,25 @@ class DailySharingPlugin(Star):
 
     async def _cmd_status(self, event: AstrMessageEvent):
         """查看详细状态"""
-        state = await self._load_state() 
+        state = await self.db.get_state("global", {})
         enabled = self.config.get("enable_auto_sharing", True)
         cron = self.basic_conf.get("sharing_cron")
         
         last_type_raw = state.get('last_type', '无')
         last_type_cn = TYPE_CN_MAP.get(last_type_raw, last_type_raw)
+        
+        period = self._get_curr_period()
+        time_range = self._get_period_range_str(period)
 
+        recent_history = await self.db.get_recent_history(5)
         hist_txt = "无记录"
-        if self.sharing_history:
+        if recent_history:
             lines = []
-            display_count = 5
-            for h in reversed(self.sharing_history[-display_count:]):
-                ts = h.get("timestamp", "")[5:16].replace("T", " ")
+            for h in recent_history:
+                ts = str(h.get("timestamp", ""))
                 content_preview = h.get('content', '') or ""
-                
                 t_raw = h.get('type')
                 t_cn = TYPE_CN_MAP.get(t_raw, t_raw)
-                
                 lines.append(f"• {ts} [{t_cn}] {content_preview}")
             hist_txt = "\n".join(lines)
 
@@ -1036,7 +1041,7 @@ class DailySharingPlugin(Star):
 ================
 运行状态: {'启用' if enabled else '禁用'}
 Cron规则: {cron}
-当前时段: {self._get_curr_period().value}
+当前时段: {period.value} ({time_range})
 
 【序列状态】
 上次类型: {last_type_cn}
@@ -1050,14 +1055,17 @@ Cron规则: {cron}
 
     async def _cmd_reset_seq(self, event: AstrMessageEvent):
         """重置序列"""
-        await self._save_state({"sequence_index": 0, "last_period": None})
+        await self.db.update_state_dict("global", {"sequence_index": 0, "last_period": None})
         yield event.plain_result("序列已重置")
 
     async def _cmd_view_seq(self, event: AstrMessageEvent):
         """查看序列详情"""
         period = self._get_curr_period()
+        time_range = self._get_period_range_str(period)
+        
         config_key_map = {
             TimePeriod.MORNING: "morning_sequence",
+            TimePeriod.FORENOON: "forenoon_sequence",
             TimePeriod.AFTERNOON: "afternoon_sequence",
             TimePeriod.EVENING: "evening_sequence",
             TimePeriod.NIGHT: "night_sequence",
@@ -1069,10 +1077,10 @@ Cron规则: {cron}
         if not seq:
             seq = SHARING_TYPE_SEQUENCES.get(period, [])
 
-        state = await self._load_state()
+        state = await self.db.get_state("global", {})
         idx = state.get("sequence_index", 0)
         
-        txt = f"当前时段: {period.value}\n"
+        txt = f"当前时段: {period.value} ({time_range})\n"
         for i, t_raw in enumerate(seq):
             mark = "👉 " if i == idx else "   "
             t_cn = TYPE_CN_MAP.get(t_raw, t_raw)
@@ -1087,8 +1095,7 @@ Cron规则: {cron}
 /分享 新闻 [源] - 获取指定平台热搜
 /分享 新闻 [源] 图片 - 获取热搜长图
 /分享 状态 - 查看运行状态
-/分享 开启 - 启用自动分享
-/分享 关闭 - 禁用自动分享
-/分享 重置序列 - 重置当前发送序列
-/分享 查看序列 - 查看当前时段序列""")
-
+/分享 开启/关闭 - 启停自动分享
+/分享 查看序列 - 查看当前时段序列
+/分享 指定序列 [序号] - 手动调整指定分享内容
+/分享 重置序列 - 重置当前发送序列到开头""")

@@ -56,16 +56,16 @@
         },
         "hint": "定时触发后，随机等待 0 到 30 分钟再发送。例如 8:00 触发后，实际发送时间在 8:00-8:30 之间随机。设为 0 表示准点发送。"
       },
-      "topic_history_limit": {
-        "description": "内容去重记忆条数",
+      "data_retention_days": {
+        "description": "内容去重保留天数",
         "type": "int",
-        "default": 50,
+        "default": 60,
         "slider": {
-            "min": 1,
-            "max": 100,
+            "min": 7,
+            "max": 365,
             "step": 1
         },        
-        "hint": "用于【知识】和【推荐】类型。Bot会记住最近N次分享过的主题，避免重复推荐相同的内容。"
+        "hint": "用于【知识】和【推荐】类型。Bot会记住最近N天内分享过的主题，避免重复分享相同的内容。同时早于此天数的日志也会被自动清理。"
       },
       "sharing_type": {
         "description": "分享类型模式",

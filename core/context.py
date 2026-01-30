@@ -103,7 +103,7 @@ class ContextService:
         """
         初始化 Bot 实例缓存
         """
-        logger.info("[DailySharing] 正在初始化 Bot 实例缓存...")
+        logger.debug("[DailySharing] 正在初始化 Bot 实例缓存...")
         try:
             # 获取平台管理器
             pm = getattr(self.context, "platform_manager", None)
@@ -140,7 +140,7 @@ class ContextService:
                     count += 1
                     logger.debug(f"[DailySharing] 发现并缓存 Bot 实例: {p_id} -> {type(bot_client).__name__}")
             
-            logger.info(f"[DailySharing] Bot 缓存初始化完成，共发现 {count} 个实例。")
+            logger.debug(f"[DailySharing] Bot 缓存初始化完成，共发现 {count} 个实例。")
             
         except Exception as e:
             logger.error(f"[DailySharing] Bot 初始化失败: {e}", exc_info=True)

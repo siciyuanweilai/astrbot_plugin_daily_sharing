@@ -24,39 +24,48 @@ NEWS_SOURCE_MAP = {
 
 # 知识库细分
 KNOWLEDGE_CATS = {
-    "有趣的冷知识": ["动物行为", "人体奥秘", "地理冷知识", "历史误区", "语言文字"],
-    "生活小技巧": ["收纳整理", "厨房妙招", "数码技巧", "省钱攻略", "应急处理"],
-    "健康小常识": ["睡眠科学", "饮食营养", "运动误区", "心理健康", "护眼护肤"],
-    "历史小故事": ["古代发明", "名人轶事", "文明起源", "战争细节", "文物故事"],
-    "科学小发现": ["天文宇宙", "量子物理", "生物进化", "未来科技", "AI发展"],
-    "心理学小知识": ["认知偏差", "社交心理", "情绪管理", "微表情", "行为经济学"]
+    "有趣的冷知识": ["动物行为", "人体奥秘", "地理冷知识", "历史误区", "语言文字", "植物智慧", "海洋生物", "昆虫视界", "真菌世界", "人体极限"],
+    "生活小技巧": ["收纳整理", "厨房妙招", "数码技巧", "省钱攻略", "应急处理", "衣物护理", "家居清洁", "园艺入门", "旅行打包", "急救常识"],
+    "健康小常识": ["睡眠科学", "饮食营养", "运动误区", "心理健康", "护眼护肤", "牙齿护理", "脱发自救", "饮水科学", "姿势矫正", "抗衰老"],
+    "历史小故事": ["古代发明", "名人轶事", "文明起源", "战争细节", "文物故事", "丝绸之路", "大航海时代", "工业革命", "文艺复兴", "古代货币"],
+    "科学小发现": ["天文宇宙", "平行宇宙", "生物进化", "未来科技", "AI发展", "材料科学", "气象奥秘", "深海探测", "脑科学", "基因工程"],
+    "心理学知识": ["认知偏差", "社交心理", "情绪管理", "微表情", "行为经济学", "人格类型", "梦境解析", "记忆规律", "说服技巧", "色彩心理"],
+    "艺术小百科": ["名画赏析", "建筑风格", "设计美学", "色彩搭配", "流派演变", "博物馆巡礼", "传统工艺", "摄影构图", "书法篆刻", "音乐理论"],
+    "商业冷思维": ["营销陷阱", "品牌故事", "经济学原理", "消费心理", "投资误区", "商业模式", "广告玄机", "博弈论", "富人思维", "独角兽兴衰"],
+    "哲学与逻辑": ["著名悖论", "逻辑谬误", "思维模型", "存在主义", "伦理难题", "批判性思维", "奥卡姆剃刀", "墨菲定律", "斯多葛学派", "思想实验"],
+    "职场进化论": ["高效办公", "沟通话术", "时间管理", "汇报技巧", "向上管理", "面试心理", "团队协作", "摸鱼哲学", "领导力", "职业规划"]
 }
 
 # 推荐库细分
 REC_CATS = {
-    "书籍": ["悬疑推理", "当代文学", "历史传记", "科普新知", "商业思维", "治愈系绘本", "科幻神作"],
-    "电影": ["高分冷门", "烧脑科幻", "经典黑白", "是枝裕和风", "赛博朋克", "奥斯卡遗珠", "纪录片"],
-    "音乐": ["后摇/纯音", "爵士/蓝调", "独立民谣", "CityPop", "古典入门", "电影原声", "小众乐队"],
-    "动漫": ["治愈日常", "硬核科幻", "热血运动", "悬疑智斗", "吉卜力风", "今敏风格", "冷门佳作"],
-    "美食": ["地方特色小吃", "创意懒人菜", "季节限定", "‌深夜治愈美食‌", "传统糕点", "异国风味"]
+    "书籍": ["悬疑推理", "当代文学", "历史传记", "科普新知", "商业思维", "治愈系绘本", "科幻神作", "哲学入门", "古典诗词", "艺术图鉴"],
+    "电影": ["高分冷门", "烧脑科幻", "经典黑白", "是枝裕和风", "赛博朋克", "奥斯卡遗珠", "纪录片", "励志传记", "暴力美学", "黑色幽默"],
+    "音乐": ["新世纪音乐", "治愈系钢琴", "氛围电子", "华语流行", "梦幻流行", "影视原声", "自然白噪音", "爵士蓝调", "摇滚精神", "民谣故事"],
+    "动漫": ["治愈日常", "硬核科幻", "热血运动", "悬疑智斗", "吉卜力风", "奇幻史诗", "冷门佳作", "机甲浪漫", "异世界冒险", "推理侦探"],
+    "美食": ["地方特色小吃", "创意懒人菜", "季节限定", "深夜治愈美食", "传统糕点", "异国风味", "烘焙甜点", "咖啡茶饮", "海鲜料理", "面食文化"],
+    "游戏": ["独立神作", "治愈解谜", "剧情向", "像素风", "肉鸽Like", "模拟经营", "开放世界", "恐怖游戏", "复古怀旧", "派对游戏"],
+    "剧集": ["英美神剧", "悬疑破案", "高分韩剧", "下饭情景剧", "职场爽剧", "历史正剧", "日式律政", "迷你剧", "真人秀", "讽刺喜剧"],
+    "播客": ["怪诞故事", "商业内幕", "历史闲聊", "科技前沿", "情感治愈", "真实罪案", "文化对谈", "读书分享", "英语听力", "助眠ASMR"],
+    "好物": ["桌面美学", "创意文具", "数码配件", "居家神器", "露营装备", "解压玩具", "咖啡器具", "极简收纳", "黑科技", "手工DIY"],
+    "旅行": ["避世古镇", "赛博城市", "海岛度假", "徒步路线", "博物馆", "自驾公路", "露营圣地", "建筑打卡", "云旅游", "特色民宿"]
 }
 
 class ContentService:
-    def __init__(self, config: Dict, llm_func, context, state_file: str, news_service=None, topic_history_limit: int = 20):
+    def __init__(self, config: Dict, llm_func, context, db_manager, news_service=None):
         """
         初始化内容生成服务
         """
         self.config = config
         self.call_llm = llm_func
         self.context = context 
-        self.state_file = state_file 
+        self.db = db_manager 
         self.news_service = news_service
-        # 接收并保存配置
-        self.topic_history_limit = topic_history_limit
+        
+        self.basic_conf = self.config.get("basic_conf", {})
+        self.dedup_days = int(self.basic_conf.get("dedup_days_limit", 60))
         
         self.news_conf = self.config.get("news_conf", {})
         self.llm_conf = self.config.get("llm_conf", {})
-        # 获取上下文配置
         self.context_conf = self.config.get("context_conf", {})
 
     async def generate(self, stype: SharingType, period: TimePeriod, 
@@ -102,17 +111,23 @@ class ContentService:
 
     # ==================== Agent 选题 ====================
 
-    async def _agent_brainstorm_topic(self, category_type: str, sub_category: str, history_str: str) -> Optional[str]:
+    async def _agent_brainstorm_topic(self, category_type: str, sub_category: str, target_id: str) -> Optional[str]:
         """
         选题 Agent：专门负责从给定的类别中，结合历史记录，避坑并选出一个有趣的、不重复的话题/作品名。
         """
-        is_rec = category_type in REC_CATS # 判断是推荐还是知识
+        is_rec = category_type in REC_CATS
+        db_category = "rec" if is_rec else "knowledge"
+        
+        # 获取最近 N 天使用过的话题
+        used_topics = await self.db.get_used_topics(target_id, db_category, days_limit=self.dedup_days)
+        history_str = "、".join(used_topics) if used_topics else "无"
         
         if is_rec:
-            # === 推荐类 Prompt ===
+            # 推荐类 Prompt
             constraint = ""
             target_item_desc = "具体作品名称"
             
+            # 针对不同类型的特殊约束
             if category_type == "美食":
                 target_item_desc = "具体食物名称"
                 constraint = """
@@ -121,6 +136,22 @@ class ContentService:
 严禁推荐任何动漫、电影、游戏、书籍或小说作品！
 严禁推荐《食戟之灵》、《中华小当家》、《黄金神威》等番剧！
 必须输出一个【现实中存在的、可以吃的】具体食物名称（如：螺蛳粉、北京烤鸭、臭豆腐）。
+"""
+            elif category_type == "游戏":
+                target_item_desc = "具体游戏名称"
+                constraint = """
+【严重警告 - 类别约束】
+你现在推荐的是【游戏】。
+请确保推荐的是具体的游戏名（如：塞尔达传说、星露谷物语、原神）。
+不要推荐游戏机硬件（如PS5、Switch），只推荐软件游戏本身。
+"""
+            elif category_type == "好物":
+                target_item_desc = "具体物品/产品名称"
+                constraint = """
+【严重警告 - 类别约束】
+你现在推荐的是【生活好物/产品】。
+请推荐具体的物品种类或知名单品（如：洞洞板、机械键盘、气泡水机）。
+不要推荐过于抽象的概念。
 """
             
             system_prompt = "你是一个品味独特的资深鉴赏家和推荐官。"
@@ -161,41 +192,6 @@ class ContentService:
         topic = res.strip().split("\n")[0].replace("。", "").replace("《", "").replace("》", "")
         return topic
 
-    # ==================== 状态文件管理 ====================
-    @staticmethod
-    def _read_json_sync(path: str) -> dict:
-        """同步读取辅助函数 (供 executor 调用)"""
-        if os.path.exists(path):
-            with open(path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        return {}
-
-    @staticmethod
-    def _write_json_sync(path: str, data: dict):
-        """同步写入辅助函数 (供 executor 调用)"""
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-
-    async def _load_state_safe(self) -> dict:
-        """安全加载状态文件 (异步非阻塞)"""
-        try:
-            loop = asyncio.get_running_loop()
-            return await loop.run_in_executor(None, self._read_json_sync, self.state_file)
-        except Exception as e:
-            logger.warning(f"[内容服务] 加载状态文件失败: {e}")
-            return {}
-
-    async def _save_state_safe(self, state: dict):
-        """安全保存状态文件 (异步非阻塞)"""
-        try:
-            current_state = await self._load_state_safe()
-            current_state.update(state) 
-            
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, self._write_json_sync, self.state_file, current_state)
-        except Exception as e:
-            logger.error(f"[内容服务] 保存状态文件失败: {e}")
-
     # ==================== 辅助方法 ====================
 
     def _get_period_label(self, period: TimePeriod) -> str:
@@ -225,46 +221,6 @@ class ContentService:
         except Exception as e:
             logger.error(f"[内容服务] 获取人设失败: {e}")
             return ""
-
-    async def _update_history(self, key_type: str, content_summary: str, target_id: str):
-        """更新历史记录，防止重复 (区分对象)"""
-        try:
-            state = await self._load_state_safe()
-            
-            # 初始化层级结构: targets_history -> target_id -> key_type
-            if "targets_history" not in state:
-                state["targets_history"] = {}
-            if target_id not in state["targets_history"]:
-                state["targets_history"][target_id] = {}
-            
-            # 获取特定对象的历史列表
-            history = state["targets_history"][target_id].get(key_type, [])
-            
-            # 添加新记录
-            summary = content_summary.split("\n")[0][:15].replace("推荐", "").replace("分享", "")
-            history.append(summary)
-            
-            # 只保留最近N条
-            if len(history) > self.topic_history_limit:
-                history = history[-self.topic_history_limit:]
-            
-            # 更新回 state
-            state["targets_history"][target_id][key_type] = history
-            
-            await self._save_state_safe(state)
-        except Exception as e:
-            logger.warning(f"[内容服务] 更新历史记录失败: {e}")
-
-    async def _get_history_str(self, key_type: str, target_id: str) -> str:
-        """获取历史记录字符串用于 Prompt (区分对象)"""
-        state = await self._load_state_safe()
-        
-        # 安全获取嵌套字典
-        history = state.get("targets_history", {}).get(target_id, {}).get(key_type, [])
-        
-        if not history:
-            return "无"
-        return "、".join(history)
 
     # ==================== 生成逻辑 ====================
 
@@ -561,15 +517,12 @@ class ContentService:
         # 随机选择大类和子类
         main_cat = random.choice(list(KNOWLEDGE_CATS.keys()))
         sub_cat = random.choice(KNOWLEDGE_CATS[main_cat])
-        target_id = ctx['target_id'] # 获取ID
-        
-        # 获取历史调用
-        history_str = await self._get_history_str("knowledge", target_id) 
+        target_id = ctx['target_id'] 
         
         logger.info(f"[内容服务] 知识方向: {main_cat} - {sub_cat}")
 
         # 使用 Agent Brainstorming
-        target_keyword = await self._agent_brainstorm_topic(main_cat, sub_cat, history_str)
+        target_keyword = await self._agent_brainstorm_topic(main_cat, sub_cat, target_id)
         if not target_keyword:
             logger.warning("[内容服务] 无法生成知识关键词，取消分享")
             return None
@@ -580,7 +533,7 @@ class ContentService:
         if info:
             # 命中 API
             baike_context = f"\n\n【事实依据（不要捏造）】\n{info}\n"
-            logger.info(f"[内容服务] 百科API命中: {target_keyword}")
+            logger.info(f"[内容服务] 百度百科命中: {target_keyword}")
         else:
             # 未命中 API，使用 LLM 兜底
             logger.warning(f"[内容服务] 百科未命中【{target_keyword}】，将使用 LLM 内部知识库兜底")
@@ -655,13 +608,8 @@ class ContentService:
         if res:
             try:
                 matches = re.findall(r"【(.*?)】", res)
-                if matches:
-                    keyword = max(matches, key=len)
-                    await self._update_history("knowledge", keyword, target_id)
-                elif target_keyword:
-                    await self._update_history("knowledge", target_keyword, target_id)
-                else:
-                    await self._update_history("knowledge", res[:10], target_id)
+                keyword = matches[0] if matches else target_keyword or res[:10]
+                await self.db.record_topic(target_id, "knowledge", keyword)
             except: pass
             
             return f"知识类型: {main_cat} - {sub_cat}\n\n{res}"
@@ -681,14 +629,12 @@ class ContentService:
         rec_type = random.choice(list(REC_CATS.keys()))
         sub_style = random.choice(REC_CATS[rec_type])
         
-        target_id = ctx['target_id'] # 获取ID
-        # 获取历史调用
-        history_str = await self._get_history_str("rec", target_id)
+        target_id = ctx['target_id'] 
         
         logger.info(f"[内容服务] 推荐方向: {rec_type} ({sub_style})")
 
         # 使用 Agent Brainstorming
-        target_work = await self._agent_brainstorm_topic(rec_type, sub_style, history_str)
+        target_work = await self._agent_brainstorm_topic(rec_type, sub_style, target_id)
         if not target_work:
              logger.warning("[内容服务] 无法生成推荐作品名，取消分享")
              return None
@@ -701,7 +647,7 @@ class ContentService:
         if info:
             # 命中 API
              baike_context = f"\n\n【资料简介（真实数据）】\n{info}\n"
-             logger.info(f"[内容服务] 百科API命中: {target_work}")
+             logger.info(f"[内容服务] 百度百科命中: {target_work}")
         else:
             # 未命中 API，使用 LLM 兜底
              logger.warning(f"[内容服务] 百科未命中【{target_work}】，将使用 LLM 内部知识库兜底")
@@ -739,7 +685,6 @@ class ContentService:
 【核心指令】
 1. 必须基于下面的资料进行推荐，不要更换目标。
 {baike_context}
-2. 历史记录：[{history_str}]
 
 {ctx['life_hint']}
 {ctx['chat_hint']}
@@ -771,14 +716,8 @@ class ContentService:
         if res:
             try:
                 matches = re.findall(r"【(.*?)】", res)
-                if matches:
-                    keyword = max(matches, key=len)
-                    await self._update_history("rec", keyword, target_id)
-                elif target_work:
-                     await self._update_history("rec", target_work, target_id)
-                else:
-                    await self._update_history("rec", res[:10], target_id)
+                keyword = matches[0] if matches else target_work or res[:10]
+                await self.db.record_topic(target_id, "rec", keyword)
             except: pass
             return f"推荐类型: {rec_type} - {sub_style}\n\n{res}"
         return None
-
