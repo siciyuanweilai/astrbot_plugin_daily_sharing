@@ -50,7 +50,7 @@ SOURCE_CN_MAP.update({
     "腾讯": "tencent"
 })
 
-@register("daily_sharing", "四次元未来", "定时主动分享所见所闻", "3.4.3")
+@register("daily_sharing", "四次元未来", "定时主动分享所见所闻", "3.6.0")
 class DailySharingPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -381,7 +381,6 @@ class DailySharingPlugin(Star):
             logger.error(f"[DailySharing] 异步任务错误: {e}")
             import traceback
             logger.error(traceback.format_exc())
-            # 发生严重错误时通知用户
             await event.send(event.plain_result(f"执行出错: {str(e)}"))
 
     async def _call_llm_wrapper(self, prompt: str, system_prompt: str = None, timeout: int = 60, max_retries: int = 2) -> Optional[str]:
@@ -560,7 +559,21 @@ class DailySharingPlugin(Star):
                 # 尝试获取 Adapter ID
                 default_adapter_id = self._cached_adapter_id
                 
-                # 如果缓存为空（定时任务先于指令触发），尝试兜底
+                # 1. 从上下文获取平台管理器，找到第一个有 ID 的平台实例
+                if not default_adapter_id:
+                    try:
+                        if hasattr(self.context, "platform_manager"):
+                            insts = self.context.platform_manager.get_insts()
+                            for inst in insts:
+                                if hasattr(inst, "metadata") and inst.metadata.id:
+                                    default_adapter_id = inst.metadata.id
+                                    self._cached_adapter_id = default_adapter_id
+                                    logger.info(f"[DailySharing] 自动发现并缓存 Adapter ID: {default_adapter_id}")
+                                    break
+                    except Exception as e:
+                        logger.warning(f"[DailySharing] 尝试自动发现 Bot ID 失败: {e}")
+
+                # 2. 如果还是没找到，才使用默认值兜底
                 if not default_adapter_id:
                      default_adapter_id = "aiocqhttp"
                      logger.warning("[DailySharing] 尚未缓存 Adapter ID，使用默认值 'aiocqhttp'。")

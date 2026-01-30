@@ -163,24 +163,24 @@
         "hint": "开启后，群聊中也会提到Bot的具体日程安排，关闭则仅显示抽象状态。"
       },
       "enable_chat_history": {
-        "description": "启用聊天历史记录",
+        "description": "启用聊天历史消息",
         "type": "bool",
         "default": true,
-        "hint": "开启后，Bot会读取最近的聊天记录，以生成更符合上下文的分享内容。"
+        "hint": "开启后，Bot会读取聊天历史消息，以生成更符合上下文的分享内容。"
       },
       "enable_deep_history": {
         "description": "启用深度回溯(翻页)",
         "type": "bool",
         "default": true,
-        "hint": "专为NapCat/OneBot11优化。开启后，Bot会尝试翻页获取更早的历史消息，以便理解长跨度的上下文。"
+        "hint": "开启后，Bot会尝试翻页获取更早的聊天历史消息，以便理解长跨度的上下文。"
       },
       "deep_history_hours": {
         "description": "回溯时间范围(小时)",
         "type": "int",
-        "default": 4,
+        "default": 24,
         "slider": {
             "min": 1,
-            "max": 24,
+            "max": 168,
             "step": 1
         },
         "hint": "Bot会读取过去N小时内的消息（群聊和私聊都受此时间限制）。"

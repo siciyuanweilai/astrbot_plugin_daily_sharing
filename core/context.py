@@ -421,7 +421,7 @@ class ContextService:
 
     async def _fetch_deep_history(self, bot, target_id: int, is_group: bool, hours: int = 4, max_count: int = 100) -> List[Dict]:
         """
-        深度分页获取历史 (NapCat/OneBot v11 通用版，支持群聊和私聊)
+        深度分页获取历史
         """
         all_messages = []
         target_seq = 0 
@@ -510,17 +510,17 @@ class ContextService:
             
         if is_group is None:
             is_group = self._is_group_chat(target_umo)
-
         adapter_id, real_id = self._parse_umo(target_umo)
         if not real_id:
             logger.warning(f"[DailySharing] 无法解析目标ID: {target_umo}")
             return {}
-
         bot = self._get_bot_instance(adapter_id)
         if not bot: return {}
         
         enable_deep = self.history_conf.get("enable_deep_history", True)
-        history_hours = int(self.history_conf.get("deep_history_hours", 4))
+        history_hours = int(self.history_conf.get("deep_history_hours", 24))
+        if history_hours > 168:
+            history_hours = 168
         
         if is_group:
             # 群聊使用 deep_history_max_count (默认80)
@@ -546,11 +546,9 @@ class ContextService:
                     )
                     logger.info(f"[DailySharing] 聊天历史记录获取成功: {len(raw_msgs)} 条")
                 else:
-                    # === 简单模式 (非深度) ===
                     action = "get_group_msg_history" if is_group else "get_friend_msg_history"
                     key = "group_id" if is_group else "user_id"
-                    
-                    # 修正：直接使用配置的 max_count，不再强行限制 100
+
                     req_count = max_count 
                     
                     payloads = {key: int(real_id), "count": req_count}
@@ -663,10 +661,10 @@ class ContextService:
                 is_discussing = True
             
             return {
-                "recent_topics": topics[-5:], # 最近的话题
+                "recent_topics": topics[-5:], 
                 "active_users": [u for u, c in active_users],
                 "chat_intensity": intensity,
-                "message_count": active_msgs_count, # 返回的是“有效时间内”的消息数
+                "message_count": active_msgs_count, 
                 "is_discussing": is_discussing,
             }
         except Exception as e:
@@ -737,13 +735,12 @@ class ContextService:
     async def record_bot_reply_to_history(self, target_umo: str, content: str, image_desc: str = None):
         """
         将 Bot 主动发送的消息写入 AstrBot 框架的对话历史中。
-        (仅支持新版 AstrBot 消息 API)
         """
         if not target_umo: return
 
         # 检查是否支持新版 API
         if not HAS_NEW_MESSAGE_API:
-            logger.warning("[上下文] 当前 AstrBot 版本过低，不支持新的消息历史写入 API (UserMessageSegment)。请升级 AstrBot。")
+            logger.warning("[上下文] 当前 AstrBot 版本过低，不支持新的消息历史写入。请升级 AstrBot 最新版本。")
             return
 
         # 1. 预处理内容
