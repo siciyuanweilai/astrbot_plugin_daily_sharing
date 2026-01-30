@@ -203,7 +203,7 @@ class DailySharingPlugin(Star):
         Args:
             share_type(string): 分享类型。必须是以下之一：'问候', '新闻', '心情', '知识', '推荐'。
             source(string): 仅当 share_type 为'新闻'时有效。指定新闻平台。支持：微博, 知乎, B站, 抖音, 头条, 百度, 腾讯, 小红书。如果不指定则留空。
-            get_image(boolean): 仅当 share_type 为'新闻'时有效。如果用户明确想看“图片”、“长图”或“截图”时设为 True。默认为 False。
+            get_image(boolean): 仅当 share_type 为'新闻'时有效。默认为 True (优先发送热搜长图)。只有当用户明确要求“文字版”、“文本”、“不要图片”或“写一段新闻”时，才将其设为 False。
             need_image(boolean): 是否需要AI为这段文案配图。默认为 False。仅当用户明确说“配图”、“带图”、“发张图”时，才将其设为 True。
             need_video(boolean): 是否需要AI为这段文案生成视频。默认为 False。仅当用户明确说“视频”、“动态图”、“动起来”时，才将其设为 True。
             need_voice(boolean): 是否需要将文案转为语音(TTS)发送。默认为 False。仅当用户明确提到“语音”、“朗读”、“念给我听”时，设为 True。
