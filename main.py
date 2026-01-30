@@ -75,7 +75,7 @@ class DailySharingPlugin(Star):
         # 生命周期标志位 (防止重载时旧实例复活)
         self._is_terminated = False
         
-        # === 修复：缓存 Adapter ID ===
+        # 缓存 Adapter ID 
         self._cached_adapter_id = None 
 
         # 任务追踪 (用于生命周期清理)
@@ -546,8 +546,23 @@ class DailySharingPlugin(Star):
 
         life_ctx = await self.ctx_service.get_life_context()
         news_data = None
+        
+        # 加载状态以获取上次的新闻源
+        state = await self._load_state()
+        last_news_source = state.get("last_news_source")
+
         if stype == SharingType.NEWS:
+            # 如果没有指定源（自动选择模式），则传入 last_news_source 进行去重
+            if not news_source:
+                news_source = self.news_service.select_news_source(excluded_source=last_news_source)
+            
             news_data = await self.news_service.get_hot_news(news_source)
+            
+            # 如果获取成功，更新状态中的 last_news_source
+            if news_data:
+                actual_source = news_data[1]
+                state["last_news_source"] = actual_source
+                await self._save_state(state)
 
         targets = []
         
@@ -874,7 +889,7 @@ class DailySharingPlugin(Star):
         msg = event.message_str.strip()
         parts = msg.split()
         
-        # === 修复：指令触发时缓存 Adapter ID ===
+        # 指令触发时缓存 Adapter ID 
         try:
             if event.unified_msg_origin:
                 adapter_id = event.unified_msg_origin.split(":")[0]
@@ -1076,3 +1091,4 @@ Cron规则: {cron}
 /分享 关闭 - 禁用自动分享
 /分享 重置序列 - 重置当前发送序列
 /分享 查看序列 - 查看当前时段序列""")
+
