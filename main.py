@@ -51,7 +51,7 @@ SOURCE_CN_MAP.update({
     "腾讯": "tencent"
 })
 
-@register("daily_sharing", "四次元未来", "定时主动分享所见所闻", "3.6.0")
+@register("daily_sharing", "四次元未来", "定时主动分享所见所闻", "4.0.1")
 class DailySharingPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
