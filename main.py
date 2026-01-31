@@ -51,7 +51,7 @@ SOURCE_CN_MAP.update({
     "腾讯": "tencent"
 })
 
-@register("daily_sharing", "四次元未来", "定时主动分享所见所闻", "4.0.0")
+@register("daily_sharing", "四次元未来", "定时主动分享所见所闻", "3.6.0")
 class DailySharingPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -919,7 +919,10 @@ class DailySharingPlugin(Star):
                     seq = SHARING_TYPE_SEQUENCES.get(period, [])
 
                 if 0 <= target_idx < len(seq):
-                    await self.db.update_state_dict("global", {"sequence_index": target_idx})
+                    await self.db.update_state_dict("global", {
+                        "sequence_index": target_idx,
+                        "last_period": period.value 
+                    })
                     
                     t_raw = seq[target_idx]
                     t_cn = TYPE_CN_MAP.get(t_raw, t_raw)
@@ -1096,6 +1099,6 @@ Cron规则: {cron}
 /分享 新闻 [源] 图片 - 获取热搜长图
 /分享 状态 - 查看运行状态
 /分享 开启/关闭 - 启停自动分享
-/分享 查看序列 - 查看当前时段序列
-/分享 指定序列 [序号] - 手动调整指定分享内容
+/分享 查看序列 - 查看当前时段序列及指针
+/分享 指定序列 [序号] - 手动调整发送指针到指定位置
 /分享 重置序列 - 重置当前发送序列到开头""")
