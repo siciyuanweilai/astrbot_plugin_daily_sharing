@@ -151,13 +151,13 @@
         "hint": "开启后，分享内容会结合 astrbot_plugin_life_scheduler 插件的真实生活状态（如当前活动、地点、天气等），使分享更自然真实"
       },
       "life_context_in_group": {
-        "description": "启用群聊生活状态",
+        "description": "启用群聊拟人化人设",
         "type": "bool",
         "default": true,
-        "hint": "开启后，群聊分享内容会带上Bot的生活状态。"
+        "hint": "开启后，Bot不再机械播报，而是会带入生活状态与情绪，更具“人味”。"
       },
       "group_share_schedule": {
-        "description": "群聊分享日程细节",
+        "description": "启用群聊展示日程细节",
         "type": "bool",
         "default": false,
         "hint": "开启后，群聊中也会提到Bot的具体日程安排，关闭则仅显示抽象状态。"
