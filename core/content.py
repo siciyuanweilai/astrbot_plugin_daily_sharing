@@ -70,7 +70,8 @@ class ContentService:
 
     async def generate(self, stype: SharingType, period: TimePeriod, 
                       target_id: str, is_group: bool, 
-                      life_ctx: str, chat_hist: str, news_data: tuple = None) -> Optional[str]:
+                      life_ctx: str, chat_hist: str, news_data: tuple = None,
+                      nickname: str = "") -> Optional[str]:
         """统一生成入口"""
         persona = await self._get_persona()
         
@@ -86,7 +87,8 @@ class ContentService:
             "persona": persona,
             "period_label": self._get_period_label(period), 
             "date_str": date_str,         
-            "time_str": time_str          
+            "time_str": time_str,
+            "nickname": nickname
         }
         
         try:
@@ -224,19 +226,39 @@ class ContentService:
 
     # ==================== 生成逻辑 ====================
 
+    def _build_user_prompt(self, nickname: str) -> str:
+        """构建强化的用户信息提示，包含日程检测逻辑"""
+        if not nickname:
+            return ""
+        
+        return f"""
+【用户信息】
+对方昵称：{nickname}
+【重要交互逻辑】
+1. **昵称称呼**：你可以自然地使用“{nickname}”称呼对方。
+2. **日程关联检测**：请仔细检查你的【生活日程】。如果日程中出现了“{nickname}”这个名字（或同音/包含关系）：
+   - **必须**将文案转换为“和你一起”的语气。
+   - 错误示例：日程说“和{nickname}逛街”，文案写“今天我要和{nickname}去逛街”。（这是把对方当第三人称）
+   - 正确示例：日程说“和{nickname}逛街”，文案写“今天终于可以和你一起逛街啦，好期待！”。（这是对当事人说话）
+"""
+
     async def _gen_greeting(self, period: TimePeriod, ctx: dict):
         p_label = ctx['period_label']
         is_group = ctx['is_group']
+        nickname = ctx.get('nickname', '')
         
         # 0. 获取配置
         allow_detail = self.context_conf.get("group_share_schedule", False)
 
         # 1. 称呼控制
         address_rule = ""
+        user_info_prompt = ""
+
         if is_group:
             address_rule = "面向群友，自然使用'大家'或不加称呼。"
         else:
             address_rule = "【重要】这是一对一私聊，严禁使用'大家'、'你们'。请使用'你'或直接说内容。"
+            user_info_prompt = self._build_user_prompt(nickname)
 
         # 2. 避免尴尬指令 (根据配置动态调整)
         context_instruction = ""
@@ -277,6 +299,7 @@ class ContentService:
 【当前时间】{ctx['date_str']} {ctx['time_str']} ({p_label})
 你现在要向{'群聊' if is_group else '私聊'}发送一条温馨自然的问候。
 
+{user_info_prompt}
 {ctx['life_hint']}
 {ctx['chat_hint']}
 {context_instruction}
@@ -311,13 +334,18 @@ class ContentService:
 
     async def _gen_mood(self, period, ctx):
         is_group = ctx['is_group']
+        nickname = ctx.get('nickname', '')
+
         # 0. 获取配置
         allow_detail = self.context_conf.get("group_share_schedule", False)
         
         # 1. 称呼控制
         address_rule = ""
+        user_info_prompt = ""
+
         if not is_group:
             address_rule = "\n【重要：私聊模式】严禁使用'大家'、'你们'。请把你当做在和单个朋友聊天。"
+            user_info_prompt = self._build_user_prompt(nickname)
 
         # 2. 避免尴尬 (根据配置调整)
         vibe_check = ""
@@ -365,6 +393,7 @@ class ContentService:
 【当前时间】{ctx['date_str']} {ctx['time_str']} ({ctx['period_label']})
 你想和{'群聊' if is_group else '私聊'}分享一下现在的心情或想法。
 
+{user_info_prompt}
 {ctx['life_hint']}
 {ctx['chat_hint']}
 {vibe_check}
@@ -398,6 +427,8 @@ class ContentService:
             return None
 
         is_group = ctx['is_group']
+        nickname = ctx.get('nickname', '')
+
         # 0. 获取配置
         allow_detail = self.context_conf.get("group_share_schedule", False)
 
@@ -438,8 +469,10 @@ class ContentService:
         
         # 称呼控制
         address_rule = ""
+        user_info_prompt = ""
         if not is_group:
             address_rule = "【私聊模式】不要说'大家'、'你们'。请假装只分享给**你对面这一个人**看。"
+            user_info_prompt = self._build_user_prompt(nickname)
 
         # 针对不同模式的场景融合指令
         context_instruction = ""
@@ -460,6 +493,7 @@ class ContentService:
 【当前时间】{ctx['date_str']} {ctx['time_str']} ({ctx['period_label']})
 你看到了今天的{source_name}，想选择{share_count}条和{'群聊' if is_group else '私聊'}分享。
 
+{user_info_prompt}
 {ctx['life_hint']}
 {ctx['chat_hint']}
 
@@ -511,6 +545,8 @@ class ContentService:
             return None
 
         is_group = ctx['is_group']
+        nickname = ctx.get('nickname', '')
+
         # 0. 获取配置
         allow_detail = self.context_conf.get("group_share_schedule", False)
         
@@ -541,10 +577,13 @@ class ContentService:
         
         # 3. 称呼控制
         address_rule = ""
+        user_info_prompt = ""
+
         if is_group:
             address_rule = "面向群友，可以使用'大家'、'你们'。"
         else:
             address_rule = "【重要：私聊模式】严禁使用'大家'、'你们'、'各位'。必须把你当做在和单个朋友聊天，使用'你'（例如：'你知道吗...'）。"
+            user_info_prompt = self._build_user_prompt(nickname)
 
         # 场景融合指令
         context_instruction = ""
@@ -573,6 +612,7 @@ class ContentService:
 2. 基于下面的资料进行通俗化讲解。
 {baike_context}
 
+{user_info_prompt}
 {ctx['life_hint']}
 {ctx['chat_hint']}
 
@@ -622,6 +662,8 @@ class ContentService:
             return None
 
         is_group = ctx['is_group']
+        nickname = ctx.get('nickname', '')
+
         # 0. 获取配置
         allow_detail = self.context_conf.get("group_share_schedule", False)
         
@@ -655,10 +697,12 @@ class ContentService:
 
         # 3. 称呼控制
         address_rule = ""
+        user_info_prompt = ""
         if is_group:
              address_rule = "面向群友，推荐给'大家'。"
         else:
              address_rule = "【重要：私聊模式】严禁使用'大家'、'你们'。必须把对方当做唯一听众，使用'你'（例如：'推荐你看...'，'你一定会喜欢...'）。"
+             user_info_prompt = self._build_user_prompt(nickname)
 
         # 场景融合指令
         context_instruction = ""
@@ -686,6 +730,7 @@ class ContentService:
 1. 必须基于下面的资料进行推荐，不要更换目标。
 {baike_context}
 
+{user_info_prompt}
 {ctx['life_hint']}
 {ctx['chat_hint']}
 

@@ -315,6 +315,12 @@
         "default": false,
         "hint": "需要安装 astrbot_plugin_gitee_aiimg 插件才能使用。"
       },
+      "use_gitee_selfie_ref": {
+        "description": "启用自拍参考图",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后，若判断需要画人，将尝试使用 astrbot_plugin_gitee_aiimg 插件中保存的参考图进行图生图以保持一致性。"
+      },
       "priority_text_over_schedule": {
         "description": "文案主导构图",
         "type": "bool",
@@ -332,10 +338,10 @@
         "hint": "仅当分享类型在列表中时，才会生成图片。"
       },
       "enable_ai_video": {
-        "description": "启用AI视频 (Grok)",
+        "description": "启用AI视频",
         "type": "bool",
         "default": false,
-        "hint": "需要 astrbot_plugin_gitee_aiimg 配置了 Grok Key。开启后，配图将尝试转换为5秒视频。"
+        "hint": "需要 astrbot_plugin_gitee_aiimg 插件配置 Grok Key。开启后，配图将尝试转换为5秒视频。"
       },
       "video_enabled_types": {
         "description": "允许视频的类型",

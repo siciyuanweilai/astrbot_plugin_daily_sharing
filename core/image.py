@@ -3,7 +3,7 @@ import re
 import json
 import random
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from astrbot.api import logger
 from ..config import SharingType, TimePeriod
 
@@ -36,8 +36,19 @@ class ImageService:
         if not self._aiimg_plugin and not self._aiimg_plugin_not_found:
             for p in self.context.get_all_stars():
                 if p.name == "astrbot_plugin_gitee_aiimg":
-                    self._aiimg_plugin = p.star_cls
+                    # 1. 优先尝试获取活跃实例 (star_instance)
+                    if hasattr(p, "star_instance") and p.star_instance:
+                        self._aiimg_plugin = p.star_instance
+                    # 2. 尝试获取 instance 属性 
+                    elif hasattr(p, "instance") and p.instance:
+                        self._aiimg_plugin = p.instance
+                    # 3. 兜底：获取类 (star_cls)
+                    else:
+                        self._aiimg_plugin = getattr(p, "star_cls", None)
+                        if self._aiimg_plugin:
+                            logger.debug("[DailySharing] 获取到 GiteeAIImage 类引用 (非实例)")
                     break
+            
             if not self._aiimg_plugin: 
                 self._aiimg_plugin_not_found = True
 
@@ -209,9 +220,14 @@ class ImageService:
         mode_str = "人物+场景" if involves_self else "纯静物/风景"
         is_text_priority = self.img_conf.get("priority_text_over_schedule", True)
         logic_str = "文案主导" if is_text_priority else "日程主导"        
-        logger.info(f"[DailySharing] 配图决策: {mode_str} ({logic_str}) | 类型: {sharing_type.value}")        
+
+        # 2. 检测是否启用 Gitee 自拍参考图逻辑 (NEW)
+        use_gitee_ref = self.img_conf.get("use_gitee_selfie_ref", False)
+        is_selfie_mode = involves_self and use_gitee_ref
         
-        # 2. Agent 提取视觉元素
+        logger.info(f"[DailySharing] 配图决策: {mode_str} ({logic_str}) | 类型: {sharing_type.value} | 自拍模式: {is_selfie_mode}")        
+        
+        # 3. Agent 提取视觉元素
         visuals = {}
         if content or life_context:
             visuals = await self._agent_extract_visuals(content, life_context)
@@ -228,7 +244,7 @@ class ImageService:
             weather = visuals.get('weather_vibe', '无')
             logger.info(f"[DailySharing] Agent 提取 -> 主体: {subj} | 环境: {env} | 天气: {weather} | 穿搭: {outfit[:15]}...")
 
-        # 3. 组装最终 Prompt
+        # 4. 组装最终 Prompt
         prompt = await self._assemble_final_prompt(content, sharing_type, involves_self, visuals)
         
         if not prompt: 
@@ -237,8 +253,8 @@ class ImageService:
         logger.info(f"[DailySharing] 最终配图 Prompt: {prompt[:100]}...")
         self._last_image_description = prompt[:200]
         
-        # 4. 调用插件生成
-        return await self._call_aiimg(prompt)
+        # 5. 调用插件生成
+        return await self._call_aiimg(prompt, use_ref_selfie=is_selfie_mode)
 
     async def _assemble_final_prompt(self, content: str, sharing_type: SharingType, involves_self: bool, visuals: Dict) -> str:
         prompts = []
@@ -338,31 +354,119 @@ class ImageService:
         if not self.img_conf.get("enable_ai_video", False): return None
         
         self._ensure_plugin()
-        if not self._aiimg_plugin or not hasattr(self._aiimg_plugin, "video"): return None
+        if not self._aiimg_plugin: return None
+        
+        # 强制依赖新版 registry 架构
+        if not hasattr(self._aiimg_plugin, "registry"): 
+            logger.warning("[DailySharing] 检测到 GiteeAIImage 插件不支持 registry ，跳过视频生成")
+            return None
         
         try:
             if not os.path.exists(image_path): return None
             with open(image_path, "rb") as f: image_bytes = f.read()
             logger.info(f"[DailySharing] 正在将配图转换为视频...")
+            
             # 构建视频提示词（复用之前的图片描述，加上动效词）
             video_prompt = f"{self._last_image_description}, 生活片段, 电影感运镜, 缓慢平移, 高质量"
             
-            return await self._aiimg_plugin.video.generate_video_url(prompt=video_prompt, image_bytes=image_bytes)
+            # 获取配置的视频提供商链
+            if hasattr(self._aiimg_plugin, "_get_video_chain"):
+                chain = self._aiimg_plugin._get_video_chain()
+            else:
+                logger.warning("[DailySharing] 无法获取视频服务配置链")
+                return None
+            
+            if not chain:
+                logger.warning("[DailySharing] 未配置视频服务提供商")
+                return None
+            
+            # 取第一个可用的提供商 ID
+            provider_id = chain[0]
+            try:
+                # 从注册表中获取后端服务并调用
+                backend = self._aiimg_plugin.registry.get_video_backend(provider_id)
+                return await backend.generate_video_url(prompt=video_prompt, image_bytes=image_bytes)
+            except Exception as e:
+                logger.error(f"[DailySharing] 获取视频后端或生成失败: {e}")
+                return None
+                
         except Exception as e:
-            logger.error(f"[DailySharing] 视频生成失败: {e}")
+            logger.error(f"[DailySharing] 视频生成流程异常: {e}")
             return None
 
     def get_last_description(self) -> Optional[str]:
         return self._last_image_description
 
-    async def _call_aiimg(self, prompt: str) -> Optional[str]:
+    async def _get_gitee_reference_images(self) -> List[bytes]:
+        """从 Gitee 插件中提取参考图"""
+        gitee = self._aiimg_plugin
+        if not gitee: return []
+        
+        try:
+            # 1. 优先从 WebUI 配置读取 
+            if hasattr(gitee, "_get_config_selfie_reference_paths") and hasattr(gitee, "_read_paths_bytes"):
+                ref_paths = gitee._get_config_selfie_reference_paths()
+                if ref_paths:
+                    return await gitee._read_paths_bytes(ref_paths)
+            
+            # 2. 其次尝试从 RefStore 读取 
+            if hasattr(gitee, "refs"):
+                # 尝试通用 key
+                ref_paths = await gitee.refs.get_paths("bot_selfie")
+                if ref_paths and hasattr(gitee, "_read_paths_bytes"):
+                    return await gitee._read_paths_bytes(ref_paths)
+                    
+        except Exception as e:
+            logger.warning(f"[DailySharing] 获取 Gitee 参考图失败: {e}")
+        
+        return []
+
+    async def _call_aiimg(self, prompt: str, use_ref_selfie: bool = False) -> Optional[str]:
         """调用底层Gitee插件"""
         self._ensure_plugin()
-        if self._aiimg_plugin:
-            try: 
+        if not self._aiimg_plugin:
+            logger.error("[DailySharing] 未找到 astrbot_plugin_gitee_aiimg 插件")
+            return None
+
+        try:
+            # ================= 自拍参考图逻辑 =================
+            if use_ref_selfie and hasattr(self._aiimg_plugin, "edit"):
+                logger.info("[DailySharing] 尝试使用 Gitee 自拍参考图生成...")
+                
+                # 1. 获取参考图
+                ref_images = await self._get_gitee_reference_images()
+                if ref_images:
+                    logger.info(f"[DailySharing] 找到 {len(ref_images)} 张参考图，调用图生图接口")
+                    
+                    # 2. 构建 Prompt 前缀
+                    final_prompt = (
+                        "请根据参考图生成一张该人物的生活照：\n"
+                        "1) 保持第1张参考图的人脸身份特征。\n"
+                        f"2) 画面具体描述：{prompt}\n"
+                        "3) 输出高质量照片。"
+                    )
+                    
+                    # 3. 调用 Edit 接口
+                    path_obj = await self._aiimg_plugin.edit.edit(
+                        prompt=final_prompt,
+                        images=ref_images,
+                        backend=None,
+                        task_types=["id", "background", "style"] 
+                    )
+                    return str(path_obj)
+                else:
+                    logger.warning("[DailySharing] 虽开启自拍模式，但未找到参考图，降级为文生图")
+
+            # ================= 普通文生图逻辑 =================
+            if hasattr(self._aiimg_plugin, "draw"):
                 target_size = self._aiimg_plugin.config.get("size", "1024x1024")
                 path_obj = await self._aiimg_plugin.draw.generate(prompt=prompt, size=target_size)
                 return str(path_obj)
-            except Exception as e: 
-                logger.error(f"[DailySharing] 生成图片出错: {e}")
-        return None
+            else:
+                 # 这种情况下通常意味着获取到的是 Class 而非 Instance，或者插件异常
+                 logger.error("[DailySharing] Gitee插件实例不完整，无法生成图片")
+                 return None
+
+        except Exception as e: 
+            logger.error(f"[DailySharing] 生成图片出错: {e}")
+            return None

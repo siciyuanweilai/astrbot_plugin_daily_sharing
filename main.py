@@ -310,9 +310,14 @@ class DailySharingPlugin(Star):
                 group_info = hist_data.get("group_info")
                 life_prompt = self.ctx_service.format_life_context(life_ctx, target_type_enum, is_group, group_info)
                 
+                # 获取昵称 (手动触发时也尝试获取)
+                nickname = ""
+                if not is_group:
+                    nickname = event.get_sender_name()
+
                 # 生成内容
                 content = await self.content_service.generate(
-                    target_type_enum, period, target_umo, is_group, life_prompt, hist_prompt, news_data
+                    target_type_enum, period, target_umo, is_group, life_prompt, hist_prompt, news_data, nickname=nickname
                 )
                 
                 if not content:
@@ -611,6 +616,23 @@ class DailySharingPlugin(Star):
             try:
                 is_group = "group" in uid.lower() or "room" in uid.lower() or "guild" in uid.lower()
                 
+                # 尝试获取用户昵称 (仅限私聊) 
+                nickname = ""
+                if not is_group:
+                    try:
+                        adapter_id, real_id = self.ctx_service._parse_umo(uid)
+                        if adapter_id and real_id:
+                            bot = self.ctx_service._get_bot_instance(adapter_id)
+                            if bot:
+                                # 尝试调用 get_stranger_info 获取昵称
+                                ret = await bot.api.call_action("get_stranger_info", user_id=int(real_id))
+                                if ret and isinstance(ret, dict):
+                                    nickname = ret.get("nickname", "")
+                                    logger.info(f"[DailySharing] 获取到用户昵称: {nickname}")
+                    except Exception as e:
+                         # 获取失败则保持为空，不影响后续流程
+                         logger.warning(f"[DailySharing] 获取昵称失败: {e}")
+
                 hist_data = await self.ctx_service.get_history_data(uid, is_group)
                 if is_group and "group_info" in hist_data:
                     # 手动触发时通常忽略策略检查，但自动触发时需要检查
@@ -624,7 +646,7 @@ class DailySharingPlugin(Star):
 
                 logger.info(f"[DailySharing] 正在为 {uid} 生成内容...")
                 content = await self.content_service.generate(
-                    stype, period, uid, is_group, life_prompt, hist_prompt, news_data
+                    stype, period, uid, is_group, life_prompt, hist_prompt, news_data, nickname=nickname
                 )
                 
                 if not content:
