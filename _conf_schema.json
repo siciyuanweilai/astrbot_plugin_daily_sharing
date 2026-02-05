@@ -33,6 +33,29 @@
       }
     }
   },
+  "extra_shares": {
+    "description": "📅 早报设置",
+    "type": "object",
+    "hint": "60s新闻和AI资讯将共用此定时时间直接发送图片。",
+    "items": {
+      "cron_briefing": {
+        "description": "定时分享时间",
+        "type": "string",
+        "default": "0 8 * * *",
+        "hint": "Cron表达式，默认每天08:00。"
+      },
+      "enable_60s_news": {
+        "description": "启用分享60s读世界",
+        "type": "bool",
+        "default": false
+      },
+      "enable_ai_news": {
+        "description": "启用分享AI资讯",
+        "type": "bool",
+        "default": false
+      }
+    }
+  },
   "basic_conf": {
     "description": "⏰ 基础与定时设置",
     "type": "object",

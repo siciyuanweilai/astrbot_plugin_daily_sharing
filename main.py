@@ -51,7 +51,7 @@ SOURCE_CN_MAP.update({
     "腾讯": "tencent"
 })
 
-@register("daily_sharing", "四次元未来", "定时主动分享所见所闻", "4.0.1")
+@register("daily_sharing", "四次元未来", "定时主动分享所见所闻", "4.2.0")
 class DailySharingPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -63,6 +63,7 @@ class DailySharingPlugin(Star):
         self.tts_conf = self.config.get("tts_conf", {})
         self.llm_conf = self.config.get("llm_conf", {})
         self.receiver_conf = self.config.get("receiver", {})
+        self.extra_shares_conf = self.config.get("extra_shares", {})
         
         # 分享内容记录条数 (用于内存缓存，固定100)
         self.history_limit = 100
@@ -160,16 +161,29 @@ class DailySharingPlugin(Star):
         if not has_targets:
             logger.warning("[DailySharing] 未配置接收对象 (receiver)")
 
+        # 1. 主流程定时任务 (LLM 分享)
         if self.config.get("enable_auto_sharing", False):
             cron = self.basic_conf.get("sharing_cron", "0 8,20 * * *")
             self._setup_cron(cron)
-            
-            # 只有在未终止且未运行的情况下才启动
-            if not self._is_terminated and not self.scheduler.running:
-                self.scheduler.start()
-            logger.info("[DailySharing] 定时任务已启动")
+            actual_cron = CRON_TEMPLATES.get(cron, cron)
+            logger.info(f"[DailySharing] 自动分享定时任务已启动 ({cron})")
         else:
             logger.info("[DailySharing] 自动分享已禁用")
+
+        # 2. 独立早报任务 (60s + AI) - 共用一个定时器
+        enable_60s = self.extra_shares_conf.get("enable_60s_news", False)
+        enable_ai = self.extra_shares_conf.get("enable_ai_news", False)
+
+        # 只要有一个开启，就注册定时任务
+        if enable_60s or enable_ai:
+            cron_briefing = self.extra_shares_conf.get("cron_briefing", "0 8 * * *")
+            self._setup_cron_job_custom("share_briefing", cron_briefing, self._task_wrapper_briefing)
+            logger.info(f"[DailySharing] 早报定时任务已启动 ({cron_briefing}) -> 60s:{enable_60s}, AI:{enable_ai}")
+
+        # 启动调度器 (只要有任何任务注册了)
+        if not self._is_terminated and not self.scheduler.running:
+            if self.scheduler.get_jobs():
+                self.scheduler.start()
 
     async def _delayed_init_bots(self):
         """延迟初始化 Bot 缓存"""
@@ -201,9 +215,10 @@ class DailySharingPlugin(Star):
         """
         主动分享日常内容、新闻热搜、获取热搜图片等。
         当用户想要看新闻、热搜、早安晚安、冷知识、心情或推荐时调用此工具。
+        也支持获取"60s读世界"或"AI资讯"图片。
 
         Args:
-            share_type(string): 分享类型。必须是以下之一：'问候', '新闻', '心情', '知识', '推荐'。
+            share_type(string): 分享类型。支持：'问候', '新闻'(指互联网热搜), '心情', '知识', '推荐', '60s新闻'(指每日简报图), 'AI资讯'。
             source(string): 仅当 share_type 为'新闻'时有效。指定新闻平台。支持：微博, 知乎, B站, 抖音, 头条, 百度, 腾讯, 小红书。如果不指定则留空。
             get_image(boolean): 仅当 share_type 为'新闻'时有效。默认为 True (优先发送热搜长图)。只有当用户明确要求“文字版”、“文本”、“不要图片”或“写一段新闻”时，才将其设为 False。
             need_image(boolean): 是否需要AI为这段文案配图。默认为 False。仅当用户明确说“配图”、“带图”、“发张图”时，才将其设为 True。
@@ -241,6 +256,28 @@ class DailySharingPlugin(Star):
     ):
         """实际执行分享逻辑的后台任务"""
         try:
+            # 特殊图片类型处理 (60s / AI) 
+            st_clean = share_type.lower().replace(" ", "")
+            
+            # 60s新闻
+            if any(k in st_clean for k in ["60s", "六十秒", "读世界"]):
+                url = self.news_service.get_60s_image_url()
+                if url:
+                    await event.send(event.image_result(url))
+                else:
+                    await event.send(event.plain_result("获取60s新闻失败，请检查API Key配置。"))
+                return 
+
+            # AI资讯
+            if any(k in st_clean for k in ["ai资讯", "ai新闻", "ai日报"]) or st_clean == "ai":
+                url = self.news_service.get_ai_news_image_url()
+                if url:
+                    await event.send(event.image_result(url))
+                else:
+                    await event.send(event.plain_result("获取AI资讯失败，请检查API Key配置。"))
+                return 
+
+            # === 常规流程 ===
             # 参数清洗与映射
             target_type_enum = None
             
@@ -255,7 +292,7 @@ class DailySharingPlugin(Star):
                         break
                 if not target_type_enum:
                     # 错误提示直接发给用户
-                    await event.send(event.plain_result(f"不支持的分享类型：{share_type}。支持：问候, 新闻, 心情, 知识, 推荐。"))
+                    await event.send(event.plain_result(f"不支持的分享类型：{share_type}。支持：问候, 新闻, 心情, 知识, 推荐, 60s新闻, AI资讯。"))
                     return
 
             # 映射新闻源 (中文 -> key)
@@ -454,32 +491,35 @@ class DailySharingPlugin(Star):
         return None
 
     def _setup_cron(self, cron_str):
-        """设置 Cron 任务"""
+        """设置 Cron 任务 (主流程)"""
+        self._setup_cron_job_custom("auto_share", cron_str, self._task_wrapper)
+
+    def _setup_cron_job_custom(self, job_id: str, cron_str: str, func):
+        """通用 Cron 设置方法"""
         if self._is_terminated: return
-        
         try:
-            if self.scheduler.get_job("auto_share"):
-                self.scheduler.remove_job("auto_share")
+            if self.scheduler.get_job(job_id):
+                self.scheduler.remove_job(job_id)
 
             actual_cron = CRON_TEMPLATES.get(cron_str, cron_str)
             parts = actual_cron.split()
             
             if len(parts) == 5:
                 self.scheduler.add_job(
-                    self._task_wrapper, 'cron',
+                    func, 'cron',
                     minute=parts[0], hour=parts[1], day=parts[2], month=parts[3], day_of_week=parts[4],
-                    id="auto_share",
+                    id=job_id,
                     replace_existing=True,
-                    max_instances=1  
+                    max_instances=1
                 )
-                logger.debug(f"[DailySharing] 定时任务已设定: {actual_cron}")
+                logger.debug(f"[DailySharing] 任务[{job_id}]已设定: {actual_cron}")
             else:
-                logger.error(f"[DailySharing] 无效的 Cron 表达式: {cron_str}")
+                logger.error(f"[DailySharing] 任务[{job_id}]无效的 Cron 表达式: {cron_str}")
         except Exception as e:
-            logger.error(f"[DailySharing] 设置 Cron 失败: {e}")
+            logger.error(f"[DailySharing] 任务[{job_id}]设置失败: {e}")
 
     async def _task_wrapper(self):
-        """任务包装器（防抖 + 锁 + 随机延迟 + 数据清理）"""
+        """主任务包装器（防抖 + 锁 + 随机延迟 + 数据清理）"""
         if self._is_terminated: return
         
         task = asyncio.current_task()
@@ -500,9 +540,7 @@ class DailySharingPlugin(Star):
             except Exception:
                 random_delay_min = 0
 
-            # 1. 延迟逻辑移动到锁外，避免长时间占用锁导致交互阻塞
             if random_delay_min > 0:
-                # 计算延迟秒数 (0 到 max*60)
                 delay_seconds = random.randint(0, random_delay_min * 60)
                 if delay_seconds > 0:
                     trigger_time = datetime.now()
@@ -540,6 +578,90 @@ class DailySharingPlugin(Star):
                 
         finally:
             self._bg_tasks.discard(task)
+
+    # ==================== 早报任务包装器与执行逻辑 ====================
+    
+    async def _task_wrapper_briefing(self):
+        """早报任务回调"""
+        if self._is_terminated: return
+        task = asyncio.current_task()
+        self._bg_tasks.add(task)
+        try:
+            await self._execute_briefing_share()
+        finally:
+            self._bg_tasks.discard(task)
+
+    async def _execute_briefing_share(self, specific_target: str = None):
+        """执行早报分享：依次发送开启的 60s 和 AI 资讯"""
+        if self._is_terminated: return
+        
+        logger.info("[DailySharing] 开始执行独立早报任务")
+        
+        # 1. 收集需要发送的图片 URL
+        images_to_send = [] 
+        
+        # 检查 60s (定时触发时检查开关，手动触发时跳过开关检查)
+        check_60s = self.extra_shares_conf.get("enable_60s_news", False)
+        if specific_target: check_60s = True 
+        
+        if self.extra_shares_conf.get("enable_60s_news", False):
+            url = self.news_service.get_60s_image_url()
+            if url: images_to_send.append(("60s新闻", url))
+
+        if self.extra_shares_conf.get("enable_ai_news", False):
+            url = self.news_service.get_ai_news_image_url()
+            if url: images_to_send.append(("AI资讯", url))
+
+        if not images_to_send:
+            logger.warning("[DailySharing] 早报任务触发，但没有开启的项目或获取图片失败")
+            return
+
+        # 2. 确定目标 (复用配置)
+        targets = []
+        if specific_target:
+            targets.append(specific_target)
+        else:
+            # 自动获取 bot id
+            default_adapter_id = self._cached_adapter_id
+            if not default_adapter_id:
+                try:
+                    if hasattr(self.context, "platform_manager"):
+                        insts = self.context.platform_manager.get_insts()
+                        for inst in insts:
+                            if hasattr(inst, "metadata") and inst.metadata.id:
+                                default_adapter_id = inst.metadata.id
+                                self._cached_adapter_id = default_adapter_id
+                                break
+                except: pass
+            
+            if not default_adapter_id: default_adapter_id = "aiocqhttp"
+
+            for gid in self.receiver_conf.get("groups", []):
+                if gid: targets.append(f"{default_adapter_id}:GroupMessage:{gid}")
+            for uid in self.receiver_conf.get("users", []):
+                if uid: targets.append(f"{default_adapter_id}:FriendMessage:{uid}")
+
+        if not targets:
+            return
+
+        # 3. 发送循环
+        for uid in targets:
+            if self._is_terminated: break
+            try:
+                for name, url in images_to_send:
+                    # 构建消息链
+                    msg = MessageChain().url_image(url)
+                    logger.info(f"[DailySharing] 发送 {name} -> {uid}")
+                    await self.context.send_message(uid, msg)
+                    # 每张图之间间隔 1 秒
+                    await asyncio.sleep(1)
+                
+                # 每个群之间间隔 2 秒
+                await asyncio.sleep(2) 
+            except Exception as e:
+                logger.error(f"[DailySharing] 发送早报到 {uid} 失败: {e}")
+
+    # ==================== 主流程发送逻辑 ====================
 
     async def _execute_share(self, force_type: SharingType = None, news_source: str = None, specific_target: str = None):
         """执行分享的主流程"""
@@ -907,6 +1029,57 @@ class DailySharingPlugin(Star):
         # 如果不是广播，就只发给当前会话
         current_uid = event.unified_msg_origin
         specific_target = None if is_broadcast else current_uid
+
+        # 手动触发 60s 新闻
+        if arg == "60s":
+            url = self.news_service.get_60s_image_url()
+            if url:
+                target_desc = "配置的所有私聊和群聊" if is_broadcast else "当前会话"
+                yield event.plain_result(f"正在向{target_desc}发送 60s新闻...")
+                
+                # 手动调用发送逻辑
+                targets = []
+                if specific_target:
+                    targets.append(specific_target)
+                else:
+                    # 广播逻辑：复用配置中的接收者
+                    default_adapter_id = self._cached_adapter_id or "aiocqhttp"
+                    for gid in self.receiver_conf.get("groups", []):
+                        if gid: targets.append(f"{default_adapter_id}:GroupMessage:{gid}")
+                    for uid in self.receiver_conf.get("users", []):
+                        if uid: targets.append(f"{default_adapter_id}:FriendMessage:{uid}")
+                
+                for target in targets:
+                    await self.context.send_message(target, MessageChain().url_image(url))
+                    await asyncio.sleep(1)
+            else:
+                yield event.plain_result("获取60s新闻失败，请检查API Key配置。")
+            return
+
+        # 手动触发 AI 资讯
+        if arg == "ai":
+            url = self.news_service.get_ai_news_image_url()
+            if url:
+                target_desc = "配置的所有私聊和群聊" if is_broadcast else "当前会话"
+                yield event.plain_result(f"正在向{target_desc}发送 AI资讯...")
+
+                # 手动调用发送逻辑
+                targets = []
+                if specific_target:
+                    targets.append(specific_target)
+                else:
+                    default_adapter_id = self._cached_adapter_id or "aiocqhttp"
+                    for gid in self.receiver_conf.get("groups", []):
+                        if gid: targets.append(f"{default_adapter_id}:GroupMessage:{gid}")
+                    for uid in self.receiver_conf.get("users", []):
+                        if uid: targets.append(f"{default_adapter_id}:FriendMessage:{uid}")
+
+                for target in targets:
+                    await self.context.send_message(target, MessageChain().url_image(url))
+                    await asyncio.sleep(1)
+            else:
+                yield event.plain_result("获取AI资讯失败，请检查API Key配置。")
+            return
         
         if arg == "状态":
             async for res in self._cmd_status(event): yield res
@@ -963,7 +1136,7 @@ class DailySharingPlugin(Star):
                 force_type = CMD_CN_MAP[arg]
                 type_cn = TYPE_CN_MAP.get(force_type.value, arg)
                 
-                # ===== 新闻类型的特殊逻辑 (处理源和图片) =====
+                # 新闻类型的特殊逻辑 (处理源和图片) 
                 if force_type == SharingType.NEWS:
                     news_src = None
                     is_image_mode = False
@@ -1115,7 +1288,7 @@ Cron规则: {cron}
     async def _cmd_help(self, event: AstrMessageEvent):
         """帮助菜单"""
         yield event.plain_result("""每日分享插件帮助:
-/分享 [类型] - 立即在当前会话生成分享 (类型: 问候/新闻/心情/知识/推荐)
+/分享 [类型] - 立即在当前会话生成分享 (类型: 问候/新闻/心情/知识/推荐/60s/ai)
 /分享 [类型] 广播 - 立即向所有配置的私聊和群聊分享
 /分享 新闻 [源] - 获取指定平台热搜
 /分享 新闻 [源] 图片 - 获取热搜长图

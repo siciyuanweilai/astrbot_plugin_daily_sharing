@@ -317,3 +317,19 @@ class NewsService:
         except Exception as e:
             logger.warning(f"[百科] 查询失败: {e}")
             return None
+
+    def get_60s_image_url(self) -> Optional[str]:
+        """获取每日60s读世界图片URL"""
+        key = self.conf.get("nycnm_api_key", "").strip()
+        if not key:
+            logger.error("[新闻] 未配置柠柚API密钥")
+            return None
+        return f"https://api.nycnm.cn/API/60s.php?format=image&apikey={key}"
+
+    def get_ai_news_image_url(self) -> Optional[str]:
+        """获取每日AI资讯图片URL"""
+        key = self.conf.get("nycnm_api_key", "").strip()
+        if not key:
+            logger.error("[新闻] 未配置柠柚API密钥")
+            return None
+        return f"https://api.nycnm.cn/API/aizixun.php?format=image&apikey={key}"
