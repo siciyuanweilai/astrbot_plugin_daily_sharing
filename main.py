@@ -51,7 +51,7 @@ SOURCE_CN_MAP.update({
     "腾讯": "tencent"
 })
 
-@register("daily_sharing", "四次元未来", "定时主动分享所见所闻", "4.2.0")
+@register("daily_sharing", "四次元未来", "定时主动分享所见所闻", "4.2.1")
 class DailySharingPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -220,10 +220,10 @@ class DailySharingPlugin(Star):
         Args:
             share_type(string): 分享类型。支持：'问候', '新闻'(指互联网热搜), '心情', '知识', '推荐', '60s新闻'(指每日简报图), 'AI资讯'。
             source(string): 仅当 share_type 为'新闻'时有效。指定新闻平台。支持：微博, 知乎, B站, 抖音, 头条, 百度, 腾讯, 小红书。如果不指定则留空。
-            get_image(boolean): 仅当 share_type 为'新闻'时有效。默认为 True (优先发送热搜长图)。只有当用户明确要求“文字版”、“文本”、“不要图片”或“写一段新闻”时，才将其设为 False。
+            get_image(boolean): 仅当 share_type 为'新闻'时有效。默认为 True (优先分享热搜长图)。只有当用户明确要求“文字版”、“文本”、“不要图片”或“写一段新闻”时，才将其设为 False。
             need_image(boolean): 是否需要AI为这段文案配图。默认为 False。仅当用户明确说“配图”、“带图”、“发张图”时，才将其设为 True。
             need_video(boolean): 是否需要AI为这段文案生成视频。默认为 False。仅当用户明确说“视频”、“动态图”、“动起来”时，才将其设为 True。
-            need_voice(boolean): 是否需要将文案转为语音(TTS)发送。默认为 False。仅当用户明确提到“语音”、“朗读”、“念给我听”时，设为 True。
+            need_voice(boolean): 是否需要将文案转为语音(TTS)分享。默认为 False。仅当用户明确提到“语音”、“朗读”、“念给我听”时，设为 True。
         """
         if self._is_terminated: return ""
 
@@ -308,14 +308,14 @@ class DailySharingPlugin(Star):
                             news_src_key = key
                             break
             
-            # 场景 A: 获取新闻长图 (直接发送图片)
+            # 场景 A: 获取新闻长图 (直接分享图片)
             if target_type_enum == SharingType.NEWS and get_image:
                 if not news_src_key:
                     news_src_key = self.news_service.select_news_source()
                 
                 try:
                     img_url, src_name = self.news_service.get_hot_news_image_url(news_src_key)
-                    # 发送图片
+                    # 分享图片
                     await event.send(event.image_result(img_url))
                 except Exception as e:
                     logger.error(f"[DailySharing] 获取新闻图片失败: {e}")
@@ -597,7 +597,7 @@ class DailySharingPlugin(Star):
         
         logger.info("[DailySharing] 开始执行独立早报任务")
         
-        # 1. 收集需要发送的图片 URL
+        # 1. 收集需要分享的图片 URL
         images_to_send = [] 
         
         # 检查 60s (定时触发时检查开关，手动触发时跳过开关检查)
@@ -636,22 +636,32 @@ class DailySharingPlugin(Star):
             
             if not default_adapter_id: default_adapter_id = "aiocqhttp"
 
-            for gid in self.receiver_conf.get("groups", []):
+            # 增加健壮性检查：确保配置获取的是列表，且不为None
+            r_groups = self.receiver_conf.get("groups")
+            if not isinstance(r_groups, list): r_groups = []
+            
+            r_users = self.receiver_conf.get("users")
+            if not isinstance(r_users, list): r_users = []
+
+            for gid in r_groups:
                 if gid: targets.append(f"{default_adapter_id}:GroupMessage:{gid}")
-            for uid in self.receiver_conf.get("users", []):
+            for uid in r_users:
                 if uid: targets.append(f"{default_adapter_id}:FriendMessage:{uid}")
+            
+            logger.info(f"[DailySharing] 早报任务目标: 群{len(r_groups)} / 人{len(r_users)} (Adapter: {default_adapter_id})")
 
         if not targets:
+            logger.warning("[DailySharing] 未找到任何早报接收目标")
             return
 
-        # 3. 发送循环
+        # 3. 分享循环
         for uid in targets:
             if self._is_terminated: break
             try:
                 for name, url in images_to_send:
                     # 构建消息链
                     msg = MessageChain().url_image(url)
-                    logger.info(f"[DailySharing] 发送 {name} -> {uid}")
+                    logger.info(f"[DailySharing] 正在分享{name}到{uid}")
                     await self.context.send_message(uid, msg)
                     # 每张图之间间隔 1 秒
                     await asyncio.sleep(1)
@@ -659,9 +669,9 @@ class DailySharingPlugin(Star):
                 # 每个群之间间隔 2 秒
                 await asyncio.sleep(2) 
             except Exception as e:
-                logger.error(f"[DailySharing] 发送早报到 {uid} 失败: {e}")
+                logger.error(f"[DailySharing] 分享早报到 {uid} 失败: {e}")
 
-    # ==================== 主流程发送逻辑 ====================
+    # ==================== 主流程分享逻辑 ====================
 
     async def _execute_share(self, force_type: SharingType = None, news_source: str = None, specific_target: str = None):
         """执行分享的主流程"""
@@ -696,7 +706,7 @@ class DailySharingPlugin(Star):
 
         targets = []
         
-        # 1. 确定发送目标
+        # 1. 确定分享目标
         if specific_target:
             targets.append(specific_target)
         else:
@@ -724,9 +734,16 @@ class DailySharingPlugin(Star):
                      logger.warning("[DailySharing] 尚未缓存 Adapter ID，使用默认值 'aiocqhttp'。")
 
                 if default_adapter_id:
-                    for gid in self.receiver_conf.get("groups", []):
+                    # 健壮性检查
+                    r_groups = self.receiver_conf.get("groups")
+                    if not isinstance(r_groups, list): r_groups = []
+                    
+                    r_users = self.receiver_conf.get("users")
+                    if not isinstance(r_users, list): r_users = []
+
+                    for gid in r_groups:
                         if gid: targets.append(f"{default_adapter_id}:GroupMessage:{gid}")
-                    for uid in self.receiver_conf.get("users", []):
+                    for uid in r_users:
                         if uid: targets.append(f"{default_adapter_id}:FriendMessage:{uid}")
 
         if not targets:
@@ -812,7 +829,7 @@ class DailySharingPlugin(Star):
                     else:
                         logger.info(f"[DailySharing] 当前类型 {stype.value} 不在语音允许列表，跳过 TTS。")
 
-                # 发送消息
+                # 分享内容
                 await self._send(uid, content, img_path, audio_path, video_url)
                 
                 # 获取图片描述并写入 AstrBot 聊天上下文
@@ -840,7 +857,7 @@ class DailySharingPlugin(Star):
                 logger.error(traceback.format_exc())
 
     async def _send(self, uid, text, img_path, audio_path=None, video_url=None):
-        """发送消息（支持分开发送，支持语音和视频）"""
+        """分享内容（支持分开分享，支持语音和视频）"""
         if self._is_terminated: return
 
         try:
@@ -850,16 +867,16 @@ class DailySharingPlugin(Star):
             # 清洗情感标签
             clean_text = re.sub(r'\$\$(?:EMO:)?(?:happy|sad|angry|neutral|surprise)\$\$', '', text, flags=re.IGNORECASE).strip()
             
-            # 判断是否应该发送文字
+            # 判断是否应该分享文字
             # 如果有语音，且开启了“仅发语音”，则不发文字
             should_send_text = True
             if audio_path and prefer_audio_only:
                 should_send_text = False
 
-            # 1. 发送文字（如果需要）
+            # 1. 分享文字（如果需要）
             if should_send_text and clean_text: 
                 text_chain = MessageChain().message(clean_text) 
-                # 如果图片不分开发送，且没有语音，且没有视频（视频无法合并），则合并图片
+                # 如果图片不分开分享，且没有语音，且没有视频（视频无法合并），则合并图片
                 if img_path and not video_url and not separate_img and not audio_path:
                     if img_path.startswith("http"): text_chain.url_image(img_path)
                     else: text_chain.file_image(img_path)
@@ -870,7 +887,7 @@ class DailySharingPlugin(Star):
                 if audio_path or ((img_path or video_url) and separate_img):
                     await self._random_sleep()
 
-            # 2. 发送语音（如果有）
+            # 2. 分享语音（如果有）
             if audio_path:
                 audio_chain = MessageChain()
                 audio_chain.chain.append(Record(file=audio_path))
@@ -880,9 +897,9 @@ class DailySharingPlugin(Star):
                 if (img_path or video_url) and separate_img:
                     await self._random_sleep()
             
-            # 3. 发送视觉媒体（视频优先，其次图片）
+            # 3. 分享视觉媒体（视频优先，其次图片）
             if video_url:
-                # 发送视频
+                # 分享视频
                 video_chain = MessageChain()
                 # 判断是本地文件还是网络URL
                 if video_url.startswith("http"):
@@ -892,7 +909,7 @@ class DailySharingPlugin(Star):
                     video_chain.chain.append(Video.fromFileSystem(video_url))              
                 await self.context.send_message(uid, video_chain)
             elif img_path:
-                # 发送图片（如果视频没生成，或者视频关闭）
+                # 分享图片（如果视频没生成，或者视频关闭）
                 # 逻辑：只要图片还没发（separate_img 为真，或者虽然 separate_img 为假但因为有语音没能合并），就发
                 img_not_sent_yet = separate_img or audio_path
                 if img_not_sent_yet:
@@ -902,7 +919,7 @@ class DailySharingPlugin(Star):
                     await self.context.send_message(uid, img_chain)
 
         except Exception as e:
-            logger.error(f"[DailySharing] 发送消息给 {uid} 失败: {e}")
+            logger.error(f"[DailySharing] 分享内容给 {uid} 失败: {e}")
 
     async def _random_sleep(self):
         """随机延迟"""
@@ -1025,7 +1042,7 @@ class DailySharingPlugin(Star):
         # 判断是否是广播模式
         is_broadcast = "广播" in parts
         
-        # 确定发送目标
+        # 确定分享目标
         # 如果不是广播，就只发给当前会话
         current_uid = event.unified_msg_origin
         specific_target = None if is_broadcast else current_uid
@@ -1035,18 +1052,26 @@ class DailySharingPlugin(Star):
             url = self.news_service.get_60s_image_url()
             if url:
                 target_desc = "配置的所有私聊和群聊" if is_broadcast else "当前会话"
-                yield event.plain_result(f"正在向{target_desc}发送 60s新闻...")
+                yield event.plain_result(f"正在向{target_desc}分享60s新闻...")
                 
-                # 手动调用发送逻辑
+                # 手动调用分享逻辑
                 targets = []
                 if specific_target:
                     targets.append(specific_target)
                 else:
                     # 广播逻辑：复用配置中的接收者
                     default_adapter_id = self._cached_adapter_id or "aiocqhttp"
-                    for gid in self.receiver_conf.get("groups", []):
+                    
+                    # 健壮性读取
+                    r_groups = self.receiver_conf.get("groups")
+                    if not isinstance(r_groups, list): r_groups = []
+                    
+                    r_users = self.receiver_conf.get("users")
+                    if not isinstance(r_users, list): r_users = []
+
+                    for gid in r_groups:
                         if gid: targets.append(f"{default_adapter_id}:GroupMessage:{gid}")
-                    for uid in self.receiver_conf.get("users", []):
+                    for uid in r_users:
                         if uid: targets.append(f"{default_adapter_id}:FriendMessage:{uid}")
                 
                 for target in targets:
@@ -1056,22 +1081,30 @@ class DailySharingPlugin(Star):
                 yield event.plain_result("获取60s新闻失败，请检查API Key配置。")
             return
 
-        # 手动触发 AI 资讯
+        # 手动触发AI资讯
         if arg == "ai":
             url = self.news_service.get_ai_news_image_url()
             if url:
                 target_desc = "配置的所有私聊和群聊" if is_broadcast else "当前会话"
-                yield event.plain_result(f"正在向{target_desc}发送 AI资讯...")
+                yield event.plain_result(f"正在向{target_desc}分享AI资讯...")
 
-                # 手动调用发送逻辑
+                # 手动调用分享逻辑
                 targets = []
                 if specific_target:
                     targets.append(specific_target)
                 else:
                     default_adapter_id = self._cached_adapter_id or "aiocqhttp"
-                    for gid in self.receiver_conf.get("groups", []):
+                    
+                    # 健壮性读取
+                    r_groups = self.receiver_conf.get("groups")
+                    if not isinstance(r_groups, list): r_groups = []
+                    
+                    r_users = self.receiver_conf.get("users")
+                    if not isinstance(r_users, list): r_users = []
+                    
+                    for gid in r_groups:
                         if gid: targets.append(f"{default_adapter_id}:GroupMessage:{gid}")
-                    for uid in self.receiver_conf.get("users", []):
+                    for uid in r_users:
                         if uid: targets.append(f"{default_adapter_id}:FriendMessage:{uid}")
 
                 for target in targets:
@@ -1129,7 +1162,7 @@ class DailySharingPlugin(Star):
 
         elif arg in ["自动", "auto"]:
             target_desc = "配置的所有私聊和群聊" if is_broadcast else "当前会话"
-            yield event.plain_result(f"正在向{target_desc}生成并发送分享内容(自动类型)...")
+            yield event.plain_result(f"正在向{target_desc}生成并分享内容(自动类型)...")
             await self._execute_share(None, specific_target=specific_target)
         else:
             if arg in CMD_CN_MAP:
@@ -1155,7 +1188,7 @@ class DailySharingPlugin(Star):
                             news_src = p
                             break
                             
-                    # 如果是图片模式，直接发送图片，绕过 LLM
+                    # 如果是图片模式，直接分享图片，绕过 LLM
                     if is_image_mode:
                         try:
                             if not news_src:
@@ -1172,24 +1205,24 @@ class DailySharingPlugin(Star):
                     # 正常的 LLM 文字新闻模式
                     src_info = f" ({NEWS_SOURCE_MAP[news_src]['name']})" if news_src else ""
                     target_desc = "配置的所有私聊和群聊" if is_broadcast else "当前会话"
-                    yield event.plain_result(f"正在向{target_desc}生成并发送分享{type_cn}{src_info} ...")
+                    yield event.plain_result(f"正在向{target_desc}生成并分享{type_cn}{src_info} ...")
                     
                     await self._execute_share(force_type, news_source=news_src, specific_target=specific_target)
                     return
                     
                 # 其他类型 (问候/心情等)
                 target_desc = "配置的所有私聊和群聊" if is_broadcast else "当前会话"
-                yield event.plain_result(f"正在向{target_desc}生成并发送分享{type_cn} ...")
+                yield event.plain_result(f"正在向{target_desc}生成并分享{type_cn} ...")
                 await self._execute_share(force_type, specific_target=specific_target)
                 return
             try:
                 force_type = SharingType(arg)
                 type_cn = TYPE_CN_MAP.get(force_type.value, arg)
                 target_desc = "配置的所有私聊和群聊" if is_broadcast else "当前会话"
-                yield event.plain_result(f"正在向{target_desc}生成并发送分享{type_cn} ...")
+                yield event.plain_result(f"正在向{target_desc}生成并分享{type_cn} ...")
                 await self._execute_share(force_type, specific_target=specific_target)
             except ValueError:
-                yield event.plain_result(f"未知指令或无效类型: {arg}\n可用类型: 问候, 新闻, 心情, 知识, 推荐")
+                yield event.plain_result(f"未知指令或无效类型: {arg}\n可用类型: 问候, 新闻, 心情, 知识, 推荐，60s，ai")
 
     # ==================== 子命令逻辑 ====================
 
@@ -1295,5 +1328,5 @@ Cron规则: {cron}
 /分享 状态 - 查看运行状态
 /分享 开启/关闭 - 启停自动分享
 /分享 查看序列 - 查看当前时段序列及指针
-/分享 指定序列 [序号] - 手动调整发送指针到指定位置
-/分享 重置序列 - 重置当前发送序列到开头""")
+/分享 指定序列 [序号] - 手动调整指针到指定分享内容位置
+/分享 重置序列 - 重置当前分享内容序列到开头""")

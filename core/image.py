@@ -251,7 +251,7 @@ class ImageService:
             logger.warning("[DailySharing] Prompt 组装失败，取消配图")
             return None
         logger.info(f"[DailySharing] 最终配图 Prompt: {prompt[:100]}...")
-        self._last_image_description = prompt[:200]
+        self._last_image_description = prompt
         
         # 5. 调用插件生成
         return await self._call_aiimg(prompt, use_ref_selfie=is_selfie_mode)
@@ -440,10 +440,10 @@ class ImageService:
                     
                     # 2. 构建 Prompt 前缀
                     final_prompt = (
-                        "请根据参考图生成一张该人物的生活照：\n"
-                        "1) 保持第1张参考图的人脸身份特征。\n"
+                        "请根据参考图生成一张新的生活照：\n"
+                        "1) 保持第1张参考图的人脸身份特征，保持五官/气质一致。\n"
                         f"2) 画面具体描述：{prompt}\n"
-                        "3) 输出高质量照片。"
+                        "3) 输出高质量生活照片风格，不要拼图，不要水印。"
                     )
                     
                     # 3. 调用 Edit 接口
