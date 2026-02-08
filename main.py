@@ -985,9 +985,6 @@ class DailySharingPlugin(Star):
         
         state = await self.db.get_state("global", {})
         
-        if state.get("last_period") != current_period.value:
-            state["sequence_index"] = 0
-        
         config_key_map = {
             TimePeriod.MORNING: "morning_sequence",
             TimePeriod.FORENOON: "forenoon_sequence",
@@ -1004,14 +1001,21 @@ class DailySharingPlugin(Star):
         if not seq:
             seq = SHARING_TYPE_SEQUENCES.get(current_period, [SharingType.GREETING.value])
         
-        idx = state.get("sequence_index", 0)
+        # 使用特定于当前时段的索引键
+        idx_key = f"index_{current_period.value}"
+        idx = state.get(idx_key, 0)
+        
         if idx >= len(seq): idx = 0
         
         selected = seq[idx]
         
+        # 计算下一个索引
+        next_idx = (idx + 1) % len(seq)
+        
         updates = {
             "last_period": current_period.value,
-            "sequence_index": (idx + 1) % len(seq),
+            idx_key: next_idx,            # 更新当前时段的独立索引
+            "sequence_index": next_idx,   # 更新全局索引(兼容显示)
             "last_timestamp": datetime.now().isoformat(),
             "last_type": selected
         }
@@ -1153,7 +1157,10 @@ class DailySharingPlugin(Star):
                     seq = SHARING_TYPE_SEQUENCES.get(period, [])
 
                 if 0 <= target_idx < len(seq):
+                    # 更新当前时段的独立索引
+                    idx_key = f"index_{period.value}"
                     await self.db.update_state_dict("global", {
+                        idx_key: target_idx,
                         "sequence_index": target_idx,
                         "last_period": period.value 
                     })
@@ -1292,8 +1299,12 @@ Cron规则: {cron}
 
     async def _cmd_reset_seq(self, event: AstrMessageEvent):
         """重置序列"""
-        await self.db.update_state_dict("global", {"sequence_index": 0, "last_period": None})
-        yield event.plain_result("序列已重置")
+        # 重置所有时段的索引
+        updates = {"sequence_index": 0, "last_period": None}
+        for p in TimePeriod:
+            updates[f"index_{p.value}"] = 0
+        await self.db.update_state_dict("global", updates)
+        yield event.plain_result("所有时段的序列已重置")
 
     async def _cmd_view_seq(self, event: AstrMessageEvent):
         """查看序列详情"""
@@ -1315,7 +1326,10 @@ Cron规则: {cron}
             seq = SHARING_TYPE_SEQUENCES.get(period, [])
 
         state = await self.db.get_state("global", {})
-        idx = state.get("sequence_index", 0)
+        
+        # 读取当前时段的独立索引
+        idx_key = f"index_{period.value}"
+        idx = state.get(idx_key, 0)
         
         txt = f"当前时段: {period.value} ({time_range})\n"
         for i, t_raw in enumerate(seq):
