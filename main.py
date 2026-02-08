@@ -51,7 +51,7 @@ SOURCE_CN_MAP.update({
     "腾讯": "tencent"
 })
 
-@register("daily_sharing", "四次元未来", "定时主动分享所见所闻", "4.2.1")
+@register("daily_sharing", "四次元未来", "定时主动分享所见所闻", "4.3.1")
 class DailySharingPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -608,12 +608,18 @@ class DailySharingPlugin(Star):
             url = self.news_service.get_60s_image_url()
             if url: images_to_send.append(("60s新闻", url))
 
+        # 排除周日和周一
         if self.extra_shares_conf.get("enable_ai_news", False):
-            url = self.news_service.get_ai_news_image_url()
-            if url: images_to_send.append(("AI资讯", url))
+            weekday = datetime.now().weekday()
+            # 如果是周日(6) 或 周一(0)，且不是手动指定目标(视为自动任务)，则跳过
+            if weekday in [0, 6] and specific_target is None:
+                logger.info(f"[DailySharing] 今天是周{'日' if weekday==6 else '一'}，跳过发送AI资讯")
+            else:
+                url = self.news_service.get_ai_news_image_url()
+                if url: images_to_send.append(("AI资讯", url))
 
         if not images_to_send:
-            logger.warning("[DailySharing] 早报任务触发，但没有开启的项目或获取图片失败")
+            logger.warning("[DailySharing] 早报任务触发，发现没有开启的早报发送或获取图片失败")
             return
 
         # 2. 确定目标 (复用配置)
