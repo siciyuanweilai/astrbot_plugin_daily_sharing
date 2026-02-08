@@ -51,7 +51,7 @@ SOURCE_CN_MAP.update({
     "腾讯": "tencent"
 })
 
-@register("daily_sharing", "四次元未来", "定时主动分享所见所闻", "4.3.1")
+@register("daily_sharing", "四次元未来", "定时主动分享所见所闻", "4.3.2")
 class DailySharingPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -1061,7 +1061,7 @@ class DailySharingPlugin(Star):
         if arg == "60s":
             url = self.news_service.get_60s_image_url()
             if url:
-                target_desc = "配置的所有私聊和群聊" if is_broadcast else "当前会话"
+                target_desc = "配置的所有群聊和私聊" if is_broadcast else "当前会话"
                 yield event.plain_result(f"正在向{target_desc}分享60s新闻...")
                 
                 # 手动调用分享逻辑
@@ -1095,7 +1095,7 @@ class DailySharingPlugin(Star):
         if arg == "ai":
             url = self.news_service.get_ai_news_image_url()
             if url:
-                target_desc = "配置的所有私聊和群聊" if is_broadcast else "当前会话"
+                target_desc = "配置的所有群聊和私聊" if is_broadcast else "当前会话"
                 yield event.plain_result(f"正在向{target_desc}分享AI资讯...")
 
                 # 手动调用分享逻辑
@@ -1174,7 +1174,7 @@ class DailySharingPlugin(Star):
                 yield event.plain_result("格式错误，请带上序号。例如：/分享 指定序列 1")
 
         elif arg in ["自动", "auto"]:
-            target_desc = "配置的所有私聊和群聊" if is_broadcast else "当前会话"
+            target_desc = "配置的所有群聊和私聊" if is_broadcast else "当前会话"
             yield event.plain_result(f"正在向{target_desc}生成并分享内容(自动类型)...")
             await self._execute_share(None, specific_target=specific_target)
         else:
@@ -1217,21 +1217,21 @@ class DailySharingPlugin(Star):
                         
                     # 正常的 LLM 文字新闻模式
                     src_info = f" ({NEWS_SOURCE_MAP[news_src]['name']})" if news_src else ""
-                    target_desc = "配置的所有私聊和群聊" if is_broadcast else "当前会话"
+                    target_desc = "配置的所有群聊和私聊" if is_broadcast else "当前会话"
                     yield event.plain_result(f"正在向{target_desc}生成并分享{type_cn}{src_info} ...")
                     
                     await self._execute_share(force_type, news_source=news_src, specific_target=specific_target)
                     return
                     
                 # 其他类型 (问候/心情等)
-                target_desc = "配置的所有私聊和群聊" if is_broadcast else "当前会话"
+                target_desc = "配置的所有群聊和私聊" if is_broadcast else "当前会话"
                 yield event.plain_result(f"正在向{target_desc}生成并分享{type_cn} ...")
                 await self._execute_share(force_type, specific_target=specific_target)
                 return
             try:
                 force_type = SharingType(arg)
                 type_cn = TYPE_CN_MAP.get(force_type.value, arg)
-                target_desc = "配置的所有私聊和群聊" if is_broadcast else "当前会话"
+                target_desc = "配置的所有群聊和私聊" if is_broadcast else "当前会话"
                 yield event.plain_result(f"正在向{target_desc}生成并分享{type_cn} ...")
                 await self._execute_share(force_type, specific_target=specific_target)
             except ValueError:
@@ -1342,7 +1342,7 @@ Cron规则: {cron}
         """帮助菜单"""
         yield event.plain_result("""每日分享插件帮助:
 /分享 [类型] - 立即在当前会话生成分享 (类型: 问候/新闻/心情/知识/推荐/60s/ai)
-/分享 [类型] 广播 - 立即向所有配置的私聊和群聊分享
+/分享 [类型] 广播 - 立即向所有配置的群聊和私聊分享
 /分享 新闻 [源] - 获取指定平台热搜
 /分享 新闻 [源] 图片 - 获取热搜长图
 /分享 状态 - 查看运行状态
