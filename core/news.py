@@ -177,7 +177,7 @@ class NewsService:
         url = NEWS_SOURCE_MAP[source]['url']
         full_url = f"{url}?format=json&apikey={key}"
         
-        timeout = self.conf.get("news_api_timeout", 15)
+        timeout = self.conf.get("news_api_timeout", 30)
         
         logger.info(f"[新闻] 获取新闻: {source_name}")
         logger.debug(f"[新闻] 请求URL: {url}?format=json&apikey=***")
@@ -215,33 +215,55 @@ class NewsService:
     def _parse_response(self, data: Any) -> Optional[List[Dict]]:
         """
         解析响应数据
-        支持多层级 JSON 和多种字段名 (hot/heat/hotValue)
+        支持多层级 JSON 和多种字段名 (hot/heat/hotValue/hot_value)
+        支持腾讯新闻这种字典结构的列表 {"Top_1": {...}, "Top_2": {...}}
         """
         items = []
         
-        # 定位列表数据位置 (兼容多种API返回格式)
+        # 1. 辅助函数：判断字典是否为腾讯新闻风格的列表结构 (Top_1, Top_2...)
+        def is_tencent_style_dict(d: dict) -> bool:
+            return any(k.startswith("Top_") for k in d.keys())
+
+        # 2. 定位列表数据位置
         if isinstance(data, list):
             items = data
         elif isinstance(data, dict):
-            for k in ["data", "list", "items", "result"]:
-                if k in data:
-                    val = data[k]
-                    if isinstance(val, list): 
-                        items = val
-                        break
-                    elif isinstance(val, dict):
-                        for sub_k in ["list", "items"]:
-                            if sub_k in val and isinstance(val[sub_k], list): 
-                                items = val[sub_k]
+            # 情况A: 根节点就是腾讯风格的字典
+            if is_tencent_style_dict(data):
+                items = list(data.values())
+            else:
+                # 情况B: 嵌套在 data/list/items 等字段中
+                found = False
+                for k in ["data", "list", "items", "result"]:
+                    if k in data:
+                        val = data[k]
+                        if isinstance(val, list): 
+                            items = val
+                            found = True
+                            break
+                        elif isinstance(val, dict):
+                            # 检查嵌套字典是否为腾讯风格
+                            if is_tencent_style_dict(val):
+                                items = list(val.values())
+                                found = True
                                 break
+                            
+                            # 检查嵌套字典里是否有 list/items
+                            for sub_k in ["list", "items"]:
+                                if sub_k in val and isinstance(val[sub_k], list): 
+                                    items = val[sub_k]
+                                    found = True
+                                    break
+                        if found: break
         
         if not items: return None
 
         limit = self.conf.get("news_items_count", 5)
 
-        # 提取字段 (title, hot, url)
+        # 3. 提取字段 (title, hot, url)
         res = []
-        for i in items[:limit + 10]: 
+        for i in items: 
+            # 如果列表非常长，仅在收集满时停止
             if len(res) >= limit: break 
 
             if not isinstance(i, dict): continue
@@ -251,7 +273,8 @@ class NewsService:
             if not title: continue
             
             # 热度提取 (兼容多种字段名)
-            hot = i.get("hot") or i.get("hotValue") or i.get("heat") or i.get("hotScore") or ""
+            # 增加了 'hot_value' 适配头条
+            hot = i.get("hot") or i.get("hotValue") or i.get("hot_value") or i.get("heat") or i.get("hotScore") or ""
             
             # URL 提取 (兼容多种字段名)
             url_link = i.get("url") or i.get("link") or i.get("mobileUrl") or ""

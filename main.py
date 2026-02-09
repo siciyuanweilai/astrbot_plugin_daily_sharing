@@ -51,7 +51,7 @@ SOURCE_CN_MAP.update({
     "腾讯": "tencent"
 })
 
-@register("daily_sharing", "四次元未来", "定时主动分享所见所闻", "4.3.2")
+@register("daily_sharing", "四次元未来", "定时主动分享所见所闻", "4.5.0")
 class DailySharingPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -207,7 +207,7 @@ class DailySharingPlugin(Star):
         event: AstrMessageEvent, 
         share_type: str, 
         source: str = None, 
-        get_image: bool = False,
+        get_image: bool = True,
         need_image: bool = False,
         need_video: bool = False,
         need_voice: bool = False
@@ -230,7 +230,7 @@ class DailySharingPlugin(Star):
         # 1. 防抖检查
         if self._lock.locked():
             await event.send(event.plain_result("正如火如荼地准备中，请稍后..."))
-            return ""
+            return None
 
         # 2. 启动后台异步任务
         task = asyncio.create_task(
@@ -242,7 +242,7 @@ class DailySharingPlugin(Star):
         task.add_done_callback(self._bg_tasks.discard)
 
         # 3. 直接返回空字符串，让 LLM 闭嘴，不再生成回复
-        return ""
+        return None
 
     async def _async_daily_share_task(
         self,
@@ -254,7 +254,7 @@ class DailySharingPlugin(Star):
         need_video: bool,
         need_voice: bool
     ):
-        """实际执行分享逻辑的后台任务"""
+        """实际执行分享逻辑的后台任务 (LLM 触发)"""
         try:
             # 特殊图片类型处理 (60s / AI) 
             st_clean = share_type.lower().replace(" ", "")
@@ -291,7 +291,6 @@ class DailySharingPlugin(Star):
                         target_type_enum = v
                         break
                 if not target_type_enum:
-                    # 错误提示直接发给用户
                     await event.send(event.plain_result(f"不支持的分享类型：{share_type}。支持：问候, 新闻, 心情, 知识, 推荐, 60s新闻, AI资讯。"))
                     return
 
@@ -308,117 +307,132 @@ class DailySharingPlugin(Star):
                             news_src_key = key
                             break
             
-            # 场景 A: 获取新闻长图 (直接分享图片)
-            if target_type_enum == SharingType.NEWS and get_image:
-                if not news_src_key:
-                    news_src_key = self.news_service.select_news_source()
-                
+            # 逻辑判定：新闻默认发静态图
+            is_news = (target_type_enum == SharingType.NEWS)
+            
+            # 触发静态图发送的条件：
+            # 1. 是新闻
+            # 2. 需要获取图片 (get_image=True)
+            # 3. 不需要AI配图 (not need_image)
+            # 4. 不需要语音 (not need_voice) -> 如果需要语音，必须走 LLM 生成文本
+            # 5. 不需要视频 (not need_video) -> 如果需要视频，必须走 后续流程
+            if is_news and get_image and not need_image and not need_voice and not need_video:
                 try:
-                    img_url, src_name = self.news_service.get_hot_news_image_url(news_src_key)
-                    # 分享图片
-                    await event.send(event.image_result(img_url))
+                    img_url = None
+                    # 优先使用指定的源热搜
+                    if news_src_key:
+                        img_url, _ = self.news_service.get_hot_news_image_url(news_src_key)
+                    else:
+                        # 如果没有指定，则随机选择一个已启用的新闻源发送
+                        random_src = self.news_service.select_news_source()
+                        img_url, _ = self.news_service.get_hot_news_image_url(random_src)
+
+                    if img_url:
+                        await event.send(event.image_result(img_url))
+                    else:
+                        await event.send(event.plain_result("获取新闻图片失败。"))
                 except Exception as e:
-                    logger.error(f"[DailySharing] 获取新闻图片失败: {e}")
-                    await event.send(event.plain_result(f"获取新闻长图失败，请稍后再试。"))
+                    logger.error(f"[DailySharing] 获取默认随机新闻图片失败: {e}")
+                    await event.send(event.plain_result(f"获取新闻图片失败。"))
+                
                 return
 
-            # 场景 B: 标准流程 (生成文案 + 可选配图/视频 + 可选语音)
+            # 场景 B: 标准 LLM 生成流程
+            # 1. 纯文字模式 (问候/心情/知识/推荐/新闻文字版)
+            # 2. 高级模式 (任何类型 + need_image=True)
+            # 3. 语音模式 (任何类型 + need_voice=True)
+            
+            # 获取上下文 ID
+            uid = event.get_sender_id()
+            if not ":" in str(uid):
+                target_umo = event.unified_msg_origin
             else:
-                # 获取上下文 ID
-                uid = event.get_sender_id()
-                if not ":" in str(uid):
-                    target_umo = event.unified_msg_origin
-                else:
-                    target_umo = uid
+                target_umo = uid
 
-                # 重新计算时段
-                period = self._get_curr_period()
+            # 重新计算时段
+            period = self._get_curr_period()
+            
+            # 准备数据
+            life_ctx = await self.ctx_service.get_life_context()
+            news_data = None
+            
+            # 初始化 img_path (可能用于存放热搜截图)
+            img_path = None
+            
+            if target_type_enum == SharingType.NEWS:
+                # 这里的 news_src_key 如果是 None 会自动选择
+                if not news_src_key:
+                    news_src_key = self.news_service.select_news_source()
+                news_data = await self.news_service.get_hot_news(news_src_key)
                 
-                # 准备数据
-                life_ctx = await self.ctx_service.get_life_context()
-                news_data = None
-                if target_type_enum == SharingType.NEWS:
-                    news_data = await self.news_service.get_hot_news(news_src_key)
+                # 如果在主流程中(因为要语音等原因进来了)，且用户依然默认想要看热搜图
+                # (即：是新闻，且没说不要图片，且没说要AI配图)
+                # 那么我们在这里把热搜截图取出来，准备等会一起发
+                if get_image and not need_image:
+                    try:
+                        img_path, _ = self.news_service.get_hot_news_image_url(news_src_key)
+                    except Exception as e:
+                        logger.warning(f"[DailySharing] 主流程获取热搜图片失败: {e}")
 
-                # 获取历史
-                is_group = self.ctx_service._is_group_chat(target_umo)
-                hist_data = await self.ctx_service.get_history_data(target_umo, is_group)
-                hist_prompt = self.ctx_service.format_history_prompt(hist_data, target_type_enum)
-                group_info = hist_data.get("group_info")
-                life_prompt = self.ctx_service.format_life_context(life_ctx, target_type_enum, is_group, group_info)
-                
-                # 获取昵称 (手动触发时也尝试获取)
-                nickname = ""
-                if not is_group:
-                    nickname = event.get_sender_name()
+            # 获取历史
+            is_group = self.ctx_service._is_group_chat(target_umo)
+            hist_data = await self.ctx_service.get_history_data(target_umo, is_group)
+            hist_prompt = self.ctx_service.format_history_prompt(hist_data, target_type_enum)
+            group_info = hist_data.get("group_info")
+            life_prompt = self.ctx_service.format_life_context(life_ctx, target_type_enum, is_group, group_info)
+            
+            # 获取昵称
+            nickname = ""
+            if not is_group:
+                nickname = event.get_sender_name()
 
-                # 生成内容
-                content = await self.content_service.generate(
-                    target_type_enum, period, target_umo, is_group, life_prompt, hist_prompt, news_data, nickname=nickname
-                )
-                
-                if not content:
-                    await event.send(event.plain_result("内容生成失败，请稍后再试。"))
-                    return
-                
-                # ================= 视觉生成逻辑 (图片/视频) =================
-                img_path = None
-                video_url = None
-                
-                # 判断是否生成: 只要总开关开启，且(用户明确要求，或类型在允许列表中)
-                enable_global = self.image_conf.get("enable_ai_image", False)
-                
-                should_gen_visual = False
-                if enable_global:
-                    if need_image or need_video:
-                        # 1. 用户明确要求：强制生成 (无视类型白名单)
-                        should_gen_visual = True
-                    else:
-                        # 2. 用户未要求：检查类型白名单
-                        allowed = self.image_conf.get("image_enabled_types", [])
-                        if target_type_enum.value in allowed:
-                            should_gen_visual = True
+            # 生成内容
+            content = await self.content_service.generate(
+                target_type_enum, period, target_umo, is_group, life_prompt, hist_prompt, news_data, nickname=nickname
+            )
+            
+            if not content:
+                await event.send(event.plain_result("内容生成失败，请稍后再试。"))
+                return
+            
+            # ================= 视觉生成逻辑 (LLM 触发：严格手动控制) =================
+            video_url = None
+            
+            should_gen_visual = False
+            # 只有当用户明确要求配图或视频时，才生成
+            if self.image_conf.get("enable_ai_image", False):
+                if need_image or need_video:
+                    should_gen_visual = True
 
-                if should_gen_visual:
-                    # 生成图片
-                    img_path = await self.image_service.generate_image(content, target_type_enum, life_ctx)
-                    
-                    # 生成视频 (如果明确要求视频，或类型在视频白名单中)
-                    if img_path and self.image_conf.get("enable_ai_video", False):
-                        should_gen_video = False
-                        if need_video:
-                            should_gen_video = True
-                        else:
-                            video_allowed = self.image_conf.get("video_enabled_types", [])
-                            if target_type_enum.value in video_allowed:
-                                should_gen_video = True
-                                
-                        if should_gen_video:
-                            video_url = await self.image_service.generate_video_from_image(img_path, content)
-
-                # ================= 语音生成逻辑 (TTS) =================
-                audio_path = None
-                if self.tts_conf.get("enable_tts", False):
-                    should_gen_voice = False
-                    if need_voice:
-                        # 1. 用户明确要求：强制生成
-                        should_gen_voice = True
-                    else:
-                        # 2. 检查白名单
-                        tts_allowed = self.tts_conf.get("tts_enabled_types", [])
-                        if target_type_enum.value in tts_allowed:
-                            should_gen_voice = True
-                            
-                    if should_gen_voice:
-                        audio_path = await self.ctx_service.text_to_speech(content, target_umo, target_type_enum, period)
-
-                # 发送
-                await self._send(target_umo, content, img_path, audio_path, video_url)
+            if should_gen_visual:
+                # 生成图片 (注意：如果生成了AI图片，会覆盖上面的热搜截图 img_path)
+                ai_img_path = await self.image_service.generate_image(content, target_type_enum, life_ctx)
+                if ai_img_path:
+                    img_path = ai_img_path
                 
-                # 记录上下文
-                img_desc = self.image_service.get_last_description()
-                await self.ctx_service.record_bot_reply_to_history(target_umo, content, image_desc=img_desc)
-                await self.ctx_service.record_to_memos(target_umo, content, img_desc)
+                # 生成视频 (如果明确要求视频)
+                if img_path and self.image_conf.get("enable_ai_video", False):
+                    if need_video:
+                        video_url = await self.image_service.generate_video_from_image(img_path, content)
+
+            # ================= 语音生成逻辑 (LLM 触发：严格手动控制) =================
+            audio_path = None
+            if self.tts_conf.get("enable_tts", False):
+                should_gen_voice = False
+                # 只有当用户明确要求语音时，才生成
+                if need_voice:
+                    should_gen_voice = True
+                        
+                if should_gen_voice:
+                    audio_path = await self.ctx_service.text_to_speech(content, target_umo, target_type_enum, period)
+
+            # 发送 (img_path 可能是热搜截图，也可能是AI画的图)
+            await self._send(target_umo, content, img_path, audio_path, video_url)
+            
+            # 记录上下文
+            img_desc = self.image_service.get_last_description()
+            await self.ctx_service.record_bot_reply_to_history(target_umo, content, image_desc=img_desc)
+            await self.ctx_service.record_to_memos(target_umo, content, img_desc)
                 
 
         except Exception as e:
@@ -805,6 +819,7 @@ class DailySharingPlugin(Star):
                     continue
                 
                 # 生成多媒体素材 (图片 & 视频 & 语音) 
+                # 注意：这是自动任务的逻辑，依然遵守白名单配置
                 
                 # 1. 配图生成逻辑
                 img_path = None
@@ -812,9 +827,27 @@ class DailySharingPlugin(Star):
                 enable_img_global = self.image_conf.get("enable_ai_image", False)
                 img_allowed_types = self.image_conf.get("image_enabled_types", ["greeting", "mood", "knowledge", "recommendation"])
                 
+                # 【新闻类型特殊处理】如果未开启AI配图或当前类型不允许AI配图，但这是新闻，尝试把热搜图带上
+                if stype == SharingType.NEWS:
+                    try:
+                        # 如果没有指定源（自动选择模式），复用 state 中的 last_news_source，或者重新获取 current news source
+                        # 注意：这里我们假设 get_hot_news 已经更新了 state 或 news_data 包含了 source
+                        
+                        # 简化逻辑：直接获取 state 中记录的 last_news_source (刚刚在 get_hot_news 成功后更新的)
+                        state = await self.db.get_state("global", {})
+                        last_source = state.get("last_news_source")
+                        if last_source:
+                            img_path, _ = self.news_service.get_hot_news_image_url(last_source)
+                    except Exception as e:
+                        logger.warning(f"[DailySharing] 自动任务获取新闻图片失败: {e}")
+
                 if enable_img_global:
                     if stype.value in img_allowed_types:
-                        img_path = await self.image_service.generate_image(content, stype, life_ctx)
+                        ai_img_path = await self.image_service.generate_image(content, stype, life_ctx)
+                        if ai_img_path:
+                            # AI 图片覆盖热搜截图
+                            img_path = ai_img_path
+                            
                         # 尝试生成视频
                         if img_path and self.image_conf.get("enable_ai_video", False):
                             video_allowed = self.image_conf.get("video_enabled_types", ["greeting", "mood"])
