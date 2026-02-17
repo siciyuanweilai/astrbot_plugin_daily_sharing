@@ -15,7 +15,7 @@
         "title": "群聊列表",
         "type": "list",
         "items": {
-          "type": "string",
+          "type": "string"
         },
         "description": "推送到群聊",
         "hint": "点击“添加更多”输入群号。",
