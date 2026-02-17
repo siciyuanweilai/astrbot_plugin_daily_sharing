@@ -419,38 +419,33 @@ class ContextService:
             
         return ""
 
-    async def _fetch_deep_history(self, bot, target_id: int, is_group: bool, hours: int = 4, max_count: int = 100) -> List[Dict]:
-        """
-        深度分页获取历史
-        """
+    async def _fetch_deep_history(self, bot, target_id: int, is_group: bool, hours: int = 24, max_count: int = 100) -> List[Dict]:
+        """深度回溯获取更早的聊天历史记录"""
         all_messages = []
-        target_seq = 0 
-        cutoff_time = time.time() - (hours * 3600)
-        
-        # 限制轮数
-        # 增加到 30 轮，确保在 max_count 很大时也能跑完（假设每轮获取 20-50 条）
-        max_rounds = 30 
+        seen_ids = set()
+        per_page = min(max_count + 20, 100)
+        cursor_seq = 0
+        cutoff_time = time.time() - (max(hours, 24) * 3600)
+        max_rounds = 20
         
         action = "get_group_msg_history" if is_group else "get_friend_msg_history"
         id_key = "group_id" if is_group else "user_id"
 
-        for _ in range(max_rounds):
+        for round_idx in range(max_rounds):
             if len(all_messages) >= max_count:
                 break
-                
+            
             try:
-                # 动态计算本次请求数量
-                remaining = max_count - len(all_messages)
-                req_count = min(remaining, 50)
-                req_count = max(req_count, 20)
-                
+                if round_idx > 0:
+                    await asyncio.sleep(0.5)
+
                 params = {
                     id_key: target_id,
-                    "count": req_count, 
+                    "count": per_page
                 }
-                if target_seq > 0:
-                    params["message_seq"] = target_seq
-                
+                if cursor_seq > 0:
+                    params["message_seq"] = cursor_seq
+
                 resp = await bot.api.call_action(action, **params)
                 
                 if isinstance(resp, dict):
@@ -463,42 +458,62 @@ class ContextService:
                 if not batch_msgs:
                     break
 
-                oldest_in_batch = batch_msgs[0]
-                current_oldest_time = oldest_in_batch.get("time", 0)
-                target_seq = oldest_in_batch.get("message_seq")
+                batch_seqs = []
+                # 记录本轮是否添加了新消息
+                added_count = 0 
                 
-                # 添加到总列表
-                all_messages.extend(batch_msgs)
-                
-                # 时间判断
-                if current_oldest_time < cutoff_time:
-                    break
-                
-                # 安全检查：如果 target_seq 为空或为0，防止死循环
-                if not target_seq:
-                    break
+                for msg in batch_msgs:
+                    # 1. 收集 SEQ (优先用 message_seq，没有则用 message_id)
+                    seq = msg.get("message_seq") or msg.get("message_id")
+                    if seq is not None:
+                        try: batch_seqs.append(int(seq))
+                        except: pass
+
+                    # 2. 去重入库
+                    mid = msg.get("message_id")
+                    if mid is None:
+                        mid = f"{msg.get('time')}-{msg.get('sender',{}).get('user_id')}"
                     
+                    mid_str = str(mid)
+                    
+                    if mid_str not in seen_ids:
+                        seen_ids.add(mid_str)
+                        msg_time = int(msg.get("time", 0))
+                        if msg_time >= cutoff_time:
+                            all_messages.append(msg)
+                            added_count += 1
+
+                # 3. 翻页逻辑
+                if not batch_seqs:
+                    break 
+                
+                min_seq_in_batch = min(batch_seqs)
+                
+                # 如果这一轮没有任何新消息入库（说明全是重复的），强制停止，防止死循环
+                if added_count == 0 and round_idx > 0:
+                    break
+                
+                # 如果游标没有向前推进，停止
+                if cursor_seq != 0 and min_seq_in_batch >= cursor_seq:
+                    break
+                
+                # 更新游标：直接使用存在的最小 seq，允许下一页有一条重叠
+                cursor_seq = min_seq_in_batch
+                
             except Exception as e:
-                logger.debug(f"[DailySharing] 获取聊天历史记录中断 ({'群' if is_group else '私'}): {e}")
+                # 即使使用了重叠策略，依然保留这个捕获作为最后一道防线
+                err_str = str(e)
+                if "不存在" in err_str or getattr(e, 'retcode', 0) == 1200:
+                    logger.debug(f"[DailySharing] 历史记录翻到底了: {err_str}")
+                else:
+                    logger.warning(f"[DailySharing] 获取历史中断: {e}")
                 break
         
-        # 去重
-        seen_ids = set()
-        unique_msgs = []
-        for msg in all_messages:
-            mid = msg.get("message_id")
-            if not mid:
-                mid = f"{msg.get('time')}-{msg.get('sender', {}).get('user_id')}"
-            
-            if mid not in seen_ids:
-                seen_ids.add(mid)
-                unique_msgs.append(msg)
+        # 结果排序与截取
+        all_messages.sort(key=lambda x: x.get("time", 0))
+        final_msgs = all_messages[-max_count:]
         
-        # 确保按时间正序排列 (旧 -> 新)
-        unique_msgs.sort(key=lambda x: x.get("time", 0))
-        
-        # 截取最近的 max_count 条
-        return unique_msgs[-max_count:]
+        return final_msgs
 
     async def get_history_data(self, target_umo: str, is_group: bool = None) -> Dict[str, Any]:
         """
@@ -536,7 +551,6 @@ class ContextService:
 
             try:
                 if enable_deep:
-                    # === 深度模式 (通用) ===
                     raw_msgs = await self._fetch_deep_history(
                         bot, 
                         int(real_id), 

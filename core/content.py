@@ -1,5 +1,6 @@
 import random
 import json
+import json
 import os
 import re
 import aiofiles
@@ -8,7 +9,7 @@ from functools import partial
 from datetime import datetime
 from typing import Optional, Tuple, List, Dict
 from astrbot.api import logger
-from ..config import SharingType, TimePeriod
+from ..config import SharingType, TimePeriod, DEFAULT_KNOWLEDGE_CATS, DEFAULT_REC_CATS
 
 # 新闻源配置 
 NEWS_SOURCE_MAP = {
@@ -22,34 +23,6 @@ NEWS_SOURCE_MAP = {
     "tencent": {"name": "腾讯热搜", "icon": "🐧"},
 }
 
-# 知识库细分
-KNOWLEDGE_CATS = {
-    "有趣的冷知识": ["动物行为", "人体奥秘", "地理奇观", "历史误区", "语言文字", "植物智慧", "海洋生物", "昆虫视界", "真菌世界", "人体极限"],
-    "生活小技巧": ["收纳整理", "厨房妙招", "数码技巧", "省钱攻略", "应急处理", "衣物护理", "家居清洁", "园艺入门", "旅行打包", "急救常识"],
-    "健康小常识": ["睡眠科学", "饮食营养", "运动误区", "心理健康", "护眼护肤", "牙齿护理", "脱发自救", "饮水科学", "姿势矫正", "抗衰老"],
-    "历史小故事": ["古代发明", "名人轶事", "文明起源", "战争细节", "文物故事", "丝绸之路", "大航海时代", "工业革命", "文艺复兴", "古代货币"],
-    "科学小发现": ["天文宇宙", "平行宇宙", "生物进化", "未来科技", "AI发展", "材料科学", "气象奥秘", "深海探测", "脑科学", "基因工程"],
-    "心理学知识": ["认知偏差", "社交心理", "情绪管理", "微表情", "行为经济学", "人格类型", "梦境解析", "记忆规律", "说服技巧", "色彩心理"],
-    "艺术小百科": ["名画赏析", "建筑风格", "设计美学", "色彩搭配", "流派演变", "博物馆巡礼", "传统工艺", "摄影构图", "书法篆刻", "音乐理论"],
-    "商业冷思维": ["营销陷阱", "品牌故事", "经济学原理", "消费心理", "投资误区", "商业模式", "广告玄机", "博弈论", "富人思维", "独角兽兴衰"],
-    "哲学与逻辑": ["著名悖论", "逻辑谬误", "思维模型", "存在主义", "伦理难题", "批判性思维", "奥卡姆剃刀", "墨菲定律", "斯多葛学派", "思想实验"],
-    "职场进化论": ["高效办公", "沟通话术", "时间管理", "汇报技巧", "向上管理", "面试心理", "团队协作", "摸鱼哲学", "领导力", "职业规划"]
-}
-
-# 推荐库细分
-REC_CATS = {
-    "书籍": ["悬疑推理", "当代文学", "历史传记", "科普新知", "商业思维", "治愈系绘本", "科幻神作", "哲学入门", "古典诗词", "艺术图鉴"],
-    "电影": ["高分冷门", "烧脑科幻", "经典黑白", "是枝裕和风", "赛博朋克", "奥斯卡遗珠", "纪录片", "励志传记", "暴力美学", "黑色幽默"],
-    "音乐": ["新世纪音乐", "治愈系钢琴", "氛围电子", "华语流行", "梦幻流行", "影视原声", "自然白噪音", "爵士蓝调", "摇滚精神", "民谣故事"],
-    "动漫": ["治愈日常", "硬核科幻", "热血运动", "悬疑智斗", "吉卜力风", "奇幻史诗", "冷门佳作", "机甲浪漫", "异世界冒险", "推理侦探"],
-    "美食": ["地方特色小吃", "创意懒人菜", "季节限定", "深夜治愈美食", "传统糕点", "异国风味", "烘焙甜点", "咖啡茶饮", "海鲜料理", "面食文化"],
-    "游戏": ["独立神作", "治愈解谜", "剧情向", "像素风", "肉鸽Like", "模拟经营", "开放世界", "恐怖游戏", "复古怀旧", "派对游戏"],
-    "剧集": ["英美神剧", "悬疑破案", "高分韩剧", "下饭情景剧", "职场爽剧", "历史正剧", "日式律政", "迷你剧", "真人秀", "讽刺喜剧"],
-    "播客": ["怪诞故事", "商业内幕", "历史闲聊", "科技前沿", "情感治愈", "真实罪案", "文化对谈", "读书分享", "英语听力", "助眠ASMR"],
-    "好物": ["桌面美学", "创意文具", "数码配件", "居家神器", "露营装备", "解压玩具", "咖啡器具", "极简收纳", "黑科技", "手工DIY"],
-    "旅行": ["避世古镇", "赛博城市", "海岛度假", "徒步路线", "博物馆", "自驾公路", "露营圣地", "建筑打卡", "云旅游", "特色民宿"]
-}
-
 class ContentService:
     def __init__(self, config: Dict, llm_func, context, db_manager, news_service=None):
         """
@@ -61,12 +34,45 @@ class ContentService:
         self.db = db_manager 
         self.news_service = news_service
         
+        # 从配置读取内容库
+        self.content_lib_conf = self.config.get("content_library", {})
+        # 读取知识库
+        raw_knowledge = self.content_lib_conf.get("knowledge_cats", DEFAULT_KNOWLEDGE_CATS)
+        if not raw_knowledge: raw_knowledge = DEFAULT_KNOWLEDGE_CATS
+        self.knowledge_cats = self._parse_str_list_to_dict(raw_knowledge)
+        # 读取推荐库
+        raw_rec = self.content_lib_conf.get("rec_cats", DEFAULT_REC_CATS)
+        if not raw_rec: raw_rec = DEFAULT_REC_CATS
+        self.rec_cats = self._parse_str_list_to_dict(raw_rec)
+        
         self.basic_conf = self.config.get("basic_conf", {})
         self.dedup_days = int(self.basic_conf.get("dedup_days_limit", 60))
         
         self.news_conf = self.config.get("news_conf", {})
         self.llm_conf = self.config.get("llm_conf", {})
         self.context_conf = self.config.get("context_conf", {})
+
+    def _parse_str_list_to_dict(self, data_list: List[str]) -> Dict[str, List[str]]:
+        """
+        将配置中的 List[str] 转换为 Dict[str, List[str]]
+        格式要求: "CategoryName: Tag1, Tag2, Tag3"
+        支持中文冒号和英文冒号，支持中文逗号和英文逗号
+        """
+        result = {}
+        if isinstance(data_list, list):
+            for item in data_list:
+                if isinstance(item, str):
+                    # 1. 统一冒号
+                    item = item.replace("：", ":")
+                    if ":" in item:
+                        name, tags_str = item.split(":", 1)
+                        name = name.strip()
+                        if name and tags_str:
+                            # 2. 统一逗号并分割标签
+                            tags = [t.strip() for t in tags_str.replace("，", ",").split(",") if t.strip()]
+                            if tags:
+                                result[name] = tags
+        return result
 
     async def generate(self, stype: SharingType, period: TimePeriod, 
                       target_id: str, is_group: bool, 
@@ -117,7 +123,7 @@ class ContentService:
         """
         选题 Agent：专门负责从给定的类别中，结合历史记录，避坑并选出一个有趣的、不重复的话题/作品名。
         """
-        is_rec = category_type in REC_CATS
+        is_rec = category_type in self.rec_cats
         db_category = "rec" if is_rec else "knowledge"
         
         # 获取最近 N 天使用过的话题
@@ -235,9 +241,9 @@ class ContentService:
 【用户信息】
 对方昵称：{nickname}
 【重要交互逻辑】
-1. **昵称称呼**：你可以自然地使用“{nickname}”称呼对方。
-2. **日程关联检测**：请仔细检查你的【生活日程】。如果日程中出现了“{nickname}”这个名字（或同音/包含关系）：
-   - **必须**将文案转换为“和你一起”的语气。
+1. 昵称称呼：你可以自然地使用“{nickname}”称呼对方。
+2. 日程关联检测：请仔细检查你的【生活日程】。如果日程中出现了“{nickname}”这个名字（或同音/包含关系）：
+   - 必须将文案转换为“和你一起”的语气。
    - 错误示例：日程说“和{nickname}逛街”，文案写“今天我要和{nickname}去逛街”。（这是把对方当第三人称）
    - 正确示例：日程说“和{nickname}逛街”，文案写“今天终于可以和你一起逛街啦，好期待！”。（这是对当事人说话）
 """
@@ -364,26 +370,26 @@ class ContentService:
         if is_group:
             resonance_guide = f"""
 【群聊共鸣策略 - 日程中的"治愈微光"】
-请拒绝机械的时间报时（如"早上了"、"晚上了"），而是**捕捉你当前生活状态中那些微小但能抚慰人心的瞬间**。
+请拒绝机械的时间报时（如"早上了"、"晚上了"），而是捕捉你当前生活状态中那些微小但能抚慰人心的瞬间。
 请根据你的【生活状态】选择对应策略：
 
-1. **若你当前【忙碌/工作/学习/攻坚】**：
-   - **寻找"缝隙中的安宁"**：不要单纯宣泄压力，而是分享你在忙乱中如何自我安抚。
-   - *示例*：忙得焦头烂额时偷喝的一口冰美式、解决难题后那一秒的长舒一口气、或是告诉大家“虽然很累，但我们在一点点变好”。
-   - *治愈目标*：给同样在奋斗的群友一种**“并肩作战的陪伴感”**，让他们觉得焦虑是被接纳的。
+1. 若你当前【忙碌/工作/学习/攻坚】：
+   - 寻找"缝隙中的安宁"：不要单纯宣泄压力，而是分享你在忙乱中如何自我安抚。
+   - 示例：忙得焦头烂额时偷喝的一口冰美式、解决难题后那一秒的长舒一口气、或是告诉大家“虽然很累，但我们在一点点变好”。
+   - 治愈目标：给同样在奋斗的群友一种“并肩作战的陪伴感”，让他们觉得焦虑是被接纳的。
 
-2. **若你当前【休闲/摸鱼/饮食/宅家】**：
-   - **传递"允许暂停的松弛感"**：描述感官上的舒适细节，传递慢下来的权利。
-   - *示例*：窗帘透进来的光影、食物冒出的热气、被窝里安全的包裹感、或者是“就在此刻，世界与我无关”的窃喜。
-   - *治愈目标*：成为群里的**“精神充电站”**，让紧绷的人看到你的文字能感到一丝放松。
+2. 若你当前【休闲/摸鱼/饮食/宅家】：
+   - 传递"允许暂停的松弛感"：描述感官上的舒适细节，传递慢下来的权利。
+   - 示例：窗帘透进来的光影、食物冒出的热气、被窝里安全的包裹感、或者是“就在此刻，世界与我无关”的窃喜。
+   - 治愈目标：成为群里的“精神充电站”，让紧绷的人看到你的文字能感到一丝放松。
 
-3. **若你当前【运动/外出/通勤/散步】**：
-   - **捕捉"世界的生命力"**：跳出赶路的焦躁，分享你眼中的风景和生机。
-   - *示例*：耳机里的BGM和步伐踩点的瞬间、路边顽强开出的小花、晚霞落在建筑上的温柔、甚至是风吹过脸颊的真实触感。
-   - *治愈目标*：为群聊打开一扇窗，带去一点**“户外的氧气”**和对生活的热爱。
+3. 若你当前【运动/外出/通勤/散步】：
+   - 捕捉"世界的生命力"：跳出赶路的焦躁，分享你眼中的风景和生机。
+   - 示例：耳机里的BGM和步伐踩点的瞬间、路边顽强开出的小花、晚霞落在建筑上的温柔、甚至是风吹过脸颊的真实触感。
+   - 治愈目标：为群聊打开一扇窗，带去一点“户外的氧气”和对生活的热爱。
 
-**核心要求**：
-情绪必须**源于你正在做的事**，但视角要**温柔且有力量**。不要说教，而是通过分享你的“小确幸”，治愈屏幕对面的人。
+核心要求：
+情绪必须源于你正在做的事，但视角要温柔且有力量。不要说教，而是通过分享你的“小确幸”，治愈屏幕对面的人。
 """
         else:
             resonance_guide = "【私聊策略】像对亲密好友一样，分享一点私人的、细腻的小情绪，或者一个小秘密。"
@@ -471,7 +477,7 @@ class ContentService:
         address_rule = ""
         user_info_prompt = ""
         if not is_group:
-            address_rule = "【私聊模式】不要说'大家'、'你们'。请假装只分享给**你对面这一个人**看。"
+            address_rule = "【私聊模式】不要说'大家'、'你们'。请假装只分享给你对面这一个人看。"
             user_info_prompt = self._build_user_prompt(nickname)
 
         # 针对不同模式的场景融合指令
@@ -483,7 +489,7 @@ class ContentService:
                  context_instruction = "- 场景参考：请忽略环境干扰，专注于新闻本身。简单带过你的状态即可。"
         else:
             context_instruction = """
-- **场景合理化（重要）**：
+- 场景合理化（重要）：
   必须基于上方提供的【真实生活状态】来设定你“在哪里看新闻”。
   - 严禁违背日程：如果日程是“外出”，必须描述为在途中、躲雨时或到达目的地后看的，严禁说“在被窝里”或“刚醒”。
   - 即使天气不好，也要按照日程设定的“外出人设”来发言（例如：“虽然下雨，但在外面躲雨的时候看到了这个...”）。
@@ -551,8 +557,8 @@ class ContentService:
         allow_detail = self.context_conf.get("group_share_schedule", False)
         
         # 随机选择大类和子类
-        main_cat = random.choice(list(KNOWLEDGE_CATS.keys()))
-        sub_cat = random.choice(KNOWLEDGE_CATS[main_cat])
+        main_cat = random.choice(list(self.knowledge_cats.keys()))
+        sub_cat = random.choice(self.knowledge_cats[main_cat])
         target_id = ctx['target_id'] 
         
         logger.info(f"[内容服务] 知识方向: {main_cat} - {sub_cat}")
@@ -591,10 +597,10 @@ class ContentService:
              if allow_detail:
                  context_instruction = "- 场景处理：可以结合你当下的真实状态（如工作中、休息中）来引出这个知识点，让分享更有人情味。"
              else:
-                 context_instruction = "- 场景处理：**请完全忽略天气**，除非知识点与天气直接相关。如果状态忙碌，可以说“忙里偷闲推荐个”，否则直接分享知识即可。"
+                 context_instruction = "- 场景处理：请完全忽略天气，除非知识点与天气直接相关。如果状态忙碌，可以说“忙里偷闲推荐个”，否则直接分享知识即可。"
         else:
              context_instruction = """
-- **关联逻辑（重要）**：
+- 关联逻辑（重要）：
   1. 关于天气：请忽略天气信息，除非这个知识点和天气直接相关。
   2. 关于状态：请尝试将知识点与你【当前正在做的事】联系起来。
      - 正在做饭 -> 分享生活小技巧
@@ -672,8 +678,8 @@ class ContentService:
         allow_detail = self.context_conf.get("group_share_schedule", False)
         
         # 随机选择大类和子类
-        rec_type = random.choice(list(REC_CATS.keys()))
-        sub_style = random.choice(REC_CATS[rec_type])
+        rec_type = random.choice(list(self.rec_cats.keys()))
+        sub_style = random.choice(self.rec_cats[rec_type])
         
         target_id = ctx['target_id'] 
         
@@ -717,7 +723,7 @@ class ContentService:
                  context_instruction = "- 忽略天气，除非它能极大烘托氛围（如下雨推爵士）。重点关注内容本身。如果状态忙碌，可以说“忙里偷闲推荐个”，状态休闲可以说“打发时间”。"
         else:
              context_instruction = """
-- **场景筛选（重要）**：
+- 场景筛选（重要）：
   1. 关于天气：只有当天气能完美烘托作品氛围时才提，否则请完全忽略天气。
   2. 关于状态：请尝试将推荐理由与你【当前正在做的事】联系起来。
      - 刚忙完工作 -> 推荐轻松的剧/音乐来回血

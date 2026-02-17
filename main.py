@@ -48,10 +48,11 @@ SOURCE_CN_MAP.update({
     "抖音": "douyin", 
     "头条": "toutiao", 
     "百度": "baidu", 
-    "腾讯": "tencent"
+    "腾讯": "tencent",
+    "夸克": "quark"
 })
 
-@register("daily_sharing", "四次元未来", "定时主动分享所见所闻", "4.5.0")
+@register("daily_sharing", "四次元未来", "定时主动分享所见所闻", "4.6.0")
 class DailySharingPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -219,7 +220,7 @@ class DailySharingPlugin(Star):
 
         Args:
             share_type(string): 分享类型。支持：'问候', '新闻'(指互联网热搜), '心情', '知识', '推荐', '60s新闻'(指每日简报图), 'AI资讯'。
-            source(string): 仅当 share_type 为'新闻'时有效。指定新闻平台。支持：微博, 知乎, B站, 抖音, 头条, 百度, 腾讯, 小红书。如果不指定则留空。
+            source(string): 仅当 share_type 为'新闻'时有效。指定新闻平台。支持：微博, 知乎, B站, 抖音, 头条, 百度, 腾讯, 小红书, 夸克。如果不指定则留空。
             get_image(boolean): 仅当 share_type 为'新闻'时有效。默认为 True (优先分享热搜长图)。只有当用户明确要求“文字版”、“文本”、“不要图片”或“写一段新闻”时，才将其设为 False。
             need_image(boolean): 是否需要AI为这段文案配图。默认为 False。仅当用户明确说“配图”、“带图”、“发张图”时，才将其设为 True。
             need_video(boolean): 是否需要AI为这段文案生成视频。默认为 False。仅当用户明确说“视频”、“动态图”、“动起来”时，才将其设为 True。

@@ -274,7 +274,15 @@ class NewsService:
             
             # 热度提取 (兼容多种字段名)
             # 增加了 'hot_value' 适配头条
-            hot = i.get("hot") or i.get("hotValue") or i.get("hot_value") or i.get("heat") or i.get("hotScore") or ""
+            hot = (
+                i.get("hot") or 
+                i.get("hotValue") or 
+                i.get("hot_value") or 
+                i.get("heat") or 
+                i.get("hotScore") or 
+                i.get("like_count") or 
+                ""
+            )
             
             # URL 提取 (兼容多种字段名)
             url_link = i.get("url") or i.get("link") or i.get("mobileUrl") or ""
@@ -356,3 +364,4 @@ class NewsService:
             logger.error("[新闻] 未配置柠柚API密钥")
             return None
         return f"https://api.nycnm.cn/API/aizixun.php?format=image&apikey={key}"
+        
