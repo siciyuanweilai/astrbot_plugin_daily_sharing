@@ -500,7 +500,7 @@
         "description": "LLM提供商",
         "type": "string",
         "default": "",
-        "hint": "使用LLM生成内容！不选择将自动使用默认的第一个聊天模型",
+        "hint": "使用LLM生成内容，不选择或者指定LLM失败后自动降级使用默认的第一个模型",
         "_special": "select_provider"
       },
       "llm_timeout": {

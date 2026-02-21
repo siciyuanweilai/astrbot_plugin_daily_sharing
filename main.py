@@ -52,7 +52,7 @@ SOURCE_CN_MAP.update({
     "夸克": "quark"
 })
 
-@register("daily_sharing", "四次元未来", "定时主动分享所见所闻", "4.6.0")
+@register("daily_sharing", "四次元未来", "定时主动分享所见所闻", "4.6.1")
 class DailySharingPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -78,6 +78,9 @@ class DailySharingPlugin(Star):
         
         # 缓存 Adapter ID 
         self._cached_adapter_id = None 
+
+        # 临时降级缓存：一旦指定的模型坏了，立刻切到系统模型，不再反复撞墙
+        self._temp_fallback_provider = None
 
         # 任务追踪 (用于生命周期清理)
         self._bg_tasks = set()
@@ -443,37 +446,55 @@ class DailySharingPlugin(Star):
             await event.send(event.plain_result(f"执行出错: {str(e)}"))
 
     async def _call_llm_wrapper(self, prompt: str, system_prompt: str = None, timeout: int = 60, max_retries: int = 2) -> Optional[str]:
-        """LLM 调用包装器"""
+        """LLM 调用包装器（支持失败重试与自动降级）"""
         if self._is_terminated: return None
         
-        provider_id = self.llm_conf.get("llm_provider_id", "")
-        
-        # 自动探测 Provider 
-        if not provider_id:
+        def _get_system_default_provider() -> str:
+            # 如果没指定，默认使用第一个模型
             try:
                 cfg = self.context.get_config()
                 if cfg:
-                    provider_id = cfg.get("provider_settings", {}).get("default_provider_id", "")
-                    if not provider_id:
-                        for p in cfg.get("provider", []):
-                            if p.get("enable", False) and "chat" in p.get("provider_type", "chat"):
-                                provider_id = p.get("id")
-                                break
+                    pid = cfg.get("provider_settings", {}).get("default_provider_id", "")
+                    if pid: return pid
+                    for p in cfg.get("provider", []):
+                        if p.get("enable", False) and "chat" in p.get("provider_type", "chat"):
+                            return p.get("id")
             except Exception:
                 pass
+            return ""
+
+        user_provider_id = self.llm_conf.get("llm_provider_id", "")
+
+        # 如果存在临时降级缓存，说明指定的模型已经坏了，直接跳过它        
+        if self._temp_fallback_provider:
+            user_provider_id = self._temp_fallback_provider
+            
+        current_provider_id = user_provider_id if user_provider_id else _get_system_default_provider()
 
         config_timeout = self.llm_conf.get("llm_timeout", 60)
         actual_timeout = max(timeout, config_timeout)
 
         for attempt in range(max_retries + 1):
             if self._is_terminated: return None
+            
+            # 降级逻辑 1
+            is_last_attempt = (attempt == max_retries)
+            if is_last_attempt and attempt > 0 and user_provider_id and current_provider_id == user_provider_id:
+                default_pid = _get_system_default_provider()
+                if default_pid and default_pid != current_provider_id:
+                    logger.info(f"[DailySharing] 指定 LLM 已达到重试次数，降级使用默认的第一个模型({default_pid})...")
+                    current_provider_id = default_pid
+                    self._temp_fallback_provider = default_pid 
+
             try:
+                kwargs = {"prompt": prompt}
+                if system_prompt is not None and system_prompt != "":
+                    kwargs["system_prompt"] = system_prompt
+                if current_provider_id:
+                    kwargs["chat_provider_id"] = current_provider_id
+
                 resp = await asyncio.wait_for(
-                    self.context.llm_generate(
-                        prompt=prompt, 
-                        system_prompt=system_prompt, 
-                        chat_provider_id=provider_id if provider_id else None
-                    ),
+                    self.context.llm_generate(**kwargs),
                     timeout=actual_timeout
                 )
                 
@@ -483,7 +504,7 @@ class DailySharingPlugin(Star):
                         return result
                     
             except asyncio.TimeoutError:
-                logger.warning(f"[DailySharing] LLM超时 ({actual_timeout}s) (尝试 {attempt+1}/{max_retries+1})")
+                logger.warning(f"[DailySharing] LLM 超时 ({actual_timeout}s) (尝试 {attempt+1}/{max_retries+1})")
                 if attempt < max_retries:
                     await asyncio.sleep(2)
                     continue
@@ -493,9 +514,21 @@ class DailySharingPlugin(Star):
                     logger.error(f"[DailySharing] 内容被模型安全策略拦截 (敏感词): {prompt[:50]}...")
                     return None 
 
-                if "401" in str(e):
+                if "401" in err_str:
                     logger.error(f"[DailySharing] LLM 失败。请检查 API Key。")
-                    return None
+                    # 降级逻辑 2                    
+                    if attempt < max_retries and user_provider_id and current_provider_id == user_provider_id:
+                        default_pid = _get_system_default_provider()
+                        if default_pid and default_pid != current_provider_id:
+                            logger.info(f"[DailySharing] 遇到 401 错误，降级使用默认的第一个模型({default_pid})...")
+                            current_provider_id = default_pid
+                            self._temp_fallback_provider = default_pid 
+                            await asyncio.sleep(2)
+                            continue
+                        else:
+                            return None
+                    else:
+                        return None
                 
                 logger.error(f"[DailySharing] LLM异常 (尝试 {attempt+1}): {e}")
                 if attempt < max_retries:
