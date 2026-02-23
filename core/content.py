@@ -9,19 +9,7 @@ from functools import partial
 from datetime import datetime
 from typing import Optional, Tuple, List, Dict
 from astrbot.api import logger
-from ..config import SharingType, TimePeriod, DEFAULT_KNOWLEDGE_CATS, DEFAULT_REC_CATS
-
-# 新闻源配置 
-NEWS_SOURCE_MAP = {
-    "zhihu": {"name": "知乎热榜", "icon": "📚"},
-    "weibo": {"name": "微博热搜", "icon": "🔥"},
-    "bili": {"name": "B站热搜", "icon": "📺"},
-    "xiaohongshu": {"name": "小红书热搜", "icon": "📕"},
-    "douyin": {"name": "抖音热搜", "icon": "🎵"},
-    "toutiao": {"name": "头条热搜", "icon": "🗞️"},
-    "baidu": {"name": "百度热搜", "icon": "🔍"},
-    "tencent": {"name": "腾讯热搜", "icon": "🐧"},
-}
+from ..config import SharingType, TimePeriod, DEFAULT_KNOWLEDGE_CATS, DEFAULT_REC_CATS, NEWS_SOURCE_MAP
 
 class ContentService:
     def __init__(self, config: Dict, llm_func, context, db_manager, news_service=None):
