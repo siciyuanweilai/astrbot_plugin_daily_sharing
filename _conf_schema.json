@@ -411,8 +411,7 @@
         "description": "允许配图的类型",
         "type": "list",
         "items": {
-          "type": "string",
-          "options": ["greeting", "news", "mood", "knowledge", "recommendation"]
+          "type": "string"
         },
         "default": ["greeting", "mood", "knowledge", "recommendation"],
         "hint": "仅当分享类型在列表中时，才会生成图片。"
@@ -427,8 +426,7 @@
         "description": "允许视频的类型",
         "type": "list",
         "items": {
-          "type": "string",
-          "options": ["greeting", "news", "mood", "knowledge", "recommendation"]
+          "type": "string"
         },
         "default": ["greeting", "mood"],
         "hint": "仅当分享类型在列表中时，才会生成视频。"
@@ -517,10 +515,19 @@
         "hint": "Cron表达式，例如 0 20 * * * 表示每天晚上8点触发"
       },
       "qzone_enable_image": {
-        "description": "为说说生成配图",
+        "description": "启用说说生成配图",
         "type": "bool",
         "default": false,
         "hint": "开启后，将根据说说文案生成配图。需在【🎨 配图与视频设置】中开启生成配图总开关。"
+      },
+      "qzone_image_enabled_types": {
+        "description": "允许说说配图的类型",
+        "type": "list",
+        "items": {
+          "type": "string"
+        },
+        "default": ["greeting", "mood"],
+        "hint": "仅当说说分享类型在列表中时，才会生成图片"
       },
       "qzone_sharing_type": {
         "description": "QQ空间分享模式",

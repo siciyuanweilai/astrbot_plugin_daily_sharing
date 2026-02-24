@@ -117,6 +117,24 @@ class DailySharingPlugin(Star):
         self._bg_tasks.add(bot_init_task)
         bot_init_task.add_done_callback(self._bg_tasks.discard)
 
+    def _inject_qzone_client(self, qzone_plugin):
+        """尝试为 QQ空间 插件注入 CQHttp 客户端，解决自动任务时没有 client 的报错"""
+        try:
+            if qzone_plugin and hasattr(qzone_plugin, "cfg") and not qzone_plugin.cfg.client:
+                if self.ctx_service.bot_map:
+                    # 优先寻找 aiocqhttp 适配器
+                    aiocqhttp_bot = None
+                    for pid, bot in self.ctx_service.bot_map.items():
+                        if "aiocqhttp" in pid.lower():
+                            aiocqhttp_bot = bot
+                            break
+                    bot_client = aiocqhttp_bot or list(self.ctx_service.bot_map.values())[0]
+                    if bot_client:
+                        qzone_plugin.cfg.client = bot_client
+                        logger.debug(f"[DailySharing] QQ空间插件注入客户端成功！")
+        except Exception as e:
+            logger.warning(f"[DailySharing] QQ空间插件注入客户端失败: {e}")        
+
     async def initialize(self):
         """初始化插件"""
         task = asyncio.create_task(self._delayed_init())
@@ -171,9 +189,9 @@ class DailySharingPlugin(Star):
             cron = self.basic_conf.get("sharing_cron", "0 8,20 * * *")
             self._setup_cron(cron)
             actual_cron = CRON_TEMPLATES.get(cron, cron)
-            logger.info(f"[DailySharing] 自动分享定时任务已启动 ({cron})")
+            logger.debug(f"[DailySharing] 分享内容定时任务已启动 ({cron})")
         else:
-            logger.info("[DailySharing] 自动分享已禁用")
+            logger.debug("[DailySharing] 分享内容已禁用")
 
         # 2. 独立早报任务 (60s + AI) - 共用一个定时器
         enable_60s = self.extra_shares_conf.get("enable_60s_news", False)
@@ -183,14 +201,14 @@ class DailySharingPlugin(Star):
         if enable_60s or enable_ai:
             cron_briefing = self.extra_shares_conf.get("cron_briefing", "0 8 * * *")
             self._setup_cron_job_custom("share_briefing", cron_briefing, self._task_wrapper_briefing)
-            logger.info(f"[DailySharing] 早报定时任务已启动 ({cron_briefing}) -> 60s:{enable_60s}, AI:{enable_ai}")
+            logger.debug(f"[DailySharing] 早报定时任务已启动 ({cron_briefing})")
 
         # 3. QQ空间独立定时任务
         if self.qzone_conf.get("enable_qzone", False):
             q_cron = self.qzone_conf.get("qzone_cron", "0 20 * * *")
             actual_q_cron = CRON_TEMPLATES.get(q_cron, q_cron)
             self._setup_cron_job_custom("qzone_share", actual_q_cron, self._task_wrapper_qzone)
-            logger.info(f"[DailySharing] QQ空间定时任务已启动 ({actual_q_cron})")
+            logger.debug(f"[DailySharing] QQ空间定时任务已启动 ({actual_q_cron})")
 
         # 启动调度器 
         if not self._is_terminated and not self.scheduler.running:
@@ -683,6 +701,7 @@ class DailySharingPlugin(Star):
         if specific_target is None and self.extra_shares_conf.get("sync_briefing_to_qzone", False):
             qzone_plugin = self.ctx_service._find_plugin("qzone")
             if qzone_plugin and hasattr(qzone_plugin, "service"):
+                self._inject_qzone_client(qzone_plugin)
                 logger.info("[DailySharing] 分享早报到QQ空间已开启...")
                 for name, url in images_to_send:
                     try:
@@ -914,7 +933,7 @@ class DailySharingPlugin(Star):
                             if stype.value in video_allowed:
                                 video_url = await self.image_service.generate_video_from_image(img_path, content)
                     else:
-                         logger.info(f"[DailySharing] 当前类型 {stype.value} 不在配图允许列表，跳过作图。")
+                         logger.info(f"[DailySharing] 当前类型 {stype.value} 不在配图允许列表，跳过配图。")
 
                 # 2. 语音生成逻辑
                 audio_path = None
@@ -926,7 +945,7 @@ class DailySharingPlugin(Star):
                         # 传入 stype 和 period 以确定情感
                         audio_path = await self.ctx_service.text_to_speech(content, uid, stype, period)
                     else:
-                        logger.info(f"[DailySharing] 当前类型 {stype.value} 不在语音允许列表，跳过 TTS。")
+                        logger.info(f"[DailySharing] 当前类型 {stype.value} 不在语音允许列表，跳过语音。")
 
                 # 分享内容
                 await self._send(uid, content, img_path, audio_path, video_url)
@@ -1159,6 +1178,7 @@ class DailySharingPlugin(Star):
                 logger.warning("[DailySharing] QQ空间任务触发，但未检测到 astrbot_plugin_qzone 插件")
                 return
 
+            self._inject_qzone_client(qzone_plugin)
             period = self._get_curr_period()
             # 注意这里传入 is_qzone=True，使用专属序列
             stype = force_type if force_type else await self._decide_type_with_state(period, is_qzone=True) 
@@ -1173,7 +1193,7 @@ class DailySharingPlugin(Star):
                 actual_source = news_source if news_source else self.news_service.select_news_source()
                 news_data = await self.news_service.get_hot_news(actual_source)
 
-            # 纯净的 QZone 提示词指令
+            # 屏蔽历史记录，使用纯净的提示词让LLM写说说
             qzone_life_prompt = self.ctx_service.format_life_context(life_ctx, stype, False, None)
             qzone_life_prompt += (
                 "\n\n【最高优先级覆盖指令】\n"
@@ -1196,21 +1216,30 @@ class DailySharingPlugin(Star):
             # 清洗情感标签
             clean_qzone_content = re.sub(r'\$\$(?:EMO:)?(?:happy|sad|angry|neutral|surprise)\$\$', '', qzone_content, flags=re.IGNORECASE).strip()
 
-            # 处理配图逻辑 (完全独立生图)
+            # 处理配图逻辑
             qzone_images = []
             target_local_img = None
             
             enable_img_qzone = self.qzone_conf.get("qzone_enable_image", False)
             enable_img_global = self.image_conf.get("enable_ai_image", False)
+            
+            # 获取QQ空间配图允许类型，如果没配置，默认复用群聊分享的配置
+            qzone_img_allowed_types = self.qzone_conf.get(
+                "qzone_image_enabled_types", 
+                self.image_conf.get("image_enabled_types", ["greeting", "mood", "knowledge", "recommendation"])
+            )
 
             if enable_img_qzone and enable_img_global:
-                logger.info("[DailySharing] 正在为QQ空间生成配图...")
-                try:
-                    new_img_path = await self.image_service.generate_image(clean_qzone_content, stype, life_ctx)
-                    if new_img_path:
-                        target_local_img = new_img_path
-                except Exception as e:
-                    logger.error(f"[DailySharing] QQ空间配图生成失败: {e}")
+                if stype.value in qzone_img_allowed_types:
+                    logger.info("[DailySharing] 正在为QQ空间生成配图...")
+                    try:
+                        new_img_path = await self.image_service.generate_image(clean_qzone_content, stype, life_ctx)
+                        if new_img_path:
+                            target_local_img = new_img_path
+                    except Exception as e:
+                        logger.error(f"[DailySharing] QQ空间配图生成失败: {e}")
+                else:
+                    logger.info(f"[DailySharing] 当前类型 {stype.value} 不在QQ空间配图允许列表，跳过配图。")
             
             # 如果是新闻类型，且没有开启画图，尝试贴热搜图
             if stype == SharingType.NEWS and not target_local_img:
@@ -1313,6 +1342,7 @@ class DailySharingPlugin(Star):
                 yield event.plain_result("正在分享每天60s读世界到QQ空间...")
                 qzone_plugin = self.ctx_service._find_plugin("qzone")
                 if qzone_plugin and hasattr(qzone_plugin, "service"):
+                    self._inject_qzone_client(qzone_plugin)
                     try:
                         await qzone_plugin.service.publish_post(text="【每天60秒读懂世界】", images=[url])
                         yield event.plain_result("每天60s读世界已成功分享到QQ空间！")
@@ -1342,6 +1372,7 @@ class DailySharingPlugin(Star):
                 yield event.plain_result("正在分享AI资讯快报到QQ空间...")
                 qzone_plugin = self.ctx_service._find_plugin("qzone")
                 if qzone_plugin and hasattr(qzone_plugin, "service"):
+                    self._inject_qzone_client(qzone_plugin)
                     try:
                         await qzone_plugin.service.publish_post(text="【AI资讯快报】", images=[url])
                         yield event.plain_result("AI资讯快报已成功分享到QQ空间！")
@@ -1428,9 +1459,10 @@ class DailySharingPlugin(Star):
                     img_url, src_name = self.news_service.get_hot_news_image_url(news_src)
                     
                     if is_qzone_target:
-                        yield event.plain_result(f"正在获取 [{src_name}] 图片并分享到QQ空间...")
+                        yield event.plain_result(f"正在获取[{src_name}]图片并分享到QQ空间...")
                         qzone_plugin = self.ctx_service._find_plugin("qzone")
                         if qzone_plugin and hasattr(qzone_plugin, "service"):
+                            self._inject_qzone_client(qzone_plugin)
                             try:
                                 await qzone_plugin.service.publish_post(text=f"【{src_name}】", images=[img_url])
                                 yield event.plain_result("QQ空间分享成功！")
