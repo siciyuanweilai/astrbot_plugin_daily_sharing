@@ -4,7 +4,7 @@
 
 **✨ 赋予你的 Bot “真实的生活感” —— 集成视觉、听觉、视频、记忆的全感官主动交互插件 ✨**
 
-[![Moe Counter](https://count.getloli.com/get/@DailySharing?theme=moebooru)](https://github.com/siciyuanweilai/astrbot_plugin_daily_sharing)
+[![Yousa Ling](https://count.getloli.com/get/@DailySharing?theme=yousa-ling)](https://github.com/siciyuanweilai/astrbot_plugin_daily_sharing)
 
 </div>
 
