@@ -68,8 +68,8 @@
 | **astrbot_plugin_life_scheduler<sup>url</sup> <sup>2</sup> [<sup>2</sup>](https://github.com/muyouzhi6/astrbot_plugin_life_scheduler)** | ⭐⭐⭐⭐⭐ | 提供虚拟生活、天气、穿搭 | 分享内容缺少生活细节，配图无法固定穿搭 |
 | **astrbot_plugin_gitee_aiimg<sup>url</sup> <sup>3</sup> [<sup>3</sup>](https://github.com/muyouzhi6/astrbot_plugin_gitee_aiimg)** | ⭐⭐⭐⭐⭐ | **提供生成图片及视频生成能力** | 无法发送配图，无法生成视频 |
 | **astrbot_plugin_qzone<sup>url</sup> <sup>4</sup> [<sup>4</sup>](https://github.com/Zhalslar/astrbot_plugin_qzone)** | ⭐⭐⭐⭐ | **提供分享QQ空间说说的能力** | 无法将分享内容、早报长图自动分享到QQ 空间 |
-| **astrbot_plugin_memos_integrator<sup>url</sup> <sup>4</sup> [<sup>4</sup>](https://github.com/zz6zz666/astrbot_plugin_memos_integrator)** | ⭐⭐⭐⭐ | 提供记忆存储与检索 | 无法引用历史话题，无法记录分享历史 |
-| **astrbot_plugin_tts_emotion_router<sup>url</sup> <sup>5</sup> [<sup>5</sup>](https://github.com/muyouzhi6/astrbot_plugin_tts_emotion_router)** | ⭐⭐⭐⭐ | 提供情感语音合成 | 无法发送语音消息 |
+| **astrbot_plugin_memos_integrator<sup>url</sup> <sup>5</sup> [<sup>4</sup>](https://github.com/zz6zz666/astrbot_plugin_memos_integrator)** | ⭐⭐⭐⭐ | 提供记忆存储与检索 | 无法引用历史话题，无法记录分享历史 |
+| **astrbot_plugin_tts_emotion_router<sup>url</sup> <sup>6</sup> [<sup>5</sup>](https://github.com/muyouzhi6/astrbot_plugin_tts_emotion_router)** | ⭐⭐⭐⭐ | 提供情感语音合成 | 无法发送语音消息 |
 
 ## ⚙️ 配置指南
 
@@ -87,7 +87,7 @@
 *   **image_conf -> separate_text_and_image**：开启后图文分开发送，更像真人。
 
 ### 3. 新闻源 (News)
-*   **nycnm_api_key**：**(重要)** 前往 柠柚 API <sup>url</sup> <sup>6</sup> [<sup>6</sup>](https://api.nycnm.cn/) 获取密钥。不填则无法获取真实热搜，仅能依靠 LLM 瞎编。
+*   **nycnm_api_key**：**(重要)** 前往 柠柚 API <sup>url</sup> <sup>7</sup> [<sup>6</sup>](https://api.nycnm.cn/) 获取密钥。不填则无法获取真实热搜，仅能依靠 LLM 瞎编。
 *   **news_random_mode**：推荐 `time_based`，启用上述的“时段偏好算法”。
 
 ### 4. 听觉 (TTS)
