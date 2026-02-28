@@ -52,7 +52,7 @@ SOURCE_CN_MAP.update({
     "夸克": "quark"
 })
 
-@register("daily_sharing", "四次元未来", "定时主动分享所见所闻", "4.7.1")
+@register("daily_sharing", "四次元未来", "定时主动分享所见所闻", "4.7.2")
 class DailySharingPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -417,7 +417,7 @@ class DailySharingPlugin(Star):
 
             # 如果用户要求发QQ空间文案说说
             if to_qzone:
-                await self._execute_qzone_share(force_type=target_type_enum, news_source=news_src_key)
+                await self._execute_qzone_share(force_type=target_type_enum, news_source=news_src_key, event=event)
                 return
 
             # 场景 B: 标准 LLM 生成流程
@@ -1221,7 +1221,7 @@ class DailySharingPlugin(Star):
         finally:
             self._bg_tasks.discard(task)
 
-    async def _execute_qzone_share(self, force_type: SharingType = None, news_source: str = None):
+    async def _execute_qzone_share(self, force_type: SharingType = None, news_source: str = None, event: AstrMessageEvent = None):
         """完全独立的 QQ 空间执行主流程"""
         if self._is_terminated: return
         
@@ -1229,6 +1229,8 @@ class DailySharingPlugin(Star):
             qzone_plugin = self.ctx_service._find_plugin("qzone")
             if not qzone_plugin or not hasattr(qzone_plugin, "service"):
                 logger.warning("[DailySharing] QQ空间任务触发，但未检测到 astrbot_plugin_qzone 插件")
+                if event:
+                    await event.send(event.plain_result("未检测到 astrbot_plugin_qzone 插件"))
                 return
 
             self._inject_qzone_client(qzone_plugin)
@@ -1264,6 +1266,8 @@ class DailySharingPlugin(Star):
             
             if not qzone_content:
                 logger.error("[DailySharing] QQ空间文案生成失败")
+                if event:
+                    await event.send(event.plain_result("QQ空间文案生成失败"))
                 return
 
             # 清洗情感标签
@@ -1344,13 +1348,33 @@ class DailySharingPlugin(Star):
                     success=True
                 )
                 
+                if event:
+                    try:
+                        text_chain = MessageChain().message(clean_qzone_content)
+                        await event.send(text_chain)
+                        
+                        if target_local_img:
+                            await asyncio.sleep(1.0) 
+                            img_chain = MessageChain()
+                            if target_local_img.startswith("http"):
+                                img_chain.url_image(target_local_img)
+                            else:
+                                img_chain.file_image(target_local_img)
+                            await event.send(img_chain)
+                    except Exception as e:
+                        logger.error(f"[DailySharing] 同步发送内容到会话失败: {e}")
+                
             finally:
                 if qzone_utils_mod:
                     qzone_utils_mod.download_file = orig_download_file
 
         except Exception as e:
             logger.error(f"[DailySharing] 生成并分享到QQ空间失败: {e}")
-
+            if event:
+                try:
+                    await event.send(event.plain_result(f"生成并分享到QQ空间失败: {e}"))
+                except:
+                    pass
 
     # ==================== 统一命令入口 ====================
     @filter.command("分享")
@@ -1474,7 +1498,7 @@ class DailySharingPlugin(Star):
         if arg in ["自动", "auto"]:
             if is_qzone_target:
                 yield event.plain_result("正在向QQ空间生成并分享内容(自动类型)...")
-                await self._execute_qzone_share(None)
+                await self._execute_qzone_share(None, event=event)
             else:
                 target_desc = "配置的所有群聊和私聊" if is_broadcast else "当前会话"
                 yield event.plain_result(f"正在向{target_desc}生成并分享内容(自动类型)...")
@@ -1534,7 +1558,7 @@ class DailySharingPlugin(Star):
                 
                 if is_qzone_target:
                     yield event.plain_result(f"正在向QQ空间生成并分享{type_cn}{src_info} ...")
-                    await self._execute_qzone_share(force_type, news_source=news_src)
+                    await self._execute_qzone_share(force_type, news_source=news_src, event=event)
                 else:
                     target_desc = "配置的所有群聊和私聊" if is_broadcast else "当前会话"
                     yield event.plain_result(f"正在向{target_desc}生成并分享{type_cn}{src_info} ...")
@@ -1543,7 +1567,7 @@ class DailySharingPlugin(Star):
                 
             if is_qzone_target:
                 yield event.plain_result(f"正在向QQ空间生成并分享{type_cn} ...")
-                await self._execute_qzone_share(force_type)
+                await self._execute_qzone_share(force_type, event=event)
             else:
                 target_desc = "配置的所有群聊和私聊" if is_broadcast else "当前会话"
                 yield event.plain_result(f"正在向{target_desc}生成并分享{type_cn} ...")
@@ -1720,7 +1744,6 @@ Cron规则: {cron}
         """开启/关闭 分享早报到QQ空间"""
         if len(parts) > 2 and parts[2] in ["开启", "关闭"]:
             enable = (parts[2] == "开启")
-            # 更新配置
             self.extra_shares_conf["sync_briefing_to_qzone"] = enable
             self.config["extra_shares"] = self.extra_shares_conf
             await self._save_config_file()
