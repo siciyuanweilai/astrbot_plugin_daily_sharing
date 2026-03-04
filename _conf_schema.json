@@ -118,6 +118,22 @@
     "type": "object",
     "hint": "设置定时规则和分享类型策略。",
     "items": {
+      "trigger_mode": {
+        "description": "定时触发模式",
+        "type": "string",
+        "default": "cron",
+        "options": ["cron", "random_period"],
+        "hint": "cron=固定时间点触发 | random_period=在下方配置的多个时间段内随机触发"
+      },
+      "random_periods": {
+        "description": "随机触发时间段",
+        "type": "list",
+        "items": {
+          "type": "string"
+        },
+        "default": ["08:00-10:00", "19:00-21:00"],
+        "hint": "仅在 random_period 模式下生效。格式：HH:MM-HH:MM。每天会在这些时间段内随机选取一个时间点触发分享。"
+      },
       "sharing_cron": {
         "description": "定时分享时间",
         "type": "string",
@@ -224,6 +240,17 @@
     "type": "object",
     "hint": "配置生活日程集成、聊天历史读取和记忆记录。",
     "items": {
+      "reference_history_count": {
+        "description": "生成时参考历史动态数",
+        "type": "int",
+        "default": 3,
+        "slider": {
+            "min": 0,
+            "max": 10,
+            "step": 1
+        },
+        "hint": "生成新动态时，让AI参考最近N次自己发过的动态，保持人设连贯性并避免内容重复。设为0则不参考。"
+      },
       "enable_life_context": {
         "description": "启用生活上下文",
         "type": "bool",
@@ -342,7 +369,7 @@
         "type": "list",
         "items": {
           "type": "string",
-          "options": ["zhihu", "weibo", "bili", "xiaohongshu", "douyin", "toutiao", "baidu", "tencent", "quark", "36kr", "51cto", "acfun", "ifanr"],
+          "options": ["zhihu", "weibo", "bili", "xiaohongshu", "douyin", "toutiao", "baidu", "tencent", "quark", "36kr", "51cto", "acfun", "ifanr", "netease", "sina", "thepaper", "yicai"],
           "hint": "新闻源模式为'config'或'time_based'时生效。从此列表中随机选择新闻源，增加内容多样性。推荐配置2-5个常用源。"
         },
         "default": ["zhihu", "weibo", "bili"]
@@ -351,7 +378,7 @@
         "description": "固定新闻源",
         "type": "string",
         "default": "zhihu",
-        "options": ["zhihu", "weibo", "bili", "xiaohongshu", "douyin", "toutiao", "baidu", "tencent", "quark", "36kr", "51cto", "acfun", "ifanr"],
+        "options": ["zhihu", "weibo", "bili", "xiaohongshu", "douyin", "toutiao", "baidu", "tencent", "quark", "36kr", "51cto", "acfun", "ifanr", "netease", "sina", "thepaper", "yicai"],
         "hint": "仅在新闻源模式为 fixed 时生效。"
       },
       "news_items_count": {

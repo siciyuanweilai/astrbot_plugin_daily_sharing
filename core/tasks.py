@@ -1,0 +1,1106 @@
+import asyncio
+import random
+import re
+import sys
+import aiofiles
+from datetime import datetime, timedelta
+from typing import Optional
+
+from astrbot.api import logger
+from astrbot.api.event import AstrMessageEvent, MessageChain
+from astrbot.api.message_components import Record, Video 
+
+from ..config import TimePeriod, SharingType, SHARING_TYPE_SEQUENCES, CRON_TEMPLATES, NEWS_SOURCE_MAP
+from .constants import CMD_CN_MAP, SOURCE_CN_MAP
+
+class TaskManager:
+    def __init__(self, plugin):
+        self.plugin = plugin
+        self.scheduler = plugin.scheduler
+        self.db = plugin.db
+        self.ctx_service = plugin.ctx_service
+        self.news_service = plugin.news_service
+        self.image_service = plugin.image_service
+        self.content_service = plugin.content_service
+        self._lock = plugin._lock
+        
+        self.basic_conf = plugin.basic_conf
+        self.extra_shares_conf = plugin.extra_shares_conf
+        self.qzone_conf = plugin.qzone_conf
+        self.image_conf = plugin.image_conf
+        self.tts_conf = plugin.tts_conf
+        self.context_conf = plugin.context_conf
+        self.receiver_conf = plugin.receiver_conf
+
+    def setup_tasks(self):
+        if self.plugin.config.get("enable_auto_sharing", False):
+            cron = self.basic_conf.get("sharing_cron", "0 8,20 * * *")
+            self.setup_cron(cron)
+            logger.debug(f"[DailySharing] 分享内容定时任务已启动 ({cron})")
+        else:
+            logger.debug("[DailySharing] 分享内容已禁用")
+
+        enable_60s = self.extra_shares_conf.get("enable_60s_news", False)
+        enable_ai = self.extra_shares_conf.get("enable_ai_news", False)
+        
+        # 只要有一个开启，就注册定时任务
+        if enable_60s or enable_ai:
+            cron_briefing = self.extra_shares_conf.get("cron_briefing", "0 8 * * *")
+            self._setup_cron_job_custom("share_briefing", cron_briefing, self._task_wrapper_briefing)
+            logger.debug(f"[DailySharing] 早报定时任务已启动 ({cron_briefing})")
+
+        if self.qzone_conf.get("enable_qzone", False):
+            q_cron = self.qzone_conf.get("qzone_cron", "0 20 * * *")
+            actual_q_cron = CRON_TEMPLATES.get(q_cron, q_cron)
+            self._setup_cron_job_custom("qzone_share", actual_q_cron, self._task_wrapper_qzone)
+            logger.debug(f"[DailySharing] QQ空间定时任务已启动 ({actual_q_cron})")
+
+    def setup_cron(self, cron_str):
+        """设置自动分享触发器 (支持 cron 和 random_period)"""
+        trigger_mode = self.basic_conf.get("trigger_mode", "cron")
+        
+        if trigger_mode == "cron":
+            self._setup_cron_job_custom("auto_share", cron_str, self._task_wrapper)
+        elif trigger_mode == "random_period":
+            # 每天凌晨 00:00 重新生成当天的随机任务
+            self._setup_cron_job_custom("daily_random_scheduler", "0 0 * * *", self._schedule_daily_random_jobs)
+            # 启动时立刻安排一次今天的任务
+            asyncio.create_task(self._schedule_daily_random_jobs())
+            logger.debug(f"[DailySharing] 已启用多时间段随机生成模式")
+
+    async def _schedule_daily_random_jobs(self):
+        """每天计算并在 scheduler 中添加当天的随机时间点任务"""
+        if self.plugin._is_terminated: return
+        
+        # 清理旧的随机任务
+        job_ids = [job.id for job in self.scheduler.get_jobs() if job.id.startswith("random_share_")]
+        for jid in job_ids:
+            self.scheduler.remove_job(jid)
+            
+        periods = self.basic_conf.get("random_periods", ["08:00-10:00", "19:00-21:00"])
+        now = datetime.now()
+        
+        for idx, period_str in enumerate(periods):
+            try:
+                start_str, end_str = period_str.split('-')
+                start_h, start_m = map(int, start_str.split(':'))
+                end_h, end_m = map(int, end_str.split(':'))
+                
+                start_dt = now.replace(hour=start_h, minute=start_m, second=0, microsecond=0)
+                end_dt = now.replace(hour=end_h, minute=end_m, second=59, microsecond=0)
+                
+                if end_dt <= start_dt:
+                    continue # 忽略跨天或无效配置
+                
+                # 在该区间内随机取一秒
+                random_seconds = random.randint(0, int((end_dt - start_dt).total_seconds()))
+                run_time = start_dt + timedelta(seconds=random_seconds)
+                
+                # 如果随机出的时间大于当前时间，则安排执行
+                if run_time > now:
+                    job_id = f"random_share_{idx}"
+                    self.scheduler.add_job(
+                        self._task_wrapper, 'date',
+                        run_date=run_time,
+                        id=job_id,
+                        replace_existing=True
+                    )
+                    logger.info(f"[DailySharing] 今日随机任务 [{period_str}] 已安排在: {run_time.strftime('%H:%M:%S')} 执行")
+            except Exception as e:
+                logger.error(f"[DailySharing] 解析时间段 {period_str} 失败: {e}")
+
+    def _setup_cron_job_custom(self, job_id: str, cron_str: str, func):
+        """通用 Cron 设置方法"""
+        if self.plugin._is_terminated: return
+        try:
+            if self.scheduler.get_job(job_id):
+                self.scheduler.remove_job(job_id)
+
+            actual_cron = CRON_TEMPLATES.get(cron_str, cron_str)
+            parts = actual_cron.split()
+            
+            if len(parts) == 5:
+                self.scheduler.add_job(
+                    func, 'cron',
+                    minute=parts[0], hour=parts[1], day=parts[2], month=parts[3], day_of_week=parts[4],
+                    id=job_id,
+                    replace_existing=True,
+                    max_instances=1
+                )
+                logger.debug(f"[DailySharing] 任务[{job_id}]已设定: {actual_cron}")
+            else:
+                logger.error(f"[DailySharing] 任务[{job_id}]无效的 Cron 表达式: {cron_str}")
+        except Exception as e:
+            logger.error(f"[DailySharing] 任务[{job_id}]设置失败: {e}")
+
+    async def _task_wrapper(self):
+        """主任务包装器（防抖 + 锁 + 随机延迟 + 数据清理）"""
+        if self.plugin._is_terminated: return
+        
+        task = asyncio.current_task()
+        self.plugin._bg_tasks.add(task)
+        
+        try:
+            # 执行数据库自动清理
+            try:
+                days_limit = self.content_service.dedup_days
+                await self.db.clean_expired_data(days_limit)
+            except Exception as e:
+                logger.warning(f"[DailySharing] 数据库清理失败: {e}")
+
+            # 随机延迟逻辑
+            trigger_mode = self.basic_conf.get("trigger_mode", "cron")
+            if trigger_mode == "random_period":
+                random_delay_min = 0  
+            else:
+                try:
+                    # 从配置获取随机延迟分钟数，默认为 0
+                    random_delay_min = int(self.basic_conf.get("cron_random_delay", 0))
+                except Exception:
+                    random_delay_min = 0
+
+            if random_delay_min > 0:
+                delay_seconds = random.randint(0, random_delay_min * 60)
+                if delay_seconds > 0:
+                    trigger_time = datetime.now()
+                    expected_time = trigger_time.timestamp() + delay_seconds
+                    time_str = datetime.fromtimestamp(expected_time).strftime('%H:%M:%S')
+                    
+                    logger.info(f"[DailySharing] 定时任务已触发，启用随机延迟策略。")
+                    logger.info(f"[DailySharing] 将延迟 {delay_seconds/60:.1f} 分钟，预计于 {time_str} 执行...")
+                    
+                    try:
+                        await asyncio.sleep(delay_seconds)
+                    except asyncio.CancelledError:
+                        return
+
+            if self.plugin._is_terminated: return
+
+            # 核心执行逻辑
+            now = datetime.now()
+            
+            # 防抖检查
+            if self.plugin._last_share_time:
+                if (now - self.plugin._last_share_time).total_seconds() < 60:
+                    logger.info("[DailySharing] 检测到近期已执行任务，跳过本次定时触发。")
+                    return
+            
+            if self._lock.locked():
+                logger.warning("[DailySharing] 上一个任务正在进行中，跳过本次触发。")
+                return
+
+            async with self._lock:
+                self.plugin._last_share_time = now
+                if random_delay_min > 0:
+                    logger.info("[DailySharing] 随机延迟结束，开始执行分享...")
+                await self.execute_share()
+                
+        finally:
+            self.plugin._bg_tasks.discard(task)
+
+    async def _task_wrapper_briefing(self):
+        """早报任务回调"""
+        if self.plugin._is_terminated: return
+        task = asyncio.current_task()
+        self.plugin._bg_tasks.add(task)
+        try:
+            await self.execute_briefing_share()
+        finally:
+            self.plugin._bg_tasks.discard(task)
+
+    async def _task_wrapper_qzone(self):
+        """QQ 空间任务包装器（包含防抖和随机延迟）"""
+        if self.plugin._is_terminated: return
+        task = asyncio.current_task()
+        self.plugin._bg_tasks.add(task)
+        
+        try:
+            random_delay_min = int(self.basic_conf.get("cron_random_delay", 0))
+            if random_delay_min > 0:
+                delay_seconds = random.randint(0, random_delay_min * 60)
+                if delay_seconds > 0:
+                    logger.info(f"[DailySharing] QQ空间任务将随机延迟 {delay_seconds/60:.1f} 分钟...")
+                    try:
+                        await asyncio.sleep(delay_seconds)
+                    except asyncio.CancelledError:
+                        return
+
+            if self.plugin._is_terminated: return
+
+            # 为了安全，这里也加上互斥锁，防止和群聊同时生成触发大模型并发限制
+            async with self._lock:
+                await self.execute_qzone_share()
+                
+        finally:
+            self.plugin._bg_tasks.discard(task)
+
+    def get_curr_period(self) -> TimePeriod:
+        h = datetime.now().hour
+        if 0 <= h < 6: return TimePeriod.DAWN
+        if 6 <= h < 9: return TimePeriod.MORNING
+        if 9 <= h < 12: return TimePeriod.FORENOON
+        if 12 <= h < 16: return TimePeriod.AFTERNOON
+        if 16 <= h < 19: return TimePeriod.EVENING
+        if 19 <= h < 22: return TimePeriod.NIGHT
+        return TimePeriod.LATE_NIGHT
+
+    def get_period_range_str(self, period: TimePeriod) -> str:
+        """获取时段对应的时间范围字符串"""
+        return {
+            TimePeriod.DAWN: "00:00-06:00",            
+            TimePeriod.MORNING: "06:00-09:00",
+            TimePeriod.FORENOON: "09:00-12:00",
+            TimePeriod.AFTERNOON: "12:00-16:00",
+            TimePeriod.EVENING: "16:00-19:00",
+            TimePeriod.NIGHT: "19:00-22:00",
+            TimePeriod.LATE_NIGHT: "22:00-24:00"
+        }.get(period, "")
+
+    async def decide_type_with_state(self, current_period: TimePeriod, is_qzone: bool = False) -> SharingType:
+        # 区分配置和数据库存储键
+        conf_node = self.qzone_conf if is_qzone else self.basic_conf
+        type_key = "qzone_sharing_type" if is_qzone else "sharing_type"
+        state_key = "qzone" if is_qzone else "global"
+        
+        conf_type = conf_node.get(type_key, "auto")
+        if conf_type != "auto":
+            try: return SharingType(conf_type)
+            except: pass
+        
+        state = await self.db.get_state(state_key, {})
+        
+        # 映射序列前缀
+        prefix = "qzone_" if is_qzone else ""
+        config_key_map = {
+            TimePeriod.MORNING: f"{prefix}morning_sequence",
+            TimePeriod.FORENOON: f"{prefix}forenoon_sequence",
+            TimePeriod.AFTERNOON: f"{prefix}afternoon_sequence",
+            TimePeriod.EVENING: f"{prefix}evening_sequence",
+            TimePeriod.NIGHT: f"{prefix}night_sequence",
+            TimePeriod.LATE_NIGHT: f"{prefix}late_night_sequence",
+            TimePeriod.DAWN: f"{prefix}dawn_sequence"
+        }
+        
+        config_key = config_key_map.get(current_period)
+        seq = conf_node.get(config_key, [])
+        
+        if not seq:
+            seq = SHARING_TYPE_SEQUENCES.get(current_period, [SharingType.GREETING.value])
+        
+        idx_key = f"index_{current_period.value}"
+        idx = state.get(idx_key, 0)
+        
+        if idx >= len(seq): idx = 0
+        selected = seq[idx]
+        next_idx = (idx + 1) % len(seq)
+        
+        updates = {
+            "last_period": current_period.value,
+            idx_key: next_idx,            
+            "sequence_index": next_idx,  
+            "last_timestamp": datetime.now().isoformat(),
+            "last_type": selected
+        }
+        await self.db.update_state_dict(state_key, updates)
+        
+        try: return SharingType(selected)
+        except: return SharingType.GREETING
+
+    def get_broadcast_targets(self):
+        """辅助方法：获取需要广播的目标列表"""
+        targets = []
+        default_adapter_id = self.plugin._cached_adapter_id
+        
+        # 1. 从上下文获取平台管理器，找到第一个有 ID 的平台实例
+        if not default_adapter_id:
+            try:
+                if hasattr(self.plugin.context, "platform_manager"):
+                    insts = self.plugin.context.platform_manager.get_insts()
+                    for inst in insts:
+                        if hasattr(inst, "metadata") and inst.metadata.id:
+                            default_adapter_id = inst.metadata.id
+                            self.plugin._cached_adapter_id = default_adapter_id
+                            logger.debug(f"[DailySharing] 自动发现并缓存 Bot ID: {default_adapter_id}")
+                            break
+            except Exception as e:
+                logger.warning(f"[DailySharing] 尝试自动发现 Bot ID 失败: {e}")
+
+        # 2. 如果还是没找到，才使用默认值兜底
+        if not default_adapter_id:
+             default_adapter_id = "aiocqhttp"
+             logger.warning("[DailySharing] 尚未缓存 Adapter ID，使用默认值 'aiocqhttp'。")
+
+        if default_adapter_id:
+            # 健壮性检查
+            r_groups = self.receiver_conf.get("groups")
+            if not isinstance(r_groups, list): r_groups = []
+            
+            r_users = self.receiver_conf.get("users")
+            if not isinstance(r_users, list): r_users = []
+
+            for gid in r_groups:
+                if gid: targets.append(f"{default_adapter_id}:GroupMessage:{gid}")
+            for uid in r_users:
+                if uid: targets.append(f"{default_adapter_id}:FriendMessage:{uid}")
+        
+        return targets
+
+    async def async_daily_share_task(
+        self,
+        event: AstrMessageEvent,
+        share_type: str,
+        source: str,
+        get_image: bool,
+        need_image: bool,
+        need_video: bool,
+        need_voice: bool,
+        to_qzone: bool
+    ):
+        """实际执行分享逻辑的后台任务 (LLM 触发)"""
+        try:
+            # 特殊图片类型处理 (60s / AI) 
+            st_clean = share_type.lower().replace(" ", "")
+            
+            # 60s新闻
+            if any(k in st_clean for k in ["60s", "六十秒", "读世界"]):
+                url = self.news_service.get_60s_image_url()
+                if not url:
+                    await event.send(event.plain_result("获取60s新闻失败，请检查API Key配置。"))
+                    return 
+                    
+                if to_qzone:
+                    qzone_plugin = self.ctx_service._find_plugin("qzone")
+                    if qzone_plugin and hasattr(qzone_plugin, "service"):
+                        self.plugin._inject_qzone_client(qzone_plugin)
+                        try:
+                            await qzone_plugin.service.publish_post(text="【每天60秒读懂世界】", images=[url])
+                            await event.send(event.plain_result("每天60s读世界已成功分享到QQ空间！"))
+                            await self.db.add_sent_history("qzone_broadcast", "news", "【每天60秒读懂世界】(LLM)", True)
+                        except Exception as e:
+                            await event.send(event.plain_result(f"QQ空间分享失败: {e}"))
+                    else:
+                        await event.send(event.plain_result("未检测到QQ空间插件！"))
+                else:
+                    await event.send(event.image_result(url))
+                return 
+
+            # AI资讯
+            if any(k in st_clean for k in ["ai资讯", "ai新闻", "ai日报"]) or st_clean == "ai":
+                ai_data = await self.news_service.get_ai_news_json()
+                if not ai_data:
+                    await event.send(event.plain_result("获取AI资讯失败或今日暂无更新。"))
+                    return 
+
+                url = self.news_service.get_ai_news_image_url()
+                if not url:
+                    await event.send(event.plain_result("获取AI资讯图片失败，请检查API Key配置。"))
+                    return 
+                    
+                if to_qzone:
+                    qzone_plugin = self.ctx_service._find_plugin("qzone")
+                    if qzone_plugin and hasattr(qzone_plugin, "service"):
+                        self.plugin._inject_qzone_client(qzone_plugin)
+                        try:
+                            await qzone_plugin.service.publish_post(text="【AI资讯快报】", images=[url])
+                            await event.send(event.plain_result("AI资讯快报已成功分享到QQ空间！"))
+                            await self.db.add_sent_history("qzone_broadcast", "news", "【AI资讯快报】(LLM)", True)
+                        except Exception as e:
+                            await event.send(event.plain_result(f"QQ空间分享失败: {e}"))
+                    else:
+                        await event.send(event.plain_result("未检测到QQ空间插件！"))
+                else:
+                    await event.send(event.image_result(url))
+                return 
+
+            # === 常规流程 ===
+            # 参数清洗与映射
+            target_type_enum = None
+            
+            if share_type == "自动" or share_type == "auto":
+                target_type_enum = None  
+            else:
+                # 映射分享类型 (中文 -> 枚举)
+                if share_type in CMD_CN_MAP:
+                    target_type_enum = CMD_CN_MAP[share_type]
+                else:
+                    # 模糊匹配尝试
+                    for k, v in CMD_CN_MAP.items():
+                        if k in share_type:
+                            target_type_enum = v
+                            break
+                if not target_type_enum:
+                    await event.send(event.plain_result(f"不支持的分享类型：{share_type}。支持：自动, 问候, 新闻, 心情, 知识, 推荐, 60s新闻, AI资讯。"))
+                    return
+
+            # 映射新闻源 (中文 -> key)
+            news_src_key = None
+            if target_type_enum == SharingType.NEWS and source:
+                if source in SOURCE_CN_MAP:
+                    news_src_key = SOURCE_CN_MAP[source]
+                elif source in NEWS_SOURCE_MAP:
+                    news_src_key = source
+                else:
+                    for name, key in SOURCE_CN_MAP.items():
+                        if name in source or source in name:
+                            news_src_key = key
+                            break
+            
+            # 逻辑判定：新闻默认发静态图
+            is_news = (target_type_enum == SharingType.NEWS)
+            
+            # 触发静态图发送的条件：
+            # 1. 是新闻
+            # 2. 需要获取图片 (get_image=True)
+            # 3. 不需要AI配图 (not need_image)
+            # 4. 不需要语音 (not need_voice) -> 如果需要语音，必须走 LLM 生成文本
+            # 5. 不需要视频 (not need_video) -> 如果需要视频，必须走 后续流程
+            if is_news and get_image and not need_image and not need_voice and not need_video:
+                try:
+                    img_url = None
+                    src_name = ""
+                    # 优先使用指定的源热搜
+                    if news_src_key:
+                        img_url, src_name = self.news_service.get_hot_news_image_url(news_src_key)
+                    else:
+                        # 如果没有指定，则随机选择一个已启用的新闻源发送
+                        random_src = self.news_service.select_news_source()
+                        img_url, src_name = self.news_service.get_hot_news_image_url(random_src)
+
+                    if img_url:
+                        if to_qzone:
+                            qzone_plugin = self.ctx_service._find_plugin("qzone")
+                            if qzone_plugin and hasattr(qzone_plugin, "service"):
+                                self.plugin._inject_qzone_client(qzone_plugin)
+                                try:
+                                    await qzone_plugin.service.publish_post(text=f"【{src_name}】", images=[img_url])
+                                    await event.send(event.plain_result(f"[{src_name}] 图片已成功分享到QQ空间！"))
+                                    await self.db.add_sent_history("qzone_broadcast", "news", f"【{src_name}】长图(LLM)", True)
+                                except Exception as e:
+                                    await event.send(event.plain_result(f"QQ空间分享失败: {e}"))
+                            else:
+                                await event.send(event.plain_result("未检测到QQ空间插件！"))
+                        else:
+                            await event.send(event.image_result(img_url))
+                    else:
+                        await event.send(event.plain_result("获取新闻图片失败。"))
+                except Exception as e:
+                    logger.error(f"[DailySharing] 获取新闻图片失败: {e}")
+                    await event.send(event.plain_result(f"获取新闻图片失败。"))
+                
+                return
+
+            # 如果用户要求发QQ空间文案说说
+            if to_qzone:
+                await self.execute_qzone_share(force_type=target_type_enum, news_source=news_src_key, event=event)
+                return
+
+            # 场景 B: 标准 LLM 生成流程
+            # 1. 纯文字模式 (问候/心情/知识/推荐/新闻文字版)
+            # 2. 高级模式 (任何类型 + need_image=True)
+            # 3. 语音模式 (任何类型 + need_voice=True)
+            
+            # 获取上下文 ID
+            uid = event.get_sender_id()
+            if not ":" in str(uid):
+                target_umo = event.unified_msg_origin
+            else:
+                target_umo = uid
+
+            # 重新计算时段
+            period = self.get_curr_period()
+            
+            # 准备数据
+            life_ctx = await self.ctx_service.get_life_context()
+            news_data = None
+            
+            # 初始化 img_path (可能用于存放热搜截图)
+            img_path = None
+            
+            if target_type_enum == SharingType.NEWS:
+                # 这里的 news_src_key 如果是 None 会自动选择
+                if not news_src_key:
+                    news_src_key = self.news_service.select_news_source()
+                news_data = await self.news_service.get_hot_news(news_src_key)
+                
+                # 如果在主流程中(因为要语音等原因进来了)，且用户依然默认想要看热搜图
+                # 并且配置允许带上新闻图
+                if get_image and not need_image and self.image_conf.get("attach_hot_news_image", True):
+                    try:
+                        img_path, _ = self.news_service.get_hot_news_image_url(news_src_key)
+                    except Exception as e:
+                        logger.warning(f"[DailySharing] 主流程获取热搜图片失败: {e}")
+
+            # 获取历史
+            is_group = self.ctx_service._is_group_chat(target_umo)
+            hist_data = await self.ctx_service.get_history_data(target_umo, is_group)
+            hist_prompt = self.ctx_service.format_history_prompt(hist_data, target_type_enum)
+            group_info = hist_data.get("group_info")
+            life_prompt = self.ctx_service.format_life_context(life_ctx, target_type_enum, is_group, group_info)
+            
+            # 获取近期动态记忆
+            recent_dynamics_str = ""
+            ref_count = self.context_conf.get("reference_history_count", 3)
+            if ref_count > 0:
+                recent_hist = await self.db.get_recent_history_by_target(uid, limit=ref_count)
+                if recent_hist:
+                    lines = []
+                    for h in reversed(recent_hist):
+                        clean_content = re.sub(r'\$\$(?:EMO:)?(?:happy|sad|angry|neutral|surprise)\$\$', '', h.get('content', ''), flags=re.IGNORECASE).strip()
+                        lines.append(f"- [{h.get('type')}] {clean_content}")
+                    recent_dynamics_str = "\n".join(lines)
+
+            # 获取昵称
+            nickname = ""
+            if not is_group:
+                nickname = event.get_sender_name()
+
+            # 生成内容
+            content = await self.content_service.generate(
+                target_type_enum, period, target_umo, is_group, life_prompt, hist_prompt, news_data, nickname=nickname, recent_dynamics=recent_dynamics_str
+            )
+            
+            if not content:
+                await event.send(event.plain_result("内容生成失败，请稍后再试。"))
+                return
+            
+            # ================= 视觉生成逻辑 (LLM 触发：严格手动控制) =================
+            video_url = None
+            
+            should_gen_visual = False
+            # 只有当用户明确要求配图或视频时，才生成
+            if self.image_conf.get("enable_ai_image", False):
+                if need_image or need_video:
+                    should_gen_visual = True
+
+            if should_gen_visual:
+                # 生成图片 (注意：如果生成了AI图片，会覆盖上面的热搜截图 img_path)
+                ai_img_path = await self.image_service.generate_image(content, target_type_enum, life_ctx)
+                if ai_img_path:
+                    img_path = ai_img_path
+                
+                # 生成视频 (如果明确要求视频)
+                if img_path and self.image_conf.get("enable_ai_video", False):
+                    if need_video:
+                        video_url = await self.image_service.generate_video_from_image(img_path, content)
+
+            # ================= 语音生成逻辑 (LLM 触发：严格手动控制) =================
+            audio_path = None
+            if self.tts_conf.get("enable_tts", False):
+                should_gen_voice = False
+                # 只有当用户明确要求语音时，才生成
+                if need_voice:
+                    should_gen_voice = True
+                        
+                if should_gen_voice:
+                    audio_path = await self.ctx_service.text_to_speech(content, target_umo, target_type_enum, period)
+
+            # 发送 (img_path 可能是热搜截图，也可能是AI画的图)
+            await self.send(target_umo, content, img_path, audio_path, video_url)
+            
+            # 记录上下文
+            img_desc = self.image_service.get_last_description()
+            await self.ctx_service.record_bot_reply_to_history(target_umo, content, image_desc=img_desc)
+            await self.ctx_service.record_to_memos(target_umo, content, img_desc)
+                
+
+        except Exception as e:
+            logger.error(f"[DailySharing] 异步任务错误: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            await event.send(event.plain_result(f"执行出错: {str(e)}"))
+
+    async def execute_briefing_share(self, specific_target: str = None):
+        """执行早报分享：依次发送开启的 60s 和 AI 资讯"""
+        if self.plugin._is_terminated: return
+        
+        logger.info("[DailySharing] 开始执行独立早报任务")
+        
+        # 1. 收集需要分享的图片 URL
+        images_to_send = [] 
+        
+        check_60s = self.extra_shares_conf.get("enable_60s_news", False)
+        if specific_target: check_60s = True 
+        
+        if self.extra_shares_conf.get("enable_60s_news", False):
+            url = self.news_service.get_60s_image_url()
+            if url: images_to_send.append(("60s新闻", url))
+
+        if self.extra_shares_conf.get("enable_ai_news", False):
+            ai_data = await self.news_service.get_ai_news_json()
+            if ai_data:
+                url = self.news_service.get_ai_news_image_url()
+                if url: images_to_send.append(("AI资讯", url))
+            else:
+                logger.info("[DailySharing] 今日无AI资讯数据或获取失败，跳过推送图片")
+
+        if not images_to_send:
+            logger.warning("[DailySharing] 早报任务触发，发现没有开启的早报发送或获取图片失败")
+            return
+
+        # 定时早报自动同步到QQ空间
+        # 仅在自动定时任务触发时且开关打开时执行
+        if specific_target is None and self.extra_shares_conf.get("sync_briefing_to_qzone", False):
+            qzone_plugin = self.ctx_service._find_plugin("qzone")
+            if qzone_plugin and hasattr(qzone_plugin, "service"):
+                self.plugin._inject_qzone_client(qzone_plugin)
+                logger.info("[DailySharing] 分享早报到QQ空间已开启...")
+                for name, url in images_to_send:
+                    try:
+                        title = "【每天60秒读懂世界】" if "60s" in name else "【AI资讯快报】"
+                        await qzone_plugin.service.publish_post(text=title, images=[url])
+                        await self.db.add_sent_history("qzone_broadcast", "news", f"{title}(定时自动)", True)
+                        await asyncio.sleep(3) 
+                        logger.info(f"[DailySharing] 分享早报{name}到QQ空间成功！")
+                    except Exception as e:
+                        logger.error(f"[DailySharing] 分享早报{name}到QQ空间失败: {e}")
+            else:
+                logger.warning("[DailySharing] 分享早报到QQ空间开启，但未检测到 astrbot_plugin_qzone 插件")
+
+        # 2. 确定目标
+        targets = []
+        if specific_target:
+            targets.append(specific_target)
+        else:
+            targets = self.get_broadcast_targets()
+            logger.info(f"[DailySharing] 早报任务目标: {len(targets)} 个")
+
+        if not targets:
+            logger.warning("[DailySharing] 未找到任何早报接收目标")
+            return
+
+        # 3. 分享循环
+        for uid in targets:
+            if self.plugin._is_terminated: break
+            try:
+                for name, url in images_to_send:
+                    # 构建消息链
+                    msg = MessageChain().url_image(url)
+                    logger.info(f"[DailySharing] 正在分享{name}到{uid}")
+                    await self.plugin.context.send_message(uid, msg)
+                    # 每张图之间间隔 1 秒
+                    await asyncio.sleep(1)
+                
+                # 每个群之间间隔 2 秒
+                await asyncio.sleep(2) 
+            except Exception as e:
+                logger.error(f"[DailySharing] 分享早报到 {uid} 失败: {e}")
+
+    async def execute_share(self, force_type: SharingType = None, news_source: str = None, specific_target: str = None):
+        """执行分享的主流程"""
+        if self.plugin._is_terminated: return
+
+        period = self.get_curr_period()
+        if force_type:
+            stype = force_type
+        else:
+            stype = await self.decide_type_with_state(period) 
+        
+        logger.info(f"[DailySharing] 时段: {period.value}, 类型: {stype.value}")
+
+        life_ctx = await self.ctx_service.get_life_context()
+        news_data = None
+        
+        # 加载状态以获取上次的新闻源
+        state = await self.db.get_state("global", {})
+        last_news_source = state.get("last_news_source")
+
+        if stype == SharingType.NEWS:
+            # 如果没有指定源（自动选择模式），则传入 last_news_source 进行去重
+            if not news_source:
+                news_source = self.news_service.select_news_source(excluded_source=last_news_source)
+            
+            news_data = await self.news_service.get_hot_news(news_source)
+            
+            # 如果获取成功，更新状态中的 last_news_source
+            if news_data:
+                actual_source = news_data[1]
+                await self.db.update_state_dict("global", {"last_news_source": actual_source})
+
+        targets = []
+        
+        # 1. 确定分享目标
+        if specific_target:
+            targets.append(specific_target)
+        else:
+            targets = self.get_broadcast_targets()
+
+        if not targets:
+            logger.warning("[DailySharing] 未配置接收对象，且未指定目标，请在配置页填写群号或QQ号")
+            return
+
+        for uid in targets:
+            if self.plugin._is_terminated: break
+            try:
+                is_group = "group" in uid.lower() or "room" in uid.lower() or "guild" in uid.lower()
+                
+                # 尝试获取用户昵称 (仅限私聊) 
+                nickname = ""
+                if not is_group:
+                    try:
+                        adapter_id, real_id = self.ctx_service._parse_umo(uid)
+                        if adapter_id and real_id:
+                            bot = self.ctx_service._get_bot_instance(adapter_id)
+                            if bot:
+                                ret = await bot.api.call_action("get_stranger_info", user_id=int(real_id))
+                                if ret and isinstance(ret, dict):
+                                    nickname = ret.get("nickname", "")
+                                    logger.info(f"[DailySharing] 获取到用户昵称: {nickname}")
+                    except Exception as e:
+                         logger.warning(f"[DailySharing] 获取昵称失败: {e}")
+
+                hist_data = await self.ctx_service.get_history_data(uid, is_group)
+                if is_group and "group_info" in hist_data:
+                    # 手动触发时通常忽略策略检查，但自动触发时需要检查
+                    if not specific_target and not self.ctx_service.check_group_strategy(hist_data["group_info"]):
+                        logger.info(f"[DailySharing] 因策略跳过群组 {uid}")
+                        continue
+
+                hist_prompt = self.ctx_service.format_history_prompt(hist_data, stype)
+                group_info = hist_data.get("group_info")
+                life_prompt = self.ctx_service.format_life_context(life_ctx, stype, is_group, group_info)
+
+                # 获取近期动态记忆
+                recent_dynamics_str = ""
+                ref_count = self.context_conf.get("reference_history_count", 3)
+                if ref_count > 0:
+                    recent_hist = await self.db.get_recent_history_by_target(uid, limit=ref_count)
+                    if recent_hist:
+                        lines = []
+                        for h in reversed(recent_hist):  
+                            clean_content = re.sub(r'\$\$(?:EMO:)?(?:happy|sad|angry|neutral|surprise)\$\$', '', h.get('content', ''), flags=re.IGNORECASE).strip()
+                            lines.append(f"- [{h.get('type')}] {clean_content}")
+                        recent_dynamics_str = "\n".join(lines)
+
+                logger.info(f"[DailySharing] 正在为 {uid} 生成内容...")
+                content = await self.content_service.generate(
+                    stype, period, uid, is_group, life_prompt, hist_prompt, news_data, nickname=nickname, recent_dynamics=recent_dynamics_str
+                )
+                
+                if not content:
+                    logger.warning(f"[DailySharing] 内容生成失败 {uid}")
+                    await self.db.add_sent_history(
+                        target_id=uid,
+                        sharing_type=stype.value,
+                        content="生成失败 (LLM无响应)",
+                        success=False
+                    )
+                    continue
+                
+                # 生成多媒体素材 (图片 & 视频 & 语音) 
+                
+                # 1. 配图生成逻辑
+                img_path = None
+                video_url = None
+                enable_img_global = self.image_conf.get("enable_ai_image", False)
+                img_allowed_types = self.image_conf.get("image_enabled_types", ["greeting", "mood", "knowledge", "recommendation"])
+                
+                # 【新闻类型特殊处理】如果未开启AI配图或当前类型不允许AI配图，但这是新闻，且配置允许附带热搜图，尝试把热搜图带上
+                if stype == SharingType.NEWS and self.image_conf.get("attach_hot_news_image", True):
+                    try:
+                        # 如果没有指定源（自动选择模式），复用 state 中的 last_news_source，或者重新获取 current news source
+                        state = await self.db.get_state("global", {})
+                        last_source = state.get("last_news_source")
+                        if last_source:
+                            img_path, _ = self.news_service.get_hot_news_image_url(last_source)
+                    except Exception as e:
+                        logger.warning(f"[DailySharing] 自动任务获取新闻图片失败: {e}")
+
+                if enable_img_global:
+                    if stype.value in img_allowed_types:
+                        ai_img_path = await self.image_service.generate_image(content, stype, life_ctx)
+                        if ai_img_path:
+                            # AI 图片覆盖热搜截图
+                            img_path = ai_img_path
+                            
+                        # 尝试生成视频
+                        if img_path and self.image_conf.get("enable_ai_video", False):
+                            video_allowed = self.image_conf.get("video_enabled_types", ["greeting", "mood"])
+                            if stype.value in video_allowed:
+                                video_url = await self.image_service.generate_video_from_image(img_path, content)
+                    else:
+                         logger.info(f"[DailySharing] 当前类型 {stype.value} 不在配图允许列表，跳过配图。")
+
+                # 2. 语音生成逻辑
+                audio_path = None
+                enable_tts_global = self.tts_conf.get("enable_tts", False)
+                tts_allowed_types = self.tts_conf.get("tts_enabled_types", ["greeting", "mood"])
+                
+                if enable_tts_global:
+                    if stype.value in tts_allowed_types:
+                        # 传入 stype 和 period 以确定情感
+                        audio_path = await self.ctx_service.text_to_speech(content, uid, stype, period)
+                    else:
+                        logger.info(f"[DailySharing] 当前类型 {stype.value} 不在语音允许列表，跳过语音。")
+
+                # 分享内容
+                await self.send(uid, content, img_path, audio_path, video_url)
+                
+                
+                # 获取图片描述并写入 AstrBot 聊天上下文
+                img_desc = self.image_service.get_last_description()
+                await self.ctx_service.record_bot_reply_to_history(uid, content, image_desc=img_desc)
+
+                # 记录与历史
+                await self.ctx_service.record_to_memos(uid, content, img_desc)
+
+                # 清洗历史记录内容中的情感标签
+                clean_content_for_log = re.sub(r'\$\$(?:EMO:)?(?:happy|sad|angry|neutral|surprise)\$\$', '', content, flags=re.IGNORECASE).strip()
+
+                await self.db.add_sent_history(
+                    target_id=uid,
+                    sharing_type=stype.value,
+                    content=clean_content_for_log[:100] + "...",
+                    success=True
+                )
+                
+                await asyncio.sleep(2) 
+
+            except Exception as e:
+                logger.error(f"[DailySharing] 处理 {uid} 时出错: {e}")
+                import traceback
+                logger.error(traceback.format_exc())               
+
+    async def execute_qzone_share(self, force_type: SharingType = None, news_source: str = None, event: AstrMessageEvent = None):
+        """完全独立的 QQ 空间执行主流程"""
+        if self.plugin._is_terminated: return
+        
+        try:
+            qzone_plugin = self.ctx_service._find_plugin("qzone")
+            if not qzone_plugin or not hasattr(qzone_plugin, "service"):
+                logger.warning("[DailySharing] QQ空间任务触发，但未检测到 astrbot_plugin_qzone 插件")
+                if event:
+                    await event.send(event.plain_result("未检测到 astrbot_plugin_qzone 插件"))
+                return
+
+            self.plugin._inject_qzone_client(qzone_plugin)
+            period = self.get_curr_period()
+            # 注意这里传入 is_qzone=True，使用专属序列
+            stype = force_type if force_type else await self.decide_type_with_state(period, is_qzone=True) 
+            logger.info(f"[DailySharing] QQ空间时段: {period.value}, 类型: {stype.value}")
+
+            # 获取生活上下文
+            life_ctx = await self.ctx_service.get_life_context()
+            news_data = None
+            
+            # 如果是发新闻，单独获取热搜（支持手动指定源）
+            if stype == SharingType.NEWS:
+                actual_source = news_source if news_source else self.news_service.select_news_source()
+                news_data = await self.news_service.get_hot_news(actual_source)
+
+            # 屏蔽历史记录，使用纯净的提示词让LLM写说说
+            qzone_life_prompt = self.ctx_service.format_life_context(life_ctx, stype, False, None)
+            qzone_life_prompt += (
+                "\n\n【最高优先级覆盖指令】\n"
+                "请你完全无视系统提示中关于“一对一私聊”、“对单个朋友聊天”、“使用你”等所有设定！\n"
+                "这是一条个人QQ空间社交平台的动态说说\n"
+                "当前任务是以纯粹的【个人日记或心情独白】的口吻来写。\n"
+                "1. 绝对禁止对别人说话，严禁出现“你”、“你们”、“大家”等称呼。\n"
+                "2. 只能专注描绘自己的状态，就像自己在自言自语一样。"
+            )
+            
+            # 获取近期动态记忆 (QQ空间)
+            qzone_recent_dynamics_str = ""
+            ref_count = self.context_conf.get("reference_history_count", 3)
+            if ref_count > 0:
+                q_recent_hist = await self.db.get_recent_history_by_target("qzone_broadcast", limit=ref_count)
+                if q_recent_hist:
+                    lines = []
+                    for h in reversed(q_recent_hist):
+                        clean_content = re.sub(r'\$\$(?:EMO:)?(?:happy|sad|angry|neutral|surprise)\$\$', '', h.get('content', ''), flags=re.IGNORECASE).strip()
+                        lines.append(f"- [{h.get('type')}] {clean_content}")
+                    qzone_recent_dynamics_str = "\n".join(lines)
+
+            logger.info("[DailySharing] 正在为QQ空间生成文案...")
+            qzone_content = await self.content_service.generate(
+                stype, period, "qzone_broadcast", False, qzone_life_prompt, "", news_data, nickname="", recent_dynamics=qzone_recent_dynamics_str
+            )
+            
+            if not qzone_content:
+                logger.error("[DailySharing] QQ空间文案生成失败")
+                if event:
+                    await event.send(event.plain_result("QQ空间文案生成失败"))
+                return
+
+            # 清洗情感标签
+            clean_qzone_content = re.sub(r'\$\$(?:EMO:)?(?:happy|sad|angry|neutral|surprise)\$\$', '', qzone_content, flags=re.IGNORECASE).strip()
+
+            # 处理配图逻辑
+            qzone_images = []
+            target_local_img = None
+            
+            enable_img_qzone = self.qzone_conf.get("qzone_enable_image", False)
+            enable_img_global = self.image_conf.get("enable_ai_image", False)
+            
+            # 获取QQ空间配图允许类型，如果没配置，默认复用群聊分享的配置
+            qzone_img_allowed_types = self.qzone_conf.get(
+                "qzone_image_enabled_types", 
+                self.image_conf.get("image_enabled_types", ["greeting", "mood", "knowledge", "recommendation"])
+            )
+
+            if enable_img_qzone and enable_img_global:
+                if stype.value in qzone_img_allowed_types:
+                    logger.info("[DailySharing] 正在为QQ空间生成配图...")
+                    try:
+                        new_img_path = await self.image_service.generate_image(clean_qzone_content, stype, life_ctx)
+                        if new_img_path:
+                            target_local_img = new_img_path
+                    except Exception as e:
+                        logger.error(f"[DailySharing] QQ空间配图生成失败: {e}")
+                else:
+                    logger.info(f"[DailySharing] 当前类型 {stype.value} 不在QQ空间配图允许列表，跳过配图。")
+            
+            # 如果是新闻类型，且没有开启画图，且配置允许附带热搜图，尝试贴热搜图
+            if stype == SharingType.NEWS and not target_local_img and self.qzone_conf.get("qzone_attach_hot_news_image", True):
+                try:
+                    if news_data:
+                        img_url, _ = self.news_service.get_hot_news_image_url(news_data[1])
+                        target_local_img = img_url
+                except Exception as e:
+                    pass
+
+            if target_local_img:
+                if target_local_img.startswith("http"):
+                    qzone_images.append(target_local_img)
+                else:
+                    qzone_images.append(f"local_path::{target_local_img}")
+                            
+            import sys
+            import aiofiles
+            qzone_utils_mod = None
+            for mod_name, mod in sys.modules.items():
+                if "qzone" in mod_name and "utils" in mod_name and hasattr(mod, "download_file"):
+                    qzone_utils_mod = mod
+                    break
+                    
+            if qzone_utils_mod:
+                orig_download_file = qzone_utils_mod.download_file
+                async def patched_download_file(url: str):
+                    if isinstance(url, str) and url.startswith("local_path::"):
+                        real_path = url.split("::", 1)[1]
+                        try:
+                            async with aiofiles.open(real_path, "rb") as f:
+                                return await f.read()  
+                        except Exception:
+                            return None
+                    return await orig_download_file(url)
+                qzone_utils_mod.download_file = patched_download_file
+                
+            try:
+                await qzone_plugin.service.publish_post(
+                    text=clean_qzone_content,
+                    images=qzone_images
+                )
+                logger.info("[DailySharing] 成功分享内容到QQ空间！")
+                
+                await self.db.add_sent_history(
+                    target_id="qzone_broadcast",
+                    sharing_type=stype.value,
+                    content=clean_qzone_content[:100] + "...",
+                    success=True
+                )
+                
+                if event:
+                    try:
+                        text_chain = MessageChain().message(clean_qzone_content)
+                        await event.send(text_chain)
+                        
+                        if target_local_img:
+                            await asyncio.sleep(1.0) 
+                            img_chain = MessageChain()
+                            if target_local_img.startswith("http"):
+                                img_chain.url_image(target_local_img)
+                            else:
+                                img_chain.file_image(target_local_img)
+                            await event.send(img_chain)
+                    except Exception as e:
+                        logger.error(f"[DailySharing] 同步发送内容到会话失败: {e}")
+                
+            finally:
+                if qzone_utils_mod:
+                    qzone_utils_mod.download_file = orig_download_file
+
+        except Exception as e:
+            logger.error(f"[DailySharing] 生成并分享到QQ空间失败: {e}")
+            if event:
+                try:
+                    await event.send(event.plain_result(f"生成并分享到QQ空间失败: {e}"))
+                except:
+                    pass
+
+    async def send(self, uid, text, img_path, audio_path=None, video_url=None):
+        """分享内容（支持分开分享，支持语音和视频）"""
+        if self.plugin._is_terminated: return
+
+        try:
+            separate_img = self.image_conf.get("separate_text_and_image", True)
+            prefer_audio_only = self.tts_conf.get("prefer_audio_only", False)
+            
+            # 清洗情感标签
+            clean_text = re.sub(r'\$\$(?:EMO:)?(?:happy|sad|angry|neutral|surprise)\$\$', '', text, flags=re.IGNORECASE).strip()
+            
+            # 判断是否应该分享文字
+            # 如果有语音，且开启了“仅发语音”，则不发文字
+            should_send_text = True
+            if audio_path and prefer_audio_only:
+                should_send_text = False
+
+            # 1. 分享文字（如果需要）
+            if should_send_text and clean_text: 
+                text_chain = MessageChain().message(clean_text) 
+                # 如果图片不分开分享，且没有语音，且没有视频（视频无法合并），则合并图片
+                if img_path and not video_url and not separate_img and not audio_path:
+                    if img_path.startswith("http"): text_chain.url_image(img_path)
+                    else: text_chain.file_image(img_path)
+                
+                await self.plugin.context.send_message(uid, text_chain)
+                
+                # 如果后续还有消息，进行随机延迟
+                if audio_path or ((img_path or video_url) and separate_img):
+                    await self.random_sleep()
+
+            # 2. 分享语音（如果有）
+            if audio_path:
+                audio_chain = MessageChain()
+                audio_chain.chain.append(Record(file=audio_path))
+                await self.plugin.context.send_message(uid, audio_chain)
+                
+                # 如果后续还有视觉媒体，延迟
+                if (img_path or video_url) and separate_img:
+                    await self.random_sleep()
+            
+            # 3. 分享视觉媒体（视频优先，其次图片）
+            if video_url:
+                # 分享视频
+                video_chain = MessageChain()
+                # 判断是本地文件还是网络URL
+                if video_url.startswith("http"):
+                    video_chain.chain.append(Video.fromURL(video_url))
+                else:
+                    # 如果是本地路径，使用 fromFile
+                    video_chain.chain.append(Video.fromFileSystem(video_url))              
+                await self.plugin.context.send_message(uid, video_chain)
+            elif img_path:
+                # 分享图片（如果视频没生成，或者视频关闭）
+                img_not_sent_yet = separate_img or audio_path
+                if img_not_sent_yet:
+                    img_chain = MessageChain()
+                    if img_path.startswith("http"): img_chain.url_image(img_path)
+                    else: img_chain.file_image(img_path)
+                    await self.plugin.context.send_message(uid, img_chain)
+
+        except Exception as e:
+            logger.error(f"[DailySharing] 分享内容给 {uid} 失败: {e}")
+
+    async def random_sleep(self):
+        """随机延迟"""
+        if self.plugin._is_terminated: return
+
+        delay_str = self.image_conf.get("separate_send_delay", "1.0-2.0")
+        try:
+            if "-" in str(delay_str):
+                d_min, d_max = map(float, str(delay_str).split("-"))
+                await asyncio.sleep(random.uniform(d_min, d_max))
+            else:
+                await asyncio.sleep(float(delay_str))
+        except:
+            await asyncio.sleep(1.5)

@@ -59,7 +59,7 @@ class ContentService:
     async def generate(self, stype: SharingType, period: TimePeriod, 
                       target_id: str, is_group: bool, 
                       life_ctx: str, chat_hist: str, news_data: tuple = None,
-                      nickname: str = "") -> Optional[str]:
+                      nickname: str = "", recent_dynamics: str = "") -> Optional[str]:
         """统一生成入口"""
         # 获取人设信息
         persona_info = await self._get_persona_info()
@@ -86,7 +86,8 @@ class ContentService:
             "date_str": date_str,         
             "time_str": time_str,
             "nickname": call_name,      
-            "detect_name": detect_name   
+            "detect_name": detect_name,
+            "recent_dynamics": recent_dynamics
         }
         
         try:
@@ -303,6 +304,10 @@ class ContentService:
         else:
             greeting_constraint = "4. 就像平常聊天一样自然打招呼即可，不需要刻意说早安晚安"            
 
+        dynamics_prompt = ""
+        if ctx.get('recent_dynamics'):
+            dynamics_prompt = f"\n【你最近发过的动态回顾】\n{ctx['recent_dynamics']}\n(注：请保持人设连贯，可以偶尔自然呼应之前的心情，但绝对不要重复发过的内容)"
+
         prompt = f"""
 【当前时间】{ctx['date_str']} {ctx['time_str']} ({p_label})
 你现在要向{'群聊' if is_group else '私聊'}发送一条温馨自然的问候。
@@ -310,6 +315,7 @@ class ContentService:
 {user_info_prompt}
 {ctx['life_hint']}
 {ctx['chat_hint']}
+{dynamics_prompt}
 {context_instruction}
 {address_rule}
 
@@ -397,6 +403,9 @@ class ContentService:
         else:
             resonance_guide = "【私聊策略】像对亲密好友一样，分享一点私人的、细腻的小情绪，或者一个小秘密。"
 
+        dynamics_prompt = ""
+        if ctx.get('recent_dynamics'):
+            dynamics_prompt = f"\n【你最近发过的动态回顾】\n{ctx['recent_dynamics']}\n(注：请保持人设连贯，可以偶尔自然呼应之前的心情，但绝对不要重复发过的内容)"
 
         prompt = f"""
 【当前时间】{ctx['date_str']} {ctx['time_str']} ({ctx['period_label']})
@@ -405,6 +414,7 @@ class ContentService:
 {user_info_prompt}
 {ctx['life_hint']}
 {ctx['chat_hint']}
+{dynamics_prompt}
 {vibe_check}
 {address_rule}
 {resonance_guide}
@@ -499,6 +509,10 @@ class ContentService:
   - 即使天气不好，也要按照日程设定的“外出人设”来发言（例如：“虽然下雨，但在外面躲雨的时候看到了这个...”）。
 """
 
+        dynamics_prompt = ""
+        if ctx.get('recent_dynamics'):
+            dynamics_prompt = f"\n【你最近发过的动态回顾】\n{ctx['recent_dynamics']}\n(注：请保持人设连贯，可以偶尔自然呼应之前的心情，但绝对不要重复发过的内容)"
+
         prompt = f"""
 【当前时间】{ctx['date_str']} {ctx['time_str']} ({ctx['period_label']})
 你看到了今天的{source_name}，想选择{share_count}条和{'群聊' if is_group else '私聊'}分享。
@@ -506,7 +520,7 @@ class ContentService:
 {user_info_prompt}
 {ctx['life_hint']}
 {ctx['chat_hint']}
-
+{dynamics_prompt}
 {source_name}：
 {news_text}
 
@@ -613,6 +627,10 @@ class ContentService:
      - 如果实在联系不上，直接分享即可，不要强行找理由，也不要编造“突然想到”的心理活动。
 """
 
+        dynamics_prompt = ""
+        if ctx.get('recent_dynamics'):
+            dynamics_prompt = f"\n【你最近发过的动态回顾】\n{ctx['recent_dynamics']}\n(注：请保持人设连贯，可以偶尔自然呼应之前的心情，但绝对不要重复发过的内容)"
+
         prompt = f"""
 【当前时间】{ctx['date_str']} {ctx['time_str']} ({ctx['period_label']})
 你现在的任务是：向{'群聊' if is_group else '私聊'}分享下面的冷知识。
@@ -620,11 +638,12 @@ class ContentService:
 【核心任务】
 1. 知识点关键词：【{target_keyword}】
 2. 基于下面的资料进行通俗化讲解。
-{baike_context}
 
+{baike_context}
 {user_info_prompt}
 {ctx['life_hint']}
 {ctx['chat_hint']}
+{dynamics_prompt}
 
 【拒绝神怪/脑补开头】
 - 严禁使用“脑子里突然蹦出”、“突然灵光一闪”、“不知怎么的突然想到”等描述思维跳跃的语句。
@@ -739,17 +758,22 @@ class ContentService:
   3. 如果联系不上，就直接说“最近在重温/看到了这个”即可，不要强行编造理由，也不要说“突然想到”。
 """
 
+        dynamics_prompt = ""
+        if ctx.get('recent_dynamics'):
+            dynamics_prompt = f"\n【你最近发过的动态回顾】\n{ctx['recent_dynamics']}\n(注：请保持人设连贯，可以偶尔自然呼应之前的心情，但绝对不要重复发过的内容)"
+
         prompt = f"""
 【当前时间】{ctx['date_str']} {ctx['time_str']} ({ctx['period_label']})
 你现在的任务是：向{'群聊' if is_group else '私聊'}推荐【{target_work}】。
 
 【核心指令】
 1. 必须基于下面的资料进行推荐，不要更换目标。
-{baike_context}
 
+{baike_context}
 {user_info_prompt}
 {ctx['life_hint']}
 {ctx['chat_hint']}
+{dynamics_prompt}
 
 【拒绝神怪/脑补开头】
 - 严禁使用“脑子里突然蹦出”、“突然灵光一闪”、“不知怎么的脑海中浮现”等描述思维跳跃的语句。

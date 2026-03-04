@@ -97,7 +97,27 @@ NEWS_SOURCE_MAP = {
         "url": "https://api.nycnm.cn/API/ifanr.php",
         "name": "爱范儿热搜",
         "icon": "📱"
-    }
+    },
+    "netease": {
+        "url": "https://api.nycnm.cn/API/netease.php",
+        "name": "网易热搜",
+        "icon": "📰"
+    },
+    "sina": {
+        "url": "https://api.nycnm.cn/API/sina.php",
+        "name": "新浪热搜",
+        "icon": "👀"
+    },
+    "thepaper": {
+        "url": "https://api.nycnm.cn/API/thepaper.php",
+        "name": "澎湃热搜",
+        "icon": "🌊"
+    },
+    "yicai": {
+        "url": "https://api.nycnm.cn/API/yicai.php",
+        "name": "第一财经热搜",
+        "icon": "💴"
+    }    
 }
 
 # 时间段新闻源偏好 
