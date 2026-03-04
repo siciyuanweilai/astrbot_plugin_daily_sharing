@@ -536,16 +536,32 @@
     "hint": "独立于群聊私聊，自动定时分享QQ空间说说。",
     "items": {
       "enable_qzone": {
-        "description": "启用定时分享QQ空间说说",
+        "description": "启用定时分享说说",
         "type": "bool",
         "default": false,
-        "hint": "开启后，将按照下方的Cron规则和序列自动分享说说。"
+        "hint": "开启后，将按照下方的规则和序列自动分享QQ空间说说。"
+      },
+      "qzone_trigger_mode": {
+        "description": "说说定时触发模式",
+        "type": "string",
+        "default": "cron",
+        "options": ["cron", "random_period"],
+        "hint": "cron=固定时间点触发 | random_period=在下方配置的多个时间段内随机触发"
+      },
+      "qzone_random_periods": {
+        "description": "说说随机触发时间段",
+        "type": "list",
+        "items": {
+          "type": "string"
+        },
+        "default": ["08:00-10:00", "19:00-21:00"],
+        "hint": "仅在 random_period 模式下生效。格式：HH:MM-HH:MM。每天会在这些时间段内随机选取一个时间点触发分享。"
       },
       "qzone_cron": {
-        "description": "定时分享时间 (Cron)",
+        "description": "说说定时分享时间",
         "type": "string",
         "default": "0 20 * * *",
-        "hint": "Cron表达式，例如 0 20 * * * 表示每天晚上8点触发"
+        "hint": "可用预设: morning(8点)/noon(12点)/afternoon(15点)/evening(19点)/night(22点)/twice(8,20点)/three_times(8,12,20点)，或完整cron表达式 0 8,20 * * *"
       },
       "qzone_enable_image": {
         "description": "启用说说生成配图",
@@ -569,7 +585,7 @@
         "hint": "仅当说说分享类型在列表中时，才会生成图片"
       },
       "qzone_sharing_type": {
-        "description": "QQ空间分享模式",
+        "description": "说说分享模式",
         "type": "string",
         "default": "auto",
         "options": ["auto", "greeting", "news", "mood", "knowledge", "recommendation"],

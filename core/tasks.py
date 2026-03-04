@@ -50,10 +50,7 @@ class TaskManager:
             logger.debug(f"[DailySharing] 早报定时任务已启动 ({cron_briefing})")
 
         if self.qzone_conf.get("enable_qzone", False):
-            q_cron = self.qzone_conf.get("qzone_cron", "0 20 * * *")
-            actual_q_cron = CRON_TEMPLATES.get(q_cron, q_cron)
-            self._setup_cron_job_custom("qzone_share", actual_q_cron, self._task_wrapper_qzone)
-            logger.debug(f"[DailySharing] QQ空间定时任务已启动 ({actual_q_cron})")
+            self.setup_qzone_cron()
 
     def setup_cron(self, cron_str):
         """设置自动分享触发器 (支持 cron 和 random_period)"""
@@ -67,6 +64,22 @@ class TaskManager:
             # 启动时立刻安排一次今天的任务
             asyncio.create_task(self._schedule_daily_random_jobs())
             logger.debug(f"[DailySharing] 已启用多时间段随机生成模式")
+
+    def setup_qzone_cron(self):
+        """设置 QQ 空间自动分享触发器"""
+        trigger_mode = self.qzone_conf.get("qzone_trigger_mode", "cron")
+        
+        if trigger_mode == "cron":
+            q_cron = self.qzone_conf.get("qzone_cron", "0 20 * * *")
+            actual_q_cron = CRON_TEMPLATES.get(q_cron, q_cron)
+            self._setup_cron_job_custom("qzone_share", actual_q_cron, self._task_wrapper_qzone)
+            logger.debug(f"[DailySharing] QQ空间定时任务已启动 ({actual_q_cron})")
+        elif trigger_mode == "random_period":
+            # 每天凌晨 00:00 重新生成当天的QQ空间随机任务
+            self._setup_cron_job_custom("daily_qzone_random_scheduler", "0 0 * * *", self._schedule_daily_qzone_random_jobs)
+            # 启动时立刻安排一次今天的任务
+            asyncio.create_task(self._schedule_daily_qzone_random_jobs())
+            logger.debug(f"[DailySharing] QQ空间已启用多时间段随机生成模式")
 
     async def _schedule_daily_random_jobs(self):
         """每天计算并在 scheduler 中添加当天的随机时间点任务"""
@@ -108,6 +121,40 @@ class TaskManager:
                     logger.info(f"[DailySharing] 今日随机任务 [{period_str}] 已安排在: {run_time.strftime('%H:%M:%S')} 执行")
             except Exception as e:
                 logger.error(f"[DailySharing] 解析时间段 {period_str} 失败: {e}")
+
+    async def _schedule_daily_qzone_random_jobs(self):
+        """QQ空间随机时间计算"""
+        if self.plugin._is_terminated: return
+        
+        job_ids = [job.id for job in self.scheduler.get_jobs() if job.id.startswith("qzone_random_share_")]
+        for jid in job_ids:
+            self.scheduler.remove_job(jid)
+            
+        periods = self.qzone_conf.get("qzone_random_periods", ["08:00-10:00", "19:00-21:00"])
+        now = datetime.now()
+        
+        for idx, period_str in enumerate(periods):
+            try:
+                start_str, end_str = period_str.split('-')
+                start_h, start_m = map(int, start_str.split(':'))
+                end_h, end_m = map(int, end_str.split(':'))
+                
+                start_dt = now.replace(hour=start_h, minute=start_m, second=0, microsecond=0)
+                end_dt = now.replace(hour=end_h, minute=end_m, second=59, microsecond=0)
+                if end_dt <= start_dt: 
+                    continue
+                
+                random_seconds = random.randint(0, int((end_dt - start_dt).total_seconds()))
+                run_time = start_dt + timedelta(seconds=random_seconds)
+                
+                if run_time > now:
+                    job_id = f"qzone_random_share_{idx}"
+                    self.scheduler.add_job(
+                        self._task_wrapper_qzone, 'date', run_date=run_time, id=job_id, replace_existing=True
+                    )
+                    logger.info(f"[DailySharing] 今日QQ空间随机任务 [{period_str}] 已安排在: {run_time.strftime('%H:%M:%S')} 执行")
+            except Exception as e:
+                logger.error(f"[DailySharing] 解析QQ空间时间段 {period_str} 失败: {e}")
 
     def _setup_cron_job_custom(self, job_id: str, cron_str: str, func):
         """通用 Cron 设置方法"""
@@ -215,7 +262,15 @@ class TaskManager:
         self.plugin._bg_tasks.add(task)
         
         try:
-            random_delay_min = int(self.basic_conf.get("cron_random_delay", 0))
+            trigger_mode = self.qzone_conf.get("qzone_trigger_mode", "cron")
+            if trigger_mode == "random_period":
+                random_delay_min = 0
+            else:
+                try:
+                    random_delay_min = int(self.basic_conf.get("cron_random_delay", 0))
+                except Exception:
+                    random_delay_min = 0
+                    
             if random_delay_min > 0:
                 delay_seconds = random.randint(0, random_delay_min * 60)
                 if delay_seconds > 0:
@@ -1104,3 +1159,4 @@ class TaskManager:
                 await asyncio.sleep(float(delay_str))
         except:
             await asyncio.sleep(1.5)
+            
