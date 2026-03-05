@@ -161,7 +161,7 @@
             "max": 365,
             "step": 1
         },        
-        "hint": "用于【知识】和【推荐】类型。Bot会记住最近N天内分享过的主题，避免重复分享相同的内容。同时早于此天数的日志也会被自动清理。"
+        "hint": "用于【知识】和【推荐】类型。记住最近N天内分享过的主题，避免重复分享相同的内容。同时早于此天数的日志也会被自动清理。"
       },
       "sharing_type": {
         "description": "群聊、私聊分享类型模式",
@@ -255,31 +255,31 @@
         "description": "启用生活上下文",
         "type": "bool",
         "default": true,
-        "hint": "开启后，分享内容会结合 astrbot_plugin_life_scheduler 插件的真实生活状态（如当前活动、地点、天气等），使分享更自然真实"
+        "hint": "需要安装 astrbot_plugin_life_scheduler 插件，开启后，分享内容会结合虚拟生活状态（如当前活动、地点、天气等），使分享更自然真实"
       },
       "life_context_in_group": {
         "description": "启用群聊拟人化人设",
         "type": "bool",
         "default": true,
-        "hint": "开启后，Bot不再机械播报，而是会带入生活状态与情绪，更具“人味”。"
+        "hint": "开启后，不再一味的机械播报，而是会带入生活状态与情绪，更具“人味”。"
       },
       "group_share_schedule": {
         "description": "启用群聊展示日程细节",
         "type": "bool",
         "default": false,
-        "hint": "开启后，群聊中也会提到Bot的具体日程安排，关闭则仅显示抽象状态。"
+        "hint": "开启后，群聊中也会提到具体日程安排，关闭则仅显示抽象状态。"
       },
       "enable_chat_history": {
         "description": "启用聊天历史消息",
         "type": "bool",
         "default": true,
-        "hint": "【基础开关】开启后，Bot会读取最近的聊天历史记录，以生成更符合上下文的分享内容。"
+        "hint": "【基础开关】开启后，读取最近的聊天历史记录，以生成更符合上下文的分享内容。"
       },
       "enable_deep_history": {
         "description": "启用深度回溯",
         "type": "bool",
         "default": true,
-        "hint": "【进阶功能】需先开启上一项。开启后，Bot会尝试翻页获取更早的聊天历史消息，以便理解长跨度的上下文。"
+        "hint": "【进阶功能】需先开启上一项。开启后，尝试翻页获取更早的聊天历史消息，以便理解长跨度的上下文。"
       },
       "deep_history_hours": {
         "description": "深度回溯时间范围(小时)",
@@ -290,7 +290,7 @@
             "max": 168,
             "step": 1
         },
-        "hint": "Bot会读取过去N小时内的消息（群聊和私聊都受此时间限制）。"
+        "hint": "读取过去N小时内的消息（群聊和私聊都受此时间限制）。"
       },
       "deep_history_max_count": {
         "description": "【群聊】深度回溯最大条数",
@@ -323,7 +323,7 @@
             "max": 100,
             "step": 5
         },
-        "hint": "Bot看最近多少条消息来判断热闹程度。数值越小，只要有人说话Bot就觉得热闹（敏感）；数值越大，需要持续刷屏Bot才觉得热闹（稳重）。"
+        "hint": "查看最近多少条消息来判断热闹程度。数值越小，只要有人说话就觉得热闹（敏感）；数值越大，需要持续刷屏才觉得热闹（稳重）。"
       },
       "group_share_strategy": {
         "description": "群聊分享策略",
@@ -669,13 +669,13 @@
         "description": "融合人设特征",
         "type": "bool",
         "default": true,
-        "hint": "开启后，分享内容会使用Bot的人设语气和性格，更加生动自然"
+        "hint": "开启后，分享内容会使用系统人设语气和性格，更加生动自然"
       },
       "persona_id": {
         "description": "指定人设ID",
         "type": "string",
         "default": "",
-        "hint": "可选择已配置的人设，留空则使用当前会话的默认人设",
+        "hint": "可选择已配置的人设，留空则使用当前会话的默认系统人设",
         "_special": "select_persona"
       }
     }
