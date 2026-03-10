@@ -667,16 +667,16 @@ class TaskManager:
             for item in conf_list:
                 s = str(item).strip()
                 if not s: continue
-                # 支持中英文冒号混用
+                # 支持中英文冒号混用                
                 s = s.replace("：", ":")
                 parts = [p.strip() for p in s.split(":")]
                 
                 target_id = parts[0]
                 if len(parts) == 1:
                     # 只有群号
-                    res[target_id] = {"cron": None, "seq": "auto"}
+                    res[target_id] = {"cron": None, "seq": None}
                 elif len(parts) == 2:
-                    # 只有群号和类型 (例如 123456:news)
+                    # 只有群号和类型
                     res[target_id] = {"cron": None, "seq": parts[1]}
                 elif len(parts) >= 3:
                     # 群号 : 时间 : 类型 (例如 123456:0 7 * * *:news)
@@ -1126,10 +1126,12 @@ class TaskManager:
                 target_specific_type = self.basic_conf.get("sharing_type", "auto")
                 if is_group and real_id in r_groups:
                     conf = r_groups[real_id]
-                    target_specific_type = conf.get("seq", "auto") if isinstance(conf, dict) else conf
+                    st = conf.get("seq") if isinstance(conf, dict) else conf
+                    if st is not None: target_specific_type = st
                 elif not is_group and real_id in r_users:
                     conf = r_users[real_id]
-                    target_specific_type = conf.get("seq", "auto") if isinstance(conf, dict) else conf
+                    st = conf.get("seq") if isinstance(conf, dict) else conf
+                    if st is not None: target_specific_type = st
 
                 # 为该目标决定当前的分享类型
                 if force_type:
