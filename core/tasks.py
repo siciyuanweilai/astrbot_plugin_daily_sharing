@@ -1303,8 +1303,16 @@ class TaskManager:
             
             # 如果是发新闻，单独获取热搜（支持手动指定源）
             if stype == SharingType.NEWS:
-                actual_source = news_source if news_source else self.news_service.select_news_source()
+                state = await self.db.get_state("qzone", {})
+                last_news_source = state.get("last_news_source")
+
+                actual_source = news_source
+                if not actual_source:
+                    actual_source = self.news_service.select_news_source(excluded_source=last_news_source)
+                    
                 news_data = await self.news_service.get_hot_news(actual_source)
+                if news_data:
+                    await self.db.update_state_dict("qzone", {"last_news_source": news_data[1]})
 
             # 屏蔽历史记录，使用纯净的提示词让LLM写说说
             qzone_life_prompt = self.ctx_service.format_life_context(life_ctx, stype, False, None)

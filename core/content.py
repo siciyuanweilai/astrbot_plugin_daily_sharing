@@ -453,31 +453,37 @@ class ContentService:
         return await self.call_llm(prompt=prompt, system_prompt=ctx['persona'])
 
     async def _fetch_search_tavily(self, keyword: str, search_type: str = "news") -> Tuple[str, str]:
-        """调用 AstrBot 内置的 Tavily 进行搜索"""
+        """调用 AstrBot 内置的 Tavily 进行搜索，支持多Key轮询与失败重试"""
         
-        tavily_key = os.getenv("TAVILY_API_KEY") 
+        tavily_keys = []
         
-        if not tavily_key:
-            config_paths = [
-                "data/cmd_config.json", 
-                "cmd_config.json"
-            ]
-            for path in config_paths:
-                if os.path.exists(path):
-                    try:
-                        with open(path, 'r', encoding='utf-8-sig') as f:
-                            config_data = json.load(f)
-                            keys = config_data.get("provider_settings", {}).get("websearch_tavily_key", [])
-                            if isinstance(keys, list) and len(keys) > 0:
-                                tavily_key = keys[0] 
-                                break
-                            elif isinstance(keys, str) and keys:
-                                tavily_key = keys
-                                break
-                    except Exception as e:
-                        continue
+        # 1. 尝试环境变量
+        env_key = os.getenv("TAVILY_API_KEY") 
+        if env_key:
+            tavily_keys.append(env_key)
+            
+        # 2. 尝试从配置文件中读取列表
+        config_paths = [
+            "data/cmd_config.json", 
+            "cmd_config.json"
+        ]
+        for path in config_paths:
+            if os.path.exists(path):
+                try:
+                    with open(path, 'r', encoding='utf-8-sig') as f:
+                        config_data = json.load(f)
+                        keys = config_data.get("provider_settings", {}).get("websearch_tavily_key", [])
+                        if isinstance(keys, list):
+                            tavily_keys.extend(keys)
+                        elif isinstance(keys, str) and keys:
+                            tavily_keys.append(keys)
+                except Exception as e:
+                    continue
 
-        if not tavily_key:
+        # 去重并保持顺序
+        tavily_keys = list(dict.fromkeys(tavily_keys))
+
+        if not tavily_keys:
             return keyword, ""
 
         url = "https://api.tavily.com/search"
@@ -486,7 +492,7 @@ class ContentService:
         # 根据请求类型动态调整搜索词
         if search_type == "news":
             current_date = datetime.now().strftime("%Y年%m月%d日")
-            search_query = f"{keyword} {current_date} 最新进展 实时动态 事件背景"
+            search_query = f"{keyword} {current_date} 最新进展 事件核心内容 人物"
         elif search_type == "knowledge":
             search_query = f"什么是 {keyword} ？ 科普 原理 详细解释"
         elif search_type == "rec":
@@ -494,35 +500,48 @@ class ContentService:
         else:
             search_query = keyword
             
-        payload = {
-            "api_key": tavily_key,
-            "query": search_query,
-            "search_depth": "basic",
-            "include_answer": True, 
-            "max_results": 2
-        }
+        async with aiohttp.ClientSession() as session:
+            for attempt, current_key in enumerate(tavily_keys):
+                payload = {
+                    "api_key": current_key,
+                    "query": search_query,
+                    "search_depth": "basic",
+                    "include_answer": True, 
+                    "max_results": 2
+                }
 
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, headers=headers, json=payload, timeout=10) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        
-                        # 1. 如果有官方生成的精炼 Answer，无脑优先使用！
-                        answer = data.get("answer", "").strip()
-                        if answer:
-                            return keyword, answer
+                try:
+                    async with session.post(url, headers=headers, json=payload, timeout=10) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
                             
-                        # 2. 如果没有 Answer，退而求其次拼接 contents
-                        results = data.get("results", [])
-                        if results:
-                            combined_content = " ".join([r.get("content", "") for r in results])
-                            # 去除多余的换行和空格，防止被垃圾导航栏占满字数
-                            clean_content = re.sub(r'\s+', ' ', combined_content).strip()
-                            return keyword, clean_content[:350]
-        except Exception as e:
-            logger.error(f"[Tavily 搜索功能异常] {keyword}: {e}")
+                            # 1. 如果有官方生成的精炼 Answer，无脑优先使用！
+                            answer = data.get("answer", "").strip()
+                            if answer:
+                                return keyword, answer
+                                
+                            # 2. 如果没有 Answer，退而求其次拼接 contents
+                            results = data.get("results", [])
+                            if results:
+                                combined_content = " ".join([r.get("content", "") for r in results])
+                                # 去除多余的换行和空格
+                                clean_content = re.sub(r'\s+', ' ', combined_content).strip()
+                                return keyword, clean_content[:350]
+                            
+                            return keyword, ""
+                            
+                        else:
+                            # 额度用尽、Key无效等情况（400, 401, 429...）
+                            error_text = await resp.text()
+                            logger.warning(f"[Tavily] API Key {attempt+1} 失败，即将尝试下一个。")
+                            continue 
+                            
+                except Exception as e:
+                    logger.warning(f"[Tavily] API Key {attempt+1} 请求异常: {e}，即将尝试下一个。")
+                    continue
         
+        # 如果循环结束还没 return，说明所有的 Key 都失败了
+        logger.error(f"[Tavily 搜索功能异常] {keyword}: 所有配置的 API Key 均已失效或超额。")
         return keyword, ""
 
     async def _gen_news(self, news_data: Tuple[List, str], ctx: dict):
@@ -583,7 +602,8 @@ class ContentService:
                 else:
                     hot_display = f" {hot_str}"
             
-            bg_str = f"\n  -> [必须参考的真实背景]: {s_bg}" if s_bg else "\n  -> [真实背景]: 无，请仅就标题做字面简评，严禁擅自编造"
+            # 给每个标题加上强制关联的背景提示
+            bg_str = f"\n  -> [必须参考的真实背景与人物]: {s_bg}" if s_bg else "\n  -> [真实背景]: 无，请仅就标题做字面简评，严禁擅自编造！"
             news_text += f"{idx}. 标题：【{title}】{hot_display}{bg_str}\n\n"
         
         # 称呼控制
@@ -616,13 +636,15 @@ class ContentService:
 
         target_str = "QQ空间" if is_qzone else ('群聊' if is_group else '私聊')
 
+        # 在 Prompt 头部加入最强烈的“阅读理解”指令
         prompt = f"""
 【当前时间】{ctx['date_str']} {ctx['time_str']} ({ctx['period_label']})
 你看到了今天的{source_name}，想选择{share_count}条和{target_str}分享。
 
-【事实核查指令】
-下面提供的新闻列表可能已经由系统预先完成了联网检索，包含了事件的真实细节。
-如果新闻下方附带有 `[真实事件细节]`，你**绝对不能只读标题自由脑补**，必须把其中的真相融入到你的文案中！
+【阅读理解与防幻觉最高指令】
+请务必仔细阅读下方提供的新闻列表，每一条都可能附带有 `[必须参考的真实背景与人物]`。
+1. 提取与引用：你必须直接使用背景中提到的真实人名和真实数据，严禁无视背景自己瞎写。
+2. 绝对禁止编造：如果 `[必须参考的真实背景]` 中没有明确指出具体细节，你就用“有人”、“某地”来概括。绝对不允许去记忆里翻找或随机捏造！
 
 {user_info_prompt}
 {ctx['life_hint']}
@@ -653,8 +675,8 @@ class ContentService:
 要求：
 1. 以你的人设性格说话，真实自然
 2. 选择{share_count}条你最感兴趣的热搜
-3. {'对每条' if share_count > 1 else '对这条'}热搜要有自己的真实观点，如果有事实细节，必须结合细节进行锐评，不能像没营养的复读机
-4. 观点真诚，避免过度情绪化或标题党式表达
+3. 观点真诚，必须结合新闻下方的真实背景进行锐评，不要当毫无营养的复读机！
+4. 避免过度情绪化或标题党式表达
 5. {'群聊中简洁有重点' if is_group else '私聊可以详细展开想法，并结合你当下的状态'}
 6. 用【】标注热搜标题
 7. {'字数：120-150字' if is_group else '字数：150-200字'}
@@ -793,7 +815,7 @@ class ContentService:
 2. {'语气轻松简洁' if is_group else '可以详细展开，带点个人见解'}。
 3. 可以加入你的个人感想或小评论
 4. 用【】将核心关键词【{target_keyword}】括起来。
-5. {'字数：100-120字' if is_group else '字数：120-150字'}。
+5. {'字数：100-150字' if is_group else '字数：100-200字'}。
 6. 直接输出分享内容。
 7. 【重要】文案末尾必须附带情感标签，格式为：$$happy$$, $$sad$$, $$angry$$, $$surprise$$, $$neutral$$。只选一个。
 """
@@ -874,7 +896,7 @@ class ContentService:
         context_instruction = ""
         if is_group:
              if allow_detail:
-                 context_instruction = "- 场景参考：可以提及你当下的活动（如刚看完书、听完歌、吃完饭），作为推荐的引子。"
+                 context_instruction = "- 场景参考：可以提及你当下的活动（如刚看完书、听完歌、吃完饭），作为推荐的引子的。"
              else:
                  context_instruction = "- 忽略天气，除非它能极大烘托氛围（如下雨推爵士）。重点关注内容本身。如果状态忙碌，可以说“忙里偷闲推荐个”，状态休闲可以说“打发时间”。"
         else:
@@ -930,7 +952,7 @@ class ContentService:
 3. 真诚推荐，避免营销号式的夸张表达
 4. 结合资料介绍它的亮点。
 5. 务必用【】将推荐目标的名称【{target_work}】括起来。
-6. {'字数：100-120字' if is_group else '字数：120-150字'}。
+6. {'字数：80-120字' if is_group else '字数：120-150字'}。
 7. 直接输出推荐内容。
 8. 【重要】文案末尾必须附带情感标签，格式为：$$happy$$, $$sad$$, $$angry$$, $$surprise$$, $$neutral$$。只选一个。
 """
