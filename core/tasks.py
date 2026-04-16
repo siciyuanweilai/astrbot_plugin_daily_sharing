@@ -1164,8 +1164,13 @@ class TaskManager:
                             if bot:
                                 ret = await bot.api.call_action("get_stranger_info", user_id=int(real_id))
                                 if ret and isinstance(ret, dict):
-                                    nickname = ret.get("nickname", "")
-                                    logger.info(f"[DailySharing] 获取到用户昵称: {nickname}")
+                                    nickname = ret.get("remark")
+                                    logger.info(f"[DailySharing] 获取到用户备注: {nickname}")
+                                    if nickname != "":
+                                        logger.info(f"[DailySharing] 获取到用户备注: {nickname}")
+                                    else:
+                                        nickname = ret.get("nickname", "")
+                                        logger.info(f"[DailySharing] 获取到用户昵称: {nickname}")
                     except Exception as e:
                          logger.warning(f"[DailySharing] 获取昵称失败: {e}")
 
