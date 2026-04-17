@@ -32,6 +32,32 @@ class TaskManager:
         self.context_conf = plugin.context_conf
         self.receiver_conf = plugin.receiver_conf
 
+    def _parse_cron_to_kwargs(self, cron_str: str) -> Optional[dict]:
+        """
+        兼容解析 5/6/7 位的 Cron 表达式
+        5位: 分 时 日 月 周
+        6位: 秒 分 时 日 月 周
+        7位: 秒 分 时 日 月 周 年
+        """
+        parts = cron_str.strip().split()
+        if len(parts) == 5:
+            return {
+                "minute": parts[0], "hour": parts[1], 
+                "day": parts[2], "month": parts[3], "day_of_week": parts[4]
+            }
+        elif len(parts) == 6:
+            return {
+                "second": parts[0], "minute": parts[1], "hour": parts[2], 
+                "day": parts[3], "month": parts[4], "day_of_week": parts[5]
+            }
+        elif len(parts) == 7:
+            return {
+                "second": parts[0], "minute": parts[1], "hour": parts[2], 
+                "day": parts[3], "month": parts[4], "day_of_week": parts[5], 
+                "year": parts[6]
+            }
+        return None
+
     def setup_tasks(self):
         if self.plugin.config.get("enable_auto_sharing", False):
             cron = self.basic_conf.get("sharing_cron", "0 8,20 * * *")
@@ -133,16 +159,17 @@ class TaskManager:
                 await delayed_custom_execute()
 
             actual_cron = CRON_TEMPLATES.get(cron_str, cron_str)
-            parts = actual_cron.split()
-            if len(parts) == 5:
+            cron_kwargs = self._parse_cron_to_kwargs(actual_cron)
+            
+            if cron_kwargs:
                 self.scheduler.add_job(
                     custom_wrapper, 'cron',
-                    minute=parts[0], hour=parts[1], day=parts[2], month=parts[3], day_of_week=parts[4],
+                    **cron_kwargs,
                     id=job_id, replace_existing=True, max_instances=1
                 )
                 logger.debug(f"[DailySharing] 独立群聊、私聊任务 [{target_id}] 已挂载独立定时: {actual_cron}")
             else:
-                logger.error(f"[DailySharing] 独立群聊、私聊任务 [{target_id}] 无效的Cron表达式: {cron_str}")
+                logger.error(f"[DailySharing] 独立群聊、私聊任务 [{target_id}] 无效的Cron表达式 (支持5/6/7位): {cron_str}")
 
         for gid, conf in r_groups.items():
             if isinstance(conf, dict) and conf.get("cron"):
@@ -406,19 +433,19 @@ class TaskManager:
                 self.scheduler.remove_job(job_id)
 
             actual_cron = CRON_TEMPLATES.get(cron_str, cron_str)
-            parts = actual_cron.split()
+            cron_kwargs = self._parse_cron_to_kwargs(actual_cron)
             
-            if len(parts) == 5:
+            if cron_kwargs:
                 self.scheduler.add_job(
                     func, 'cron',
-                    minute=parts[0], hour=parts[1], day=parts[2], month=parts[3], day_of_week=parts[4],
+                    **cron_kwargs,
                     id=job_id,
                     replace_existing=True,
                     max_instances=1
                 )
                 logger.debug(f"[DailySharing] 任务[{job_id}]已设定: {actual_cron}")
             else:
-                logger.error(f"[DailySharing] 任务[{job_id}]无效的 Cron 表达式: {cron_str}")
+                logger.error(f"[DailySharing] 任务[{job_id}]无效的 Cron 表达式 (支持5/6/7位): {cron_str}")
         except Exception as e:
             logger.error(f"[DailySharing] 任务[{job_id}]设置失败: {e}")
 
@@ -1530,3 +1557,4 @@ class TaskManager:
                 await asyncio.sleep(float(delay_str))
         except:
             await asyncio.sleep(1.5)
+            
