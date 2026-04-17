@@ -1191,12 +1191,14 @@ class TaskManager:
                             if bot:
                                 ret = await bot.api.call_action("get_stranger_info", user_id=int(real_id))
                                 if ret and isinstance(ret, dict):
-                                    nickname = ret.get("remark")
-                                    logger.info(f"[DailySharing] 获取到用户备注: {nickname}")
-                                    if nickname != "":
+                                    # 安全获取备注和昵称，如果不存在则默认为空字符串
+                                    remark = ret.get("remark", "").strip()
+                                    
+                                    if remark:  # 如果备注存在且不为空
+                                        nickname = remark
                                         logger.info(f"[DailySharing] 获取到用户备注: {nickname}")
-                                    else:
-                                        nickname = ret.get("nickname", "")
+                                    else:       # 如果没有备注，则退回使用昵称
+                                        nickname = ret.get("nickname", "").strip()
                                         logger.info(f"[DailySharing] 获取到用户昵称: {nickname}")
                     except Exception as e:
                          logger.warning(f"[DailySharing] 获取昵称失败: {e}")
