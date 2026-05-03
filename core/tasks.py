@@ -79,7 +79,7 @@ class TaskManager:
                     else:
                         logger.warning(f"[DailySharing] 图片下载失败，HTTP 状态码: {resp.status}")
         except Exception as e:
-            logger.warning(f"[DailySharing] 下载图片异常: {e}")
+            logger.warning(f"[DailySharing] 图片下载异常: {e}")
         return None
 
     def setup_tasks(self):
@@ -838,7 +838,6 @@ class TaskManager:
                     return 
                     
                 if to_qzone:
-                    # QQ空间：保持原始URL逻辑
                     qzone_plugin = self.ctx_service._find_plugin("qzone")
                     if qzone_plugin and hasattr(qzone_plugin, "service"):
                         self.plugin._inject_qzone_client(qzone_plugin)
@@ -851,12 +850,12 @@ class TaskManager:
                     else:
                         await event.send(event.plain_result("未检测到QQ空间插件！"))
                 else:
-                    # 群聊/私聊：强制下载到本地
+                    # 群聊/私聊：强制下载到本地发
                     local_path = await self._download_image_to_local(url, "60s.png")
-                    if not local_path:
-                        await event.send(event.plain_result("60s新闻图片下载失败，请稍后再试。"))
-                        return
-                    await event.send(event.image_result(local_path))
+                    if local_path:
+                        await event.send(event.image_result(local_path))
+                    else:
+                        await event.send(event.plain_result("60s新闻图片下载失败。"))
                 return 
 
             # AI资讯
@@ -872,7 +871,6 @@ class TaskManager:
                     return 
                     
                 if to_qzone:
-                    # QQ空间：保持原始URL逻辑
                     qzone_plugin = self.ctx_service._find_plugin("qzone")
                     if qzone_plugin and hasattr(qzone_plugin, "service"):
                         self.plugin._inject_qzone_client(qzone_plugin)
@@ -885,12 +883,12 @@ class TaskManager:
                     else:
                         await event.send(event.plain_result("未检测到QQ空间插件！"))
                 else:
-                    # 群聊/私聊：强制下载到本地
+                    # 群聊/私聊：强制下载到本地发
                     local_path = await self._download_image_to_local(url, "ainews.png")
-                    if not local_path:
-                        await event.send(event.plain_result("AI资讯快报图片下载失败，请稍后再试。"))
-                        return
-                    await event.send(event.image_result(local_path))
+                    if local_path:
+                        await event.send(event.image_result(local_path))
+                    else:
+                        await event.send(event.plain_result("AI资讯快报图片下载失败。"))
                 return 
 
             # === 常规流程 ===
@@ -944,7 +942,6 @@ class TaskManager:
 
                     if img_url:
                         if to_qzone:
-                            # QQ空间：直接使用 URL
                             qzone_plugin = self.ctx_service._find_plugin("qzone")
                             if qzone_plugin and hasattr(qzone_plugin, "service"):
                                 self.plugin._inject_qzone_client(qzone_plugin)
@@ -957,12 +954,12 @@ class TaskManager:
                             else:
                                 await event.send(event.plain_result("未检测到QQ空间插件！"))
                         else:
-                            # 群聊/私聊：下载本地再发
+                            # 群聊/私聊：强制下载到本地发
                             local_path = await self._download_image_to_local(img_url, "hot_news.png")
-                            if not local_path:
+                            if local_path:
+                                await event.send(event.image_result(local_path))
+                            else:
                                 await event.send(event.plain_result(f"获取 [{src_name}] 图片下载失败。"))
-                                return
-                            await event.send(event.image_result(local_path))
                     else:
                         await event.send(event.plain_result("获取新闻图片失败。"))
                 except Exception as e:
@@ -1090,31 +1087,25 @@ class TaskManager:
         
         logger.info("[DailySharing] 开始执行早报分享任务")
         
-        # 1. 收集需要分享的图片 URL (格式: name, original_url, local_path)
+        # 1. 收集需要分享的图片 URL
         images_to_send = [] 
         
         check_60s = self.extra_shares_conf.get("enable_60s_news", False)
         if specific_target: check_60s = True 
         
-        if check_60s:
+        if self.extra_shares_conf.get("enable_60s_news", False):
             url = self.news_service.get_60s_image_url()
             if url: 
-                # 预先下载图片
                 local_path = await self._download_image_to_local(url, "briefing_60s.png")
-                if local_path:
-                    images_to_send.append(("每天60s读世界", url, local_path))
+                if local_path: images_to_send.append(("每天60s读世界", url, local_path))
 
-        check_ai = self.extra_shares_conf.get("enable_ai_news", False)
-        if specific_target: check_ai = True
-
-        if check_ai:
+        if self.extra_shares_conf.get("enable_ai_news", False):
             ai_data = await self.news_service.get_ai_news_json()
             if ai_data:
                 url = self.news_service.get_ai_news_image_url()
-                if url:
+                if url: 
                     local_path = await self._download_image_to_local(url, "briefing_ai.png")
-                    if local_path:
-                        images_to_send.append(("AI资讯快报", url, local_path))
+                    if local_path: images_to_send.append(("AI资讯快报", url, local_path))
             else:
                 logger.info("[DailySharing] 获取 AI资讯快报 失败，今日暂无更新，跳过分享图片")
 
@@ -1128,7 +1119,6 @@ class TaskManager:
             if qzone_plugin and hasattr(qzone_plugin, "service"):
                 self.plugin._inject_qzone_client(qzone_plugin)
                 logger.info("[DailySharing] 分享早报到QQ空间已开启...")
-                
                 for name, original_url, local_path in images_to_send:
                     try:
                         title = "【每天60秒读懂世界】" if "60s" in name else "【AI资讯快报】"
@@ -1158,7 +1148,7 @@ class TaskManager:
             if self.plugin._is_terminated: break
             try:
                 for name, original_url, local_path in images_to_send:
-                    # 群聊/私聊：使用下载到本地的文件路径构建消息链
+                    # 普通会话发送下载到本地的文件
                     msg = MessageChain().file_image(local_path)
                     logger.info(f"[DailySharing] 正在分享 {name} 到 {uid}")
                     await self.plugin.context.send_message(uid, msg)
@@ -1472,9 +1462,32 @@ class TaskManager:
                     pass
 
             if target_local_img:
-                # 无论是 HTTP 网络图片还是本地生成的 AI 图片绝对路径，按原样传给 Qzone 插件即可
-                qzone_images.append(target_local_img)
-
+                if target_local_img.startswith("http"):
+                    qzone_images.append(target_local_img)
+                else:
+                    qzone_images.append(f"local_path::{target_local_img}")
+                            
+            import sys
+            import aiofiles
+            qzone_utils_mod = None
+            for mod_name, mod in sys.modules.items():
+                if "qzone" in mod_name and "utils" in mod_name and hasattr(mod, "download_file"):
+                    qzone_utils_mod = mod
+                    break
+                    
+            if qzone_utils_mod:
+                orig_download_file = qzone_utils_mod.download_file
+                async def patched_download_file(url: str):
+                    if isinstance(url, str) and url.startswith("local_path::"):
+                        real_path = url.split("::", 1)[1]
+                        try:
+                            async with aiofiles.open(real_path, "rb") as f:
+                                return await f.read()  
+                        except Exception:
+                            return None
+                    return await orig_download_file(url)
+                qzone_utils_mod.download_file = patched_download_file
+                
             try:
                 await qzone_plugin.service.publish_post(
                     text=clean_qzone_content,
@@ -1504,11 +1517,10 @@ class TaskManager:
                             await event.send(img_chain)
                     except Exception as e:
                         logger.error(f"[DailySharing] 同步发送内容到会话失败: {e}")
-                        
-            except Exception as e:
-                logger.error(f"[DailySharing] 调用空间插件发布说说失败: {e}")
-                if event:
-                    await event.send(event.plain_result(f"发布到QQ空间时发生错误: {e}"))
+                
+            finally:
+                if qzone_utils_mod:
+                    qzone_utils_mod.download_file = orig_download_file
 
         except Exception as e:
             logger.error(f"[DailySharing] 生成并分享到QQ空间失败: {e}")
@@ -1535,13 +1547,13 @@ class TaskManager:
             if audio_path and prefer_audio_only:
                 should_send_text = False
 
-            # 全局拦截发送的网络图片，转为本地图片
+            # 全局拦截发送的网络图片，转为本地图片 (无安全降级机制，失败则跳过图片)
             if img_path and img_path.startswith("http"):
                 dl_path = await self._download_image_to_local(img_path, "global_hot_news.png")
                 if dl_path:
                     img_path = dl_path
                 else:
-                    logger.warning(f"[DailySharing] 图片下载失败，已跳过发送该图片。URL: {img_path}")
+                    logger.warning(f"[DailySharing] 图片下载失败，已跳过发送该图片。")
                     img_path = None
 
             # 1. 分享文字（如果需要）
@@ -1572,7 +1584,7 @@ class TaskManager:
             if video_url:
                 # 分享视频
                 video_chain = MessageChain()
-                # 判断是本地文件还是URL
+                # 判断是本地文件还是网络URL
                 if video_url.startswith("http"):
                     video_chain.chain.append(Video.fromURL(video_url))
                 else:
@@ -1604,3 +1616,4 @@ class TaskManager:
                 await asyncio.sleep(float(delay_str))
         except:
             await asyncio.sleep(1.5)
+            
