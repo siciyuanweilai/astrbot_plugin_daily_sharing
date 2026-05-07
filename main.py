@@ -110,6 +110,32 @@ class DailySharingPlugin(Star):
         except Exception as e:
             logger.warning(f"[DailySharing] QQ空间插件注入客户端失败: {e}")        
 
+    async def _safe_publish_qzone(self, qzone_plugin, text: str = "", images: list = None):
+        """调用QQ空间发布接口（附带登录过期自动重试机制）"""
+        self._inject_qzone_client(qzone_plugin)
+        images = images or []
+        try:
+            return await qzone_plugin.service.publish_post(text=text, images=images)
+        except Exception as e:
+            err_msg = str(e)
+            if "登录" in err_msg or "-100" in err_msg or "-3000" in err_msg or "失效" in err_msg:
+                logger.debug(f"[DailySharing] err_msg，正在尝试重新登录并重试...")
+                try:
+                    if hasattr(qzone_plugin, "session"):
+                        await qzone_plugin.session.invalidate()
+                    if hasattr(qzone_plugin, "cfg"):
+                        qzone_plugin.cfg.update_cookies("")
+                    # 尝试调用查询触发 qzone 内部逻辑拉取新 Cookie
+                    if hasattr(qzone_plugin, "service"):
+                        await qzone_plugin.service.query_feeds(pos=0, num=1)
+                except Exception as ex:
+                    logger.debug(f"[DailySharing] 预检 QQ 空间登录态完成: {ex}")
+                    
+                # 再次尝试发布
+                return await qzone_plugin.service.publish_post(text=text, images=images)
+            else:
+                raise e
+
     async def initialize(self):
         """初始化插件"""
         task = asyncio.create_task(self._delayed_init())
@@ -375,9 +401,8 @@ class DailySharingPlugin(Star):
                 yield event.plain_result("正在分享每天60s读世界到QQ空间...")
                 qzone_plugin = self.ctx_service._find_plugin("qzone")
                 if qzone_plugin and hasattr(qzone_plugin, "service"):
-                    self._inject_qzone_client(qzone_plugin)
                     try:
-                        await qzone_plugin.service.publish_post(text="【每天60秒读懂世界】", images=[url])
+                        await self._safe_publish_qzone(qzone_plugin, text="【每天60秒读懂世界】", images=[url])
                         yield event.plain_result("每天60s读世界已成功分享到QQ空间！")
                         await self.db.add_sent_history("qzone_broadcast", "news", "【每天60秒读懂世界】(手动)", True)
                     except Exception as e:
@@ -411,9 +436,8 @@ class DailySharingPlugin(Star):
                 yield event.plain_result("正在分享AI资讯快报到QQ空间...")
                 qzone_plugin = self.ctx_service._find_plugin("qzone")
                 if qzone_plugin and hasattr(qzone_plugin, "service"):
-                    self._inject_qzone_client(qzone_plugin)
                     try:
-                        await qzone_plugin.service.publish_post(text="【AI资讯快报】", images=[url])
+                        await self._safe_publish_qzone(qzone_plugin, text="【AI资讯快报】", images=[url])
                         yield event.plain_result("AI资讯快报已成功分享到QQ空间！")
                         await self.db.add_sent_history("qzone_broadcast", "news", "【AI资讯快报】(手动)", True)
                     except Exception as e:
@@ -501,9 +525,8 @@ class DailySharingPlugin(Star):
                         yield event.plain_result(f"正在获取[{src_name}]图片并分享到QQ空间...")
                         qzone_plugin = self.ctx_service._find_plugin("qzone")
                         if qzone_plugin and hasattr(qzone_plugin, "service"):
-                            self._inject_qzone_client(qzone_plugin)
                             try:
-                                await qzone_plugin.service.publish_post(text=f"【{src_name}】", images=[img_url])
+                                await self._safe_publish_qzone(qzone_plugin, text=f"【{src_name}】", images=[img_url])
                                 yield event.plain_result("QQ空间分享成功！")
                                 await self.db.add_sent_history("qzone_broadcast", "news", f"【{src_name}】长图(手动)", True)
                             except Exception as e:
@@ -534,3 +557,4 @@ class DailySharingPlugin(Star):
                 target_desc = "配置的所有群聊和私聊" if is_broadcast else "当前会话"
                 yield event.plain_result(f"正在向{target_desc}生成并分享{type_cn} ...")
                 await self.task_manager.execute_share(force_type, specific_target=specific_target)
+                

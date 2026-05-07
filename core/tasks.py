@@ -840,9 +840,8 @@ class TaskManager:
                 if to_qzone:
                     qzone_plugin = self.ctx_service._find_plugin("qzone")
                     if qzone_plugin and hasattr(qzone_plugin, "service"):
-                        self.plugin._inject_qzone_client(qzone_plugin)
                         try:
-                            await qzone_plugin.service.publish_post(text="【每天60秒读懂世界】", images=[url])
+                            await self.plugin._safe_publish_qzone(qzone_plugin, text="【每天60秒读懂世界】", images=[url])
                             await event.send(event.plain_result("每天60s读世界 已成功分享到QQ空间！"))
                             await self.db.add_sent_history("qzone_broadcast", "news", "【每天60秒读懂世界】", True)
                         except Exception as e:
@@ -873,9 +872,8 @@ class TaskManager:
                 if to_qzone:
                     qzone_plugin = self.ctx_service._find_plugin("qzone")
                     if qzone_plugin and hasattr(qzone_plugin, "service"):
-                        self.plugin._inject_qzone_client(qzone_plugin)
                         try:
-                            await qzone_plugin.service.publish_post(text="【AI资讯快报】", images=[url])
+                            await self.plugin._safe_publish_qzone(qzone_plugin, text="【AI资讯快报】", images=[url])
                             await event.send(event.plain_result("AI资讯快报 已成功分享到QQ空间！"))
                             await self.db.add_sent_history("qzone_broadcast", "news", "【AI资讯快报】", True)
                         except Exception as e:
@@ -944,9 +942,8 @@ class TaskManager:
                         if to_qzone:
                             qzone_plugin = self.ctx_service._find_plugin("qzone")
                             if qzone_plugin and hasattr(qzone_plugin, "service"):
-                                self.plugin._inject_qzone_client(qzone_plugin)
                                 try:
-                                    await qzone_plugin.service.publish_post(text=f"【{src_name}】", images=[img_url])
+                                    await self.plugin._safe_publish_qzone(qzone_plugin, text=f"【{src_name}】", images=[img_url])
                                     await event.send(event.plain_result(f"[{src_name}] 图片已成功分享到QQ空间！"))
                                     await self.db.add_sent_history("qzone_broadcast", "news", f"【{src_name}】长图(LLM)", True)
                                 except Exception as e:
@@ -1117,12 +1114,11 @@ class TaskManager:
         if specific_target is None and self.extra_shares_conf.get("sync_briefing_to_qzone", False):
             qzone_plugin = self.ctx_service._find_plugin("qzone")
             if qzone_plugin and hasattr(qzone_plugin, "service"):
-                self.plugin._inject_qzone_client(qzone_plugin)
                 logger.info("[DailySharing] 分享早报到QQ空间已开启...")
                 for name, original_url, local_path in images_to_send:
                     try:
                         title = "【每天60秒读懂世界】" if "60s" in name else "【AI资讯快报】"
-                        await qzone_plugin.service.publish_post(text=title, images=[original_url])
+                        await self.plugin._safe_publish_qzone(qzone_plugin, text=title, images=[original_url])
                         await self.db.add_sent_history("qzone_broadcast", "news", f"{title}(定时自动)", True)
                         await asyncio.sleep(3) 
                         logger.info(f"[DailySharing] 分享早报 {name} 到QQ空间成功！")
@@ -1489,7 +1485,8 @@ class TaskManager:
                 qzone_utils_mod.download_file = patched_download_file
                 
             try:
-                await qzone_plugin.service.publish_post(
+                await self.plugin._safe_publish_qzone(
+                    qzone_plugin,
                     text=clean_qzone_content,
                     images=qzone_images
                 )

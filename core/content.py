@@ -1018,3 +1018,4 @@ class ContentService:
             except: pass
             return f"推荐类型: {rec_type} - {sub_style}\n\n{res}"
         return None
+        

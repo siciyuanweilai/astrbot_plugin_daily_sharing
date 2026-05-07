@@ -217,3 +217,4 @@ class DatabaseManager:
     async def clean_expired_data(self, days_limit: int):
         """清理早于 days_limit 天的数据"""
         await self._execute(self._sync_clean_expired_data, days_limit)
+        
