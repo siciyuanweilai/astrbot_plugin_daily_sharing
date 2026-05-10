@@ -67,10 +67,13 @@ class TaskManager:
             temp_dir = os.path.join(self.plugin.data_dir, "Temp")
             os.makedirs(temp_dir, exist_ok=True)
             temp_path = os.path.join(temp_dir, filename)
+
+            # 读取面板中的新闻热搜 API 超时配置
+            news_conf = self.plugin.config.get("news_conf", {})
+            timeout_sec = int(news_conf.get("news_api_timeout", 30))            
             
             async with aiohttp.ClientSession() as session:
-                # 把超时设长一些，给不稳定 CDN 足够的加载时间
-                async with session.get(url, timeout=20) as resp:
+                async with session.get(url, timeout=timeout_sec) as resp:
                     if resp.status == 200:
                         img_bytes = await resp.read()
                         async with aiofiles.open(temp_path, "wb") as f:
