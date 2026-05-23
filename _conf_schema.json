@@ -19,7 +19,7 @@
         },
         "description": "分享到群聊",
         "default": [],
-        "hint": "多种格式：1. 仅群号 = 跟随全局定时分享默认序列 2. 群号:类型 = 跟随全局定时，仅分享指定类型 3. 群号:定时:类型 = 完全独立，脱离全局。请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。cron表达式支持5/6/7位格式，例如: 123456:0 7 * * *:news,mood 、 123456:morning:auto,mood 、 123456:mood,knowledge"
+        "hint": "群聊发送 /sid 获取当前会话信息，填写 Session ID。多种格式：1. 仅群号 = 跟随全局定时分享默认序列 2. 群号:类型 = 跟随全局定时，仅分享指定类型 3. 群号:定时:类型 = 完全独立，脱离全局。请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。cron表达式支持5/6/7位格式，例如: Session ID:0 7 * * *:news,mood 、 Session ID:morning:auto,mood 、 Session ID:mood,knowledge"
       },
       "users": {
         "title": "私聊独立配置",
@@ -29,9 +29,19 @@
         },
         "description": "分享到私聊",
         "default": [],
-        "hint": "多种格式：1. 仅QQ号 = 跟随全局定时分享默认序列 2. QQ号:类型 = 跟随全局定时，仅分享指定类型 3. QQ号:定时:类型 = 完全独立，脱离全局。请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。cron表达式支持5/6/7位格式，例如: 123456:0 7 * * *:news,mood 、 123456:morning:auto,mood 、 123456:mood,knowledge"
+        "hint": "私聊发送 /sid 获取当前会话信息，填写 UID/Session ID。多种格式：1. 仅QQ号/微信 openid = 跟随全局定时分享默认序列 2. ID:类型 = 跟随全局定时，仅分享指定类型 3. ID:定时:类型 = 完全独立，脱离全局。请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。cron表达式支持5/6/7位格式，例如: Session ID:0 7 * * *:news,mood 、 Session ID:mood,news 、 Session ID:mood,knowledge"
       }
     }
+  },
+  "contact_aliases": {
+    "title": "自定义用户称呼",
+    "description": "本地用户称呼映射",
+    "type": "list",
+    "items": {
+      "type": "string"
+    },
+    "default": [],
+    "hint": "可选配置，用于覆盖或补充用户称呼。QQ/OneBot 私聊会优先通过接口获取备注/昵称；个人微信 weixin_oc 无法从平台接口稳定获取真实昵称，但私聊称呼会优先使用人格设定中的用户称呼。仅当生活日程/记忆里常出现另一个别名时，才需要在这里补充识别名。每行格式：UID/Session ID:昵称。例如：o9xxxx@im.wechat:未来酱。也可在当前会话发送 /分享 昵称 未来酱 自动写入。"
   },
   "content_library": {
     "description": "📚 内容库自定义",
@@ -94,7 +104,7 @@
           "type": "string"
         },
         "default": [],
-        "hint": "填入接收早报的群号。留空则不分享。"
+        "hint": "群聊发送 /sid 获取当前会话信息，填写 Session ID。留空则不分享。"
       },
       "briefing_users": {
         "description": "早报分享私聊",
@@ -103,7 +113,7 @@
           "type": "string"
         },
         "default": [],
-        "hint": "填入接收早报的QQ号。留空则不分享。"
+        "hint": "私聊发送 /sid 获取当前会话信息，填写 UID/Session ID。留空则不分享。"
       },      
       "cron_briefing": {
         "description": "定时分享时间",
@@ -499,6 +509,35 @@
         "type": "string",
         "default": "1.0-2.0",
         "hint": "文字发送后，等待多久再发送媒体。格式: '最小值-最大值'。如：1.0-2.0"
+      },
+      "weixin_compress_images": {
+        "description": "个人微信发送前压缩图片",
+        "type": "bool",
+        "default": true,
+        "hint": "开启后，发送到 weixin_oc 个人微信前会自动生成高质量图片副本：优先保留最大分辨率和高画质，仅在文件过大时降低 JPEG 质量，降低大图上传微信 CDN 超时概率。QQ、QQ空间不受影响。"
+      },
+      "weixin_image_max_side": {
+        "description": "个人微信图片最长边",
+        "type": "int",
+        "default": 4096,
+        "hint": "仅对 weixin_oc 生效。默认保留 4K 最长边；图片超过该值时才缩小。想完全不缩分辨率可设为更大值。"
+      },
+      "weixin_image_max_size_mb": {
+        "description": "个人微信图片目标大小(KB)",
+        "type": "int",
+        "default": 10240,
+        "hint": "仅对 weixin_oc 生效。默认目标约 10MB，优先使用 95/93/90 等高质量 JPEG；超过该大小时逐级降低质量。"
+      },
+      "weixin_api_timeout_seconds": {
+        "description": "个人微信发送超时(秒)",
+        "type": "int",
+        "default": 60,
+        "slider": {
+            "min": 1,
+            "max": 180,
+            "step": 1
+        },    
+        "hint": "仅对 weixin_oc 生效。发送前会把个人微信适配器的上传超时调到该值。大图建议 60-120 秒。"
       },
       "record_image_description": {
         "description": "记录配图描述到历史",

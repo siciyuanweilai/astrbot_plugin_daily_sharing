@@ -31,7 +31,14 @@ class ContentService:
         self.rec_cats = self._parse_str_list_to_dict(raw_rec)
         
         self.basic_conf = self.config.get("basic_conf", {})
-        self.dedup_days = int(self.basic_conf.get("dedup_days_limit", 60))
+        raw_dedup_days = self.basic_conf.get(
+            "data_retention_days",
+            self.basic_conf.get("dedup_days_limit", 60)
+        )
+        try:
+            self.dedup_days = int(raw_dedup_days)
+        except Exception:
+            self.dedup_days = 60
         
         self.news_conf = self.config.get("news_conf", {})
         self.llm_conf = self.config.get("llm_conf", {})
@@ -65,13 +72,20 @@ class ContentService:
         # 获取人设信息
         persona_info = await self._get_persona_info()
         
-        # 区分【亲昵称呼】和【网名昵称】
-        detect_name = nickname  
+        # 区分【亲昵称呼】和【用户昵称】：
+        # - 亲昵称呼只来自人设配置，避免把本地昵称映射写成第三人称。
+        # - nickname 仅作为用户昵称，用来判断日程/记忆里出现的人是否就是当前私聊对象。
         persona_user_name = persona_info.get("user_name", "").strip()
+        detect_names = []
+        for name in (nickname, persona_user_name):
+            name = str(name or "").strip()
+            if name and name not in detect_names:
+                detect_names.append(name)
+        detect_name = "、".join(detect_names)
         if is_group:
             call_name = "" 
         else:
-            call_name = persona_user_name if persona_user_name else nickname
+            call_name = persona_user_name
         
         now = datetime.now()
         date_str = now.strftime("%Y年%m月%d日") 
@@ -235,20 +249,37 @@ class ContentService:
 
     def _build_user_prompt(self, call_name: str, detect_name: str = "") -> str:
         """构建强化的用户信息提示，包含日程检测逻辑"""
-        if not call_name:
+        if not call_name and not detect_name:
             return ""
             
         detection_target = detect_name if detect_name else call_name
+        detection_names = [
+            name.strip()
+            for name in re.split(r"[、,，/|]+", detection_target)
+            if name.strip()
+        ]
+        detection_target_text = "、".join(dict.fromkeys(detection_names)) or detection_target
+        example_name = detection_names[0] if detection_names else detection_target
+
+        call_name_rule = ""
+        if call_name:
+            call_name_rule = f"""
+对方的人设称呼：【{call_name}】
+1. 称呼优先级：如果你的系统人设中已经明确规定了如何称呼对方，请绝对优先遵循系统人设的规定。否则你才可以自然地使用“{call_name}”称呼对方。
+"""
         
         return f"""
 【用户信息】
-对方的昵称称呼：【{call_name}】
+{call_name_rule}
+当前私聊对象的可能识别名/本地昵称：【{detection_target_text}】
 【重要交互逻辑】
-1. 昵称称呼优先级：如果你的系统人设中已经明确规定了如何称呼对方，请绝对优先遵循系统人设的规定。否则你才可以自然地使用“{call_name}”称呼对方。
-2. 日程关联检测：请仔细检查你的【生活日程】。如果日程中出现了“{detection_target}”这个名字（或同音/包含关系）：
+1. 识别名只用于判断“这是谁”，不要把这些名字当成第三人称人物写进正文。
+2. 日程关联检测：请仔细检查你的【生活日程】和【近期记忆】。如果其中出现了上述任一识别名（或同音/包含关系）：
    - 必须将文案转换为“和你一起”的语气。
-   - 错误示例：日程说“和{detection_target}逛街”，文案写“今天我要和{detection_target}去逛街”。
-   - 正确示例：日程说“和{detection_target}逛街”，文案写“今天终于可以和你一起逛街啦，好期待！”。
+   - 错误示例：日程说“和{example_name}逛街”，文案写“今天我要和{example_name}去逛街”。
+   - 正确示例：日程说“和{example_name}逛街”，文案写“今天终于可以和你一起逛街啦，好期待！”。
+   - 错误示例：记忆说“刚和{example_name}分食炸鸡”，文案写“刚刚和{example_name}分食炸鸡”。
+   - 正确示例：记忆说“刚和{example_name}分食炸鸡”，文案写“刚刚和你分食完炸鸡”。
 """
 
     async def _gen_greeting(self, period: TimePeriod, ctx: dict):
@@ -266,7 +297,7 @@ class ContentService:
         user_info_prompt = ""
 
         if is_qzone:
-            address_rule = "【重要：QQ空间动态】这是你的个人主页说说。不需要@任何人，不需要打招呼，自然抒发当下的感受即可。"
+            address_rule = "【重要：QQ空间动态】这是你的个人社交平台QQ空间的动态。不需要@任何人，不需要打招呼，自然抒发当下的感受即可。"
         elif is_group:
             address_rule = "面向群友，自然使用'大家'或不加称呼。"
         else:
@@ -295,18 +326,22 @@ class ContentService:
             context_instruction = "真诚、个人化"
 
         greeting_constraint = ""
+        opening_rule = ""
         
-        # 清晨(6-9) -> 强制早安
+        # 清晨(6-9) -> 早间问候放开头
         if period in [TimePeriod.MORNING]:
-            greeting_constraint = "4. 文案开头必须带上温馨的早安问候，因为现在是早晨准备起床的时候。"
+            greeting_constraint = "4. 文案开头必须是自然的早间问候语，例如“早安”“早上好”“早呀”“早哦”；不要固定只用“早安”。"
+            opening_rule = f"- 早间问候开头：\"{'大家' if is_group else ''}早上好，\" / \"{'大家' if is_group else ''}早安，\" / \"{'大家' if is_group else ''}早呀，\""
             
-        # 深夜(22-24) 和 凌晨(0-6) -> 强制晚安
+        # 深夜(22-24) 和 凌晨(0-6) -> 睡前祝福放结尾
         elif period in [TimePeriod.LATE_NIGHT, TimePeriod.DAWN]:
-            greeting_constraint = "4. 文案末尾必须带上温馨的晚安问候，因为现在是深夜准备睡觉的时候。"
+            greeting_constraint = "4. 文案不得以睡前祝福开头；必须在正文最后、情感标签之前自然收束一句睡前祝福，例如“晚安”“安安”“好梦”“早点睡，做个好梦”；不要固定只用“晚安”。"
+            opening_rule = "- 睡前问候：不要用“晚安/安安/好梦”开头，可从当前状态、困意、被窝、夜色等自然切入，最后再用睡前祝福收束。"
 
         # 上午/下午/傍晚/晚上 -> 自然打招呼
         else:
-            greeting_constraint = "4. 就像平常聊天一样自然打招呼即可，不需要刻意说早安晚安"            
+            greeting_constraint = "4. 就像平常聊天一样自然打招呼即可，不需要刻意说早间问候或睡前祝福"
+            opening_rule = "- 自然切入：\"今天心情不错呢\" / \"刚忙完...\" / \"今天有点...\""            
 
         dynamics_prompt = ""
         if ctx.get('recent_dynamics'):
@@ -331,7 +366,8 @@ class ContentService:
   - 私聊：请结合你当前具体的状态和活动来让问候更真实。
 
 【开头方式】（自然直接）
-- 早安/晚安问候："{'大家' if is_group else ''}早安/晚安 "
+{opening_rule}
+
 - 心情切入："今天心情不错呢"
 - 状态切入："刚忙完..." / "今天有点..."
 - 天气切入：（仅在天气特殊时使用）
@@ -343,7 +379,7 @@ class ContentService:
 {greeting_constraint} 
 5. {'简短（80-100字）' if is_group else '可适当长一些（100-120字）'}
 6. 直接输出内容，不要解释
-7. 【重要】文案末尾必须附带情感标签，格式为：$$happy$$ (开心/期待/治愈), $$sad$$ (低落/深夜/晚安), $$angry$$ (吐槽), $$surprise$$ (吃瓜), $$neutral$$ (平淡)。只选一个。
+7. 【重要】文案末尾必须附带情感标签，格式为：$$happy$$ (开心/期待/治愈), $$sad$$ (低落/深夜/睡前), $$angry$$ (吐槽), $$surprise$$ (吃瓜), $$neutral$$ (平淡)。只选一个。
 
 请生成{p_label}问候："""
 
@@ -366,7 +402,7 @@ class ContentService:
         user_info_prompt = ""
 
         if is_qzone:
-            address_rule = "\n【重要：QQ空间动态】这是一条个人社交平台的动态/日记。绝对禁止对别人说话，严禁出现“你”、“大家”等任何称呼，纯粹的自言自语。"
+            address_rule = "\n【重要：QQ空间动态】这是你的个人社交平台QQ空间的动态。绝对禁止对别人说话，严禁出现“你”、“大家”等任何称呼，纯粹的自言自语。"
         elif not is_group:
             address_rule = "\n【重要：私聊模式】严禁使用'大家'、'你们'。请把你当做在和单个朋友聊天。"
             user_info_prompt = self._build_user_prompt(call_name, detect_name)
@@ -419,6 +455,13 @@ class ContentService:
             dynamics_prompt = f"\n【你最近发过的动态回顾】\n{ctx['recent_dynamics']}\n(注：请保持人设连贯，可以偶尔自然呼应之前的心情，但绝对不要重复发过的内容)"
 
         target_str = "QQ空间" if is_qzone else ('群聊' if is_group else '私聊')
+        time_greeting_rule = ""
+        if period in (TimePeriod.LATE_NIGHT, TimePeriod.DAWN):
+            time_greeting_rule = """
+【深夜表达规则】
+- 不要以“晚安/安安/好梦”等睡前祝福作为开头；心情分享应先写当下状态、动作或感受。
+- 如果要写睡前祝福，只能放在正文最后、情感标签之前；可以自然使用“晚安”“安安”“好梦”“早点睡，做个好梦”等表达。
+"""
 
         prompt = f"""
 【当前时间】{ctx['date_str']} {ctx['time_str']} ({ctx['period_label']})
@@ -431,6 +474,7 @@ class ContentService:
 {vibe_check}
 {address_rule}
 {resonance_guide}
+{time_greeting_rule}
 
 【重要：如何结合当下状态】
 - 群聊（寻找话题点）：
@@ -446,11 +490,12 @@ class ContentService:
 4. 基于当前真实时间感悟
 5. 字数：{'80-100字' if is_group else '100-120字'}
 6. 直接输出内容
-7. 【重要】文案末尾必须附带情感标签，格式为：$$happy$$ (开心/期待/治愈), $$sad$$ (低落/深夜/晚安), $$angry$$ (吐槽), $$surprise$$ (吃瓜), $$neutral$$ (平淡)。只选一个。
+7. 【重要】文案末尾必须附带情感标签，格式为：$$happy$$ (开心/期待/治愈), $$sad$$ (低落/深夜/睡前), $$angry$$ (吐槽), $$surprise$$ (吃瓜), $$neutral$$ (平淡)。只选一个。
 
 你的随想："""
         
-        return await self.call_llm(prompt=prompt, system_prompt=ctx['persona'])
+        res = await self.call_llm(prompt=prompt, system_prompt=ctx['persona'])
+        return res
 
     async def _fetch_web_search(self, keyword: str, search_type: str = "news") -> Tuple[str, str]:
         """调用 AstrBot 内置的搜索引擎 (支持 Tavily / Brave) 进行搜索，支持多Key轮询与失败重试"""
@@ -661,7 +706,7 @@ class ContentService:
         address_rule = ""
         user_info_prompt = ""
         if is_qzone:
-            address_rule = "【重要：QQ空间动态】不需要和任何人对话，纯粹记录自己看到新闻后的感慨即可。"
+            address_rule = "【重要：QQ空间动态】这是你的个人社交平台QQ空间的动态。不需要和任何人对话，纯粹记录自己看到新闻后的感慨即可。"
         elif not is_group:
             address_rule = "【私聊模式】不要说'大家'、'你们'。请假装只分享给你对面这一个人看。"
             user_info_prompt = self._build_user_prompt(call_name, detect_name)
@@ -795,7 +840,7 @@ class ContentService:
         user_info_prompt = ""
 
         if is_qzone:
-            address_rule = "【重要：QQ空间动态】这是你的个人动态，直接分享知识即可，绝对不要向别人提问，不要出现“你知道吗”、“大家知道吗”这样的互动词汇。"
+            address_rule = "【重要：QQ空间动态】这是你的个人社交平台QQ空间的动态。直接分享知识即可，绝对不要向别人提问，不要出现“你知道吗”、“大家知道吗”这样的互动词汇。"
         elif is_group:
             address_rule = "面向群友，可以使用'大家'、'你们'。"
         else:
@@ -936,7 +981,7 @@ class ContentService:
         address_rule = ""
         user_info_prompt = ""
         if is_qzone:
-             address_rule = "【重要：QQ空间动态】这是你的个人日常记录。纯粹表达你自己对这个作品的喜爱，绝对不要向别人安利，不要说“推荐给你们”、“推荐你看”之类的话。"
+             address_rule = "【重要：QQ空间动态】这是你的个人社交平台QQ空间的动态。纯粹表达你自己对这个作品的喜爱，绝对不要向别人安利，不要说“推荐给你们”、“推荐你看”之类的话。"
         elif is_group:
              address_rule = "面向群友，推荐给'大家'。"
         else:

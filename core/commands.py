@@ -13,13 +13,32 @@ class CommandHandler:
         self.extra_shares_conf = plugin.extra_shares_conf
         self.qzone_conf = plugin.qzone_conf
 
+    def _get_sendable_current_target(self, event: AstrMessageEvent, target_uid: str) -> str:
+        """配置里优先保存纯会话 ID：QQ 保存 QQ 号，weixin_oc 保存 openid。"""
+        _, real_id = self.plugin.ctx_service._parse_umo(target_uid)
+        if real_id:
+            return real_id
+
+        try:
+            sender_id = str(event.get_sender_id() or "").strip()
+        except Exception:
+            sender_id = ""
+
+        return sender_id or target_uid
+
+    def _find_matching_target_index(self, target_list: list, origin: str, real_id: str, candidates: list) -> int:
+        for idx, item in enumerate(target_list):
+            if self.plugin._target_entry_matches(item, origin, real_id, candidates):
+                return idx
+        return -1
+
     async def cmd_enable(self, event: AstrMessageEvent):
         """启用插件"""
         self.config["enable_auto_sharing"] = True
         await self.plugin._save_config_file()
-        cron = self.basic_conf.get("sharing_cron", "0 8,20 * * *")
-        self.plugin.task_manager.setup_cron(cron)
-        if not self.plugin.scheduler.running: 
+        self.plugin.scheduler.remove_all_jobs()
+        self.plugin.task_manager.setup_tasks()
+        if self.plugin.scheduler.get_jobs() and not self.plugin.scheduler.running: 
             self.plugin.scheduler.start()
         yield event.plain_result("自动分享已启用")
 
@@ -28,6 +47,7 @@ class CommandHandler:
         self.config["enable_auto_sharing"] = False
         await self.plugin._save_config_file()
         self.plugin.scheduler.remove_all_jobs()
+        await self.plugin.task_manager.clear_pending_delay_jobs()
         yield event.plain_result("自动分享已禁用")
 
     async def cmd_status(self, event: AstrMessageEvent):
@@ -36,7 +56,7 @@ class CommandHandler:
         state_key = f"target_{target_uid}"
         state = await self.db.get_state(state_key, {})
         
-        enabled = self.config.get("enable_auto_sharing", True)
+        enabled = self.config.get("enable_auto_sharing", False)
         cron = self.basic_conf.get("sharing_cron")
         
         last_type_raw = state.get('last_type', '无')
@@ -66,16 +86,10 @@ class CommandHandler:
         
         custom_cron = "无"
         target_specific_type = "auto"
-        if is_group and real_id in r_groups:
-            conf = r_groups[real_id]
-            if isinstance(conf, dict):
-                custom_cron = conf.get("cron") or "无"
-                target_specific_type = conf.get("seq", "auto")
-        elif not is_group and real_id in r_users:
-            conf = r_users[real_id]
-            if isinstance(conf, dict):
-                custom_cron = conf.get("cron") or "无"
-                target_specific_type = conf.get("seq", "auto")
+        conf = self.plugin.task_manager._get_target_conf(target_uid, is_group, r_groups, r_users)
+        if isinstance(conf, dict):
+            custom_cron = conf.get("cron") or "无"
+            target_specific_type = conf.get("seq", "auto")
 
         # 判定指针读取位置
         is_custom_seq = target_specific_type != "auto" and target_specific_type != "auto"
@@ -143,11 +157,8 @@ class CommandHandler:
         target_specific_type = "auto"
         if not is_qzone:
             # QQ空间走独立配置，普通会话看群聊、私聊独立配置
-            if is_group and real_id in r_groups:
-                conf = r_groups[real_id]
-                target_specific_type = conf.get("seq", "auto") if isinstance(conf, dict) else conf
-            elif not is_group and real_id in r_users:
-                conf = r_users[real_id]
+            conf = self.plugin.task_manager._get_target_conf(target_uid, is_group, r_groups, r_users)
+            if conf is not None:
                 target_specific_type = conf.get("seq", "auto") if isinstance(conf, dict) else conf
         else:
             target_specific_type = self.qzone_conf.get("qzone_sharing_type", "auto")
@@ -212,7 +223,7 @@ class CommandHandler:
             is_qzone = "空间" in parts
             target_uid = event.unified_msg_origin
             
-            # --- 检测独立配置 ---
+            # 检测独立配置
             adapter_id, real_id = self.plugin.ctx_service._parse_umo(target_uid)
             is_group = self.plugin.ctx_service._is_group_chat(target_uid)
             
@@ -221,11 +232,8 @@ class CommandHandler:
             
             target_specific_type = "auto"
             if not is_qzone:
-                if is_group and real_id in r_groups:
-                    conf = r_groups[real_id]
-                    target_specific_type = conf.get("seq", "auto") if isinstance(conf, dict) else conf
-                elif not is_group and real_id in r_users:
-                    conf = r_users[real_id]
+                conf = self.plugin.task_manager._get_target_conf(target_uid, is_group, r_groups, r_users)
+                if conf is not None:
                     target_specific_type = conf.get("seq", "auto") if isinstance(conf, dict) else conf
             else:
                 target_specific_type = self.qzone_conf.get("qzone_sharing_type", "auto")
@@ -297,6 +305,136 @@ class CommandHandler:
             status = "开启" if self.extra_shares_conf.get("sync_briefing_to_qzone", False) else "关闭"
             yield event.plain_result(f"ℹ️ 当前分享早报到QQ空间状态为: 【{status}】\n提示：发送 /分享 早报空间 开启/关闭 来切换。")
 
+    async def cmd_contact_alias(self, event: AstrMessageEvent, parts: list):
+        """设置当前会话的本地昵称映射。"""
+        target_uid = str(event.unified_msg_origin or "").strip()
+        sendable_target_uid = self._get_sendable_current_target(event, target_uid)
+
+        if len(parts) <= 2 or parts[2] in {"查看", "show", "list"}:
+            alias = self.plugin.get_contact_alias(target_uid, event=event)
+            if alias:
+                yield event.plain_result(f"当前会话昵称映射：{sendable_target_uid} -> {alias}")
+            else:
+                yield event.plain_result(f"当前会话暂未设置昵称映射。\n设置示例：/分享 昵称 李知恬")
+            return
+
+        if parts[2] in {"删除", "清除", "移除", "delete", "remove"}:
+            removed = self.plugin.remove_contact_alias(target_uid, event=event)
+            await self.plugin._save_config_file()
+            if removed:
+                yield event.plain_result("已删除当前会话昵称映射。")
+            else:
+                yield event.plain_result("当前会话没有可删除的昵称映射。")
+            return
+
+        alias = " ".join(parts[2:]).strip()
+        if not alias:
+            yield event.plain_result("昵称不能为空。示例：/分享 昵称 李知恬")
+            return
+
+        save_key = self.plugin.set_contact_alias(sendable_target_uid, alias, event=event)
+        if not save_key:
+            yield event.plain_result("设置失败：无法获取当前会话 UID/Session ID。")
+            return
+
+        await self.plugin._save_config_file()
+        yield event.plain_result(f"已设置当前会话昵称映射：{save_key} -> {alias}")
+
+    async def cmd_add_current(self, event: AstrMessageEvent, parts: list):
+        """把当前会话加入接收对象配置。"""
+        target_uid = str(event.unified_msg_origin or "").strip()
+        if not target_uid:
+            yield event.plain_result("添加失败：无法获取当前会话标识。")
+            return
+
+        sendable_target_uid = self._get_sendable_current_target(event, target_uid)
+        mode = parts[2].strip().lower() if len(parts) > 2 else ""
+        is_briefing_mode = mode in {"早报", "briefing", "brief", "60s", "ai"}
+        is_group = self.plugin.ctx_service._is_group_chat(target_uid)
+        if self.plugin.ctx_service._is_weixin_platform(target_uid):
+            is_group = False
+
+        if is_briefing_mode:
+            if len(parts) > 3:
+                yield event.plain_result("早报接收对象不需要类型序列。示例：/分享 添加当前 早报")
+                return
+
+            extra_conf = self.config.setdefault("extra_shares", {})
+            groups = extra_conf.setdefault("briefing_groups", [])
+            users = extra_conf.setdefault("briefing_users", [])
+            target_list = groups if is_group else users
+
+            _, real_id = self.plugin.ctx_service._parse_umo(target_uid)
+            _, sendable_real_id = self.plugin.ctx_service._parse_umo(sendable_target_uid)
+            existing_idx = self._find_matching_target_index(
+                target_list,
+                target_uid,
+                real_id,
+                [sendable_target_uid, sendable_real_id],
+            )
+            if existing_idx >= 0:
+                if str(target_list[existing_idx]).strip().replace("：", ":") != sendable_target_uid:
+                    target_list[existing_idx] = sendable_target_uid
+                    msg = f"当前会话已在早报接收对象中，已更新为简写 ID：{sendable_target_uid}"
+                else:
+                    msg = "当前会话已经在早报接收对象配置中。"
+            else:
+                target_list.append(sendable_target_uid)
+                msg = f"已添加当前{'群聊' if is_group else '私聊'}到早报接收对象。"
+
+            self.config["extra_shares"] = extra_conf
+            self.plugin.extra_shares_conf = extra_conf
+            self.plugin.task_manager.extra_shares_conf = extra_conf
+            await self.plugin._save_config_file()
+            yield event.plain_result(msg)
+            return
+
+        seq = None
+        if len(parts) > 2:
+            seq_candidate = parts[2].strip().replace("，", ",")
+            if not self.plugin.task_manager._looks_like_share_sequence(seq_candidate):
+                yield event.plain_result("类型序列格式不正确。示例：/分享 添加当前 mood,news\n添加早报示例：/分享 添加当前 早报")
+                return
+            seq = seq_candidate
+
+        receiver_conf = self.config.setdefault("receiver", {})
+        groups = receiver_conf.setdefault("groups", [])
+        users = receiver_conf.setdefault("users", [])
+        target_list = groups if is_group else users
+
+        # 配置保存纯会话 ID：QQ 为 QQ 号，weixin_oc 为 openid，实际发送时再按平台拼 UMO。
+        new_entry = f"{sendable_target_uid}:{seq}" if seq else sendable_target_uid
+        _, real_id = self.plugin.ctx_service._parse_umo(target_uid)
+        _, sendable_real_id = self.plugin.ctx_service._parse_umo(sendable_target_uid)
+        existing_idx = self._find_matching_target_index(
+            target_list,
+            target_uid,
+            real_id,
+            [sendable_target_uid, sendable_real_id],
+        )
+
+        if existing_idx >= 0:
+            if seq or str(target_list[existing_idx]).strip().replace("：", ":") != new_entry:
+                target_list[existing_idx] = new_entry
+                msg = "当前会话已在接收对象中，已更新为简写 ID"
+                if seq:
+                    msg += f"并设置分享类型序列为：{seq}"
+                else:
+                    msg += f"：{sendable_target_uid}"
+            else:
+                msg = "当前会话已经在接收对象配置中。"
+        else:
+            target_list.append(new_entry)
+            msg = f"已添加当前{'群聊' if is_group else '私聊'}到接收对象。"
+            if seq:
+                msg += f"\n分享类型序列：{seq}"
+
+        self.config["receiver"] = receiver_conf
+        self.plugin.receiver_conf = receiver_conf
+        self.plugin.task_manager.receiver_conf = receiver_conf
+        await self.plugin._save_config_file()
+        yield event.plain_result(msg)
+
     async def cmd_help(self, event: AstrMessageEvent):
         yield event.plain_result("""每日分享插件帮助:
 /分享 [类型] - 立即在当前会话生成分享 (默认文字模式)
@@ -308,6 +446,9 @@ class CommandHandler:
  3. 图片：/分享 新闻 [源] 图片 -直接分享热搜图片
  
 【配置指令】
+/分享 添加当前 [类型序列] - 将当前会话加入接收对象，例如 /分享 添加当前 mood,news
+/分享 添加当前 早报 - 将当前会话加入定时早报接收对象
+/分享 昵称 [名称] - 为当前会话设置本地昵称映射
 /分享 开启/关闭 - 启停自动分享
 /分享 早报空间 开启/关闭 - 启停自动分享早报到QQ空间
 /分享 状态 - 查看本会话的运行状态

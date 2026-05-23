@@ -3,7 +3,7 @@ import aiohttp
 import asyncio
 import random
 import re
-import sys
+import hashlib
 import aiofiles
 from datetime import datetime, timedelta
 from typing import Optional
@@ -14,6 +14,13 @@ from astrbot.api.message_components import Record, Video
 
 from ..config import TimePeriod, SharingType, SHARING_TYPE_SEQUENCES, CRON_TEMPLATES, NEWS_SOURCE_MAP
 from .constants import CMD_CN_MAP, SOURCE_CN_MAP
+
+try:
+    from astrbot.core.platform.message_session import MessageSesion
+    from astrbot.core.platform.message_type import MessageType
+except Exception:
+    MessageSesion = None
+    MessageType = None
 
 class TaskManager:
     def __init__(self, plugin):
@@ -85,16 +92,291 @@ class TaskManager:
             logger.warning(f"[DailySharing] 图片下载异常: {e}")
         return None
 
+    async def _prepare_qzone_image(self, image_ref):
+        """将 QQ 空间图片参数整理为 URL 或本地路径标记。"""
+        if not image_ref:
+            return None
+
+        image_ref = str(image_ref)
+        if image_ref.startswith(("http://", "https://")):
+            return image_ref
+
+        if os.path.exists(image_ref):
+            return f"local_path::{image_ref}"
+
+        logger.warning(f"[DailySharing] QQ空间配图路径不存在: {image_ref}")
+        return None
+
+    def _is_full_umo(self, value: str) -> bool:
+        """判断是否为 AstrBot 运行时的 unified_msg_origin。"""
+        if not value or not isinstance(value, str):
+            return False
+        parts = value.split(":")
+        return len(parts) >= 3 and "message" in parts[1].lower()
+
+    def _looks_like_share_sequence(self, value: str) -> bool:
+        """判断字符串是否像分享类型序列。"""
+        if not value:
+            return False
+        valid = {"auto"} | {t.value for t in SharingType}
+        parts = [p.strip().lower() for p in value.replace("，", ",").split(",") if p.strip()]
+        return bool(parts) and all(p in valid for p in parts)
+
+    def _looks_like_cron(self, value: str) -> bool:
+        """判断字符串是否像 cron 或预设名。"""
+        if not value:
+            return False
+        return value in CRON_TEMPLATES or self._parse_cron_to_kwargs(CRON_TEMPLATES.get(value, value)) is not None
+
+    def _iter_platform_instances(self):
+        try:
+            manager = getattr(self.plugin.context, "platform_manager", None)
+            if not manager:
+                return []
+            if hasattr(manager, "get_insts"):
+                return list(manager.get_insts())
+            return list(getattr(manager, "platform_insts", []) or [])
+        except Exception as e:
+            logger.debug(f"[DailySharing] 获取平台实例失败: {e}")
+            return []
+
+    def _get_platform_meta(self, inst):
+        try:
+            if hasattr(inst, "meta"):
+                return inst.meta()
+        except Exception:
+            pass
+        return getattr(inst, "metadata", None)
+
+    def _get_platform_id(self, inst) -> str:
+        meta = self._get_platform_meta(inst)
+        p_id = str(getattr(meta, "id", "") or "").strip()
+        if p_id:
+            return p_id
+        config = getattr(inst, "config", {}) or {}
+        return str(config.get("id", "") or getattr(inst, "id", "") or "").strip()
+
+    def _get_platform_type(self, inst) -> str:
+        meta = self._get_platform_meta(inst)
+        p_type = str(getattr(meta, "name", "") or "").strip()
+        if p_type:
+            return p_type
+        config = getattr(inst, "config", {}) or {}
+        return str(config.get("type", "") or "").strip()
+
+    def _platform_match_text(self, inst) -> str:
+        meta = self._get_platform_meta(inst)
+        config = getattr(inst, "config", {}) or {}
+        chunks = [
+            self._get_platform_id(inst),
+            self._get_platform_type(inst),
+            inst.__class__.__name__,
+            inst.__class__.__module__,
+            str(config.get("id", "")),
+            str(config.get("type", "")),
+        ]
+        if meta:
+            chunks.append(str(getattr(meta, "__dict__", "")))
+            for attr in ("name", "platform", "platform_type", "adapter", "adapter_type"):
+                chunks.append(str(getattr(meta, attr, "")))
+        return " ".join(chunks).lower()
+
+    def _find_platform_instance_by_keywords(self, keywords):
+        lowered = [str(k).lower() for k in keywords if k]
+        exact_types = set(lowered)
+        fallback = None
+        for inst in self._iter_platform_instances():
+            p_type = self._get_platform_type(inst).lower()
+            if p_type in exact_types:
+                return inst
+            text = self._platform_match_text(inst)
+            if any(k in text for k in lowered) and fallback is None:
+                fallback = inst
+        return fallback
+
+    def _find_adapter_id_by_keywords(self, keywords):
+        """从平台实例信息里尽量按适配器类型找 bot id。"""
+        try:
+            inst = self._find_platform_instance_by_keywords(keywords)
+            if inst:
+                return self._get_platform_id(inst)
+        except Exception as e:
+            logger.debug(f"[DailySharing] 按类型查找平台 ID 失败: {e}")
+        return None
+
+    def _select_adapter_id_for_target(self, target_id: str, is_group: bool, default_adapter_id: str) -> str:
+        """纯 ID 配置时，按 ID 形态选择更合理的平台，避免 QQ/微信串台。"""
+        target_s = str(target_id or "")
+        if self.ctx_service._is_weixin_platform(target_s):
+            return (
+                getattr(self.plugin, "_cached_weixin_adapter_id", None)
+                or self._find_adapter_id_by_keywords(["weixin", "wechat", "openclaw"])
+                or default_adapter_id
+            )
+
+        if target_s.isdigit():
+            return (
+                getattr(self.plugin, "_cached_qq_adapter_id", None)
+                or self._find_adapter_id_by_keywords(["aiocqhttp", "onebot", "qq"])
+                or default_adapter_id
+            )
+
+        return default_adapter_id
+
+    def _build_target_umo(self, target_id: str, is_group: bool, default_adapter_id: str) -> str:
+        """将 /sid 获取的纯会话 ID 按平台和聊天类型拼成运行时 UMO。"""
+        adapter_id = self._select_adapter_id_for_target(target_id, is_group, default_adapter_id)
+        return f"{adapter_id}:{'GroupMessage' if is_group else 'FriendMessage'}:{target_id}"
+
+    def _select_platform_instance_for_target(self, target_umo: str):
+        """按目标 ID 形态选择平台实例，避开不同适配器共用同一个 platform id 的歧义。"""
+        target_s = str(target_umo or "")
+        adapter_id, real_id = self.ctx_service._parse_umo(target_s)
+        probe = real_id or target_s
+
+        if self.ctx_service._is_weixin_platform(target_s):
+            return self._find_platform_instance_by_keywords(["weixin_oc", "openclaw"])
+
+        if probe.isdigit():
+            return self._find_platform_instance_by_keywords(["aiocqhttp", "onebot"])
+
+        if adapter_id:
+            for inst in self._iter_platform_instances():
+                if self._get_platform_id(inst) == adapter_id:
+                    return inst
+        return None
+
+    def _build_message_session_for_target(self, target_umo: str, platform_inst=None):
+        if not MessageSesion or not MessageType:
+            return None
+
+        target_s = str(target_umo or "").strip()
+        adapter_id, real_id = self.ctx_service._parse_umo(target_s)
+        session_id = real_id or target_s
+        platform_id = self._get_platform_id(platform_inst) if platform_inst else adapter_id
+        if not platform_id or not session_id:
+            return None
+
+        is_group = self.ctx_service._is_group_chat(target_s)
+        try:
+            message_type = MessageType.GROUP_MESSAGE if is_group else MessageType.FRIEND_MESSAGE
+        except AttributeError:
+            message_type = MessageType("GroupMessage" if is_group else "FriendMessage")
+        return MessageSesion(
+            platform_name=platform_id,
+            message_type=message_type,
+            session_id=session_id,
+        )
+
+    def _has_weixin_context_token(self, target_umo: str, platform_inst=None) -> bool:
+        if not self.ctx_service._is_weixin_platform(target_umo):
+            return True
+        _, real_id = self.ctx_service._parse_umo(str(target_umo or ""))
+        user_id = real_id or str(target_umo or "").strip()
+        inst = platform_inst or self._select_platform_instance_for_target(target_umo)
+        tokens = getattr(inst, "_context_tokens", {}) if inst else {}
+        return bool(user_id and isinstance(tokens, dict) and tokens.get(user_id))
+
+    def _event_matches_target(self, event: AstrMessageEvent, target_umo: str) -> bool:
+        if not event:
+            return False
+        origin = str(getattr(event, "unified_msg_origin", "") or "")
+        if origin == target_umo:
+            return True
+        _, origin_real_id = self.ctx_service._parse_umo(origin)
+        _, target_real_id = self.ctx_service._parse_umo(str(target_umo or ""))
+        target_probe = target_real_id or str(target_umo or "").strip()
+        return bool(origin_real_id and target_probe and origin_real_id == target_probe)
+
+    def _get_contact_alias(self, target_uid: str, event: AstrMessageEvent = None) -> str:
+        if hasattr(self.plugin, "get_contact_alias"):
+            return self.plugin.get_contact_alias(target_uid, event=event)
+        return ""
+
+    def _clean_nickname_candidate(self, nickname: str, target_uid: str, event: AstrMessageEvent = None) -> str:
+        name = str(nickname or "").strip()
+        if not name:
+            return ""
+        keys = set()
+        target_s = str(target_uid or "").strip()
+        if target_s:
+            keys.add(target_s)
+            _, real_id = self.ctx_service._parse_umo(target_s)
+            if real_id:
+                keys.add(real_id)
+        if event:
+            origin = str(getattr(event, "unified_msg_origin", "") or "").strip()
+            if origin:
+                keys.add(origin)
+                _, real_id = self.ctx_service._parse_umo(origin)
+                if real_id:
+                    keys.add(real_id)
+            try:
+                sender_id = str(event.get_sender_id() or "").strip()
+                if sender_id:
+                    keys.add(sender_id)
+            except Exception:
+                pass
+        if name in keys or name.endswith("@im.wechat"):
+            return ""
+        return name
+
+    async def _get_onebot_nickname(self, target_uid: str, event: AstrMessageEvent = None) -> str:
+        target_s = str(target_uid or "").strip()
+        adapter_id, real_id = self.ctx_service._parse_umo(target_s)
+        probe_id = real_id or target_s
+        if not str(probe_id).isdigit():
+            return ""
+
+        bot = self.ctx_service._get_onebot_bot(target_s, event=event, adapter_id=adapter_id)
+        if not bot:
+            if event and self.ctx_service._is_onebot_event(event):
+                return self._clean_nickname_candidate(event.get_sender_name(), target_s, event=event)
+            return ""
+
+        try:
+            ret = await self.ctx_service._bot_call_action(bot, "get_stranger_info", user_id=int(probe_id))
+            if ret and isinstance(ret, dict):
+                remark = str(ret.get("remark", "") or "").strip()
+                if remark:
+                    logger.info(f"[DailySharing] 获取到用户备注: {remark}")
+                    return remark
+                nickname = str(ret.get("nickname", "") or "").strip()
+                if nickname:
+                    logger.info(f"[DailySharing] 获取到用户昵称: {nickname}")
+                    return nickname
+        except Exception as e:
+            logger.warning(f"[DailySharing] 获取 QQ 昵称失败: {e}")
+
+        if event and self.ctx_service._is_onebot_event(event):
+            return self._clean_nickname_candidate(event.get_sender_name(), target_s, event=event)
+        return ""
+
+    def _get_target_conf(self, target_umo: str, is_group: bool, r_groups: dict, r_users: dict):
+        """用运行时目标查找独立配置；配置表本身只保存纯会话 ID。"""
+        adapter_id, real_id = self.ctx_service._parse_umo(target_umo)
+        conf_map = r_groups if is_group else r_users
+        if target_umo in conf_map:
+            return conf_map[target_umo]
+        if real_id in conf_map:
+            return conf_map[real_id]
+        return None
+
+    def _is_unsupported_weixin_group_target(self, target_umo: str, is_group: bool) -> bool:
+        """个人微信适配器基于 openclaw-weixin，只支持一对一私聊。"""
+        return bool(is_group and self.ctx_service._is_weixin_platform(target_umo))
+
     def setup_tasks(self):
-        if self.plugin.config.get("enable_auto_sharing", False):
-            cron = self.basic_conf.get("sharing_cron", "0 8,20 * * *")
-            self.setup_cron(cron)
-            logger.debug(f"[DailySharing] 分享内容定时任务已启动 ({cron})")
-            
-            # 扫描并注册所有带独立时间的独立定时任务
-            self.setup_custom_target_crons()
-        else:
+        if not self.plugin.config.get("enable_auto_sharing", False):
             logger.debug("[DailySharing] 分享内容已禁用")
+            return
+
+        cron = self.basic_conf.get("sharing_cron", "0 8,20 * * *")
+        self.setup_cron(cron)
+        logger.debug(f"[DailySharing] 分享内容定时任务已启动 ({cron})")
+        
+        # 扫描并注册所有带独立时间的独立定时任务
+        self.setup_custom_target_crons()
 
         enable_60s = self.extra_shares_conf.get("enable_60s_news", False)
         enable_ai = self.extra_shares_conf.get("enable_ai_news", False)
@@ -109,7 +391,18 @@ class TaskManager:
             self.setup_qzone_cron()
 
         # 启动时恢复因为重启而中断的延迟任务
-        asyncio.create_task(self._recover_pending_jobs())
+        self.plugin._track_task(self._recover_pending_jobs())
+
+    async def clear_pending_delay_jobs(self):
+        """清理已记录但尚未执行的延迟任务，确保关闭后不会补发旧任务。"""
+        await self.db.update_state_dict("global", {"pending_delay_job": None})
+        await self.db.update_state_dict("qzone", {"pending_delay_job": None})
+
+        r_groups = self._parse_targets_config(self.receiver_conf.get("groups", []))
+        r_users = self._parse_targets_config(self.receiver_conf.get("users", []))
+        for target_id in list(r_groups.keys()) + list(r_users.keys()):
+            if target_id:
+                await self.db.update_state_dict(f"target_{target_id}", {"pending_delay_job": None})
 
     def setup_custom_target_crons(self):
         """解析并为写了独立时间的群聊、私聊挂载独立定时 (支持随机延迟)"""
@@ -137,7 +430,10 @@ class TaskManager:
 
         def add_custom_job(target_id, is_group, cron_str):
             job_id = f"custom_share_{target_id}"
-            target_umo = f"{default_adapter_id}:{'GroupMessage' if is_group else 'FriendMessage'}:{target_id}"
+            target_umo = self._build_target_umo(target_id, is_group, default_adapter_id)
+            if self._is_unsupported_weixin_group_target(target_umo, is_group):
+                logger.warning(f"[DailySharing] weixin_oc 不支持群聊，已跳过独立定时目标: {target_id}")
+                return
             
             async def delayed_custom_execute():
                 if self.plugin._is_terminated: return
@@ -267,10 +563,16 @@ class TaskManager:
 
         r_groups = self._parse_targets_config(self.receiver_conf.get("groups", []))
         r_users = self._parse_targets_config(self.receiver_conf.get("users", []))
-        all_targets = [(gid, True) for gid in r_groups.keys() if gid] + [(uid, False) for uid in r_users.keys() if uid]
+        all_targets = []
+        for gid in r_groups.keys():
+            if gid:
+                all_targets.append((gid, True))
+        for uid in r_users.keys():
+            if uid:
+                all_targets.append((uid, False))
         
         def recover_custom_job(tid, is_group):
-            target_umo = f"{default_adapter_id}:{'GroupMessage' if is_group else 'FriendMessage'}:{tid}"
+            target_umo = self._build_target_umo(tid, is_group, default_adapter_id)
             async def delayed_recover():
                 if self.plugin._is_terminated: return
                 await self.db.update_state_dict(f"target_{tid}", {"pending_delay_job": None})
@@ -280,6 +582,11 @@ class TaskManager:
             return delayed_recover
 
         for tid, is_group in all_targets:
+            target_umo = self._build_target_umo(tid, is_group, default_adapter_id)
+            if self._is_unsupported_weixin_group_target(target_umo, is_group):
+                logger.warning(f"[DailySharing] weixin_oc 不支持群聊，已跳过恢复目标: {tid}")
+                await self.db.update_state_dict(f"target_{tid}", {"pending_delay_job": None})
+                continue
             t_state = await self.db.get_state(f"target_{tid}", {})
             t_pending = t_state.get("pending_delay_job")
             if t_pending:
@@ -309,7 +616,7 @@ class TaskManager:
             # 每天凌晨 00:00 重新生成当天的随机任务
             self._setup_cron_job_custom("daily_random_scheduler", "0 0 * * *", self._schedule_daily_random_jobs)
             # 启动时立刻安排一次今天的任务
-            asyncio.create_task(self._schedule_daily_random_jobs())
+            self.plugin._track_task(self._schedule_daily_random_jobs())
             logger.debug(f"[DailySharing] 已启用多时间段随机生成模式")
 
     def setup_qzone_cron(self):
@@ -325,7 +632,7 @@ class TaskManager:
             # 每天凌晨 00:00 重新生成当天的QQ空间随机任务
             self._setup_cron_job_custom("daily_qzone_random_scheduler", "0 0 * * *", self._schedule_daily_qzone_random_jobs)
             # 启动时立刻安排一次今天的任务
-            asyncio.create_task(self._schedule_daily_qzone_random_jobs())
+            self.plugin._track_task(self._schedule_daily_qzone_random_jobs())
             logger.debug(f"[DailySharing] QQ空间已启用多时间段随机生成模式")
 
     async def _schedule_daily_random_jobs(self):
@@ -529,20 +836,15 @@ class TaskManager:
         try:
             await self.db.update_state_dict("global", {"pending_delay_job": None})
 
-            # 核心执行逻辑            
-            now = datetime.now()
-
-            # 防抖检查            
-            if self.plugin._last_share_time:
-                if (now - self.plugin._last_share_time).total_seconds() < 60:
-                    logger.debug("[DailySharing] 检测到近期已执行任务，跳过本次触发。")
-                    return
-            
             if self._lock.locked():
-                logger.warning("[DailySharing] 上一个任务正在进行中，跳过本次触发。")
-                return
+                logger.warning("[DailySharing] 上一个任务正在进行中，本次触发将排队等待...")
 
             async with self._lock:
+                now = datetime.now()
+                if self.plugin._last_share_time:
+                    if (now - self.plugin._last_share_time).total_seconds() < 60:
+                        logger.debug("[DailySharing] 检测到近期已执行任务，跳过本次触发。")
+                        return
                 self.plugin._last_share_time = now
                 logger.info("[DailySharing] 开始执行分享任务...")
                 await self.execute_share()
@@ -714,7 +1016,7 @@ class TaskManager:
         except: return SharingType.GREETING
 
     def _parse_targets_config(self, conf_list):
-        """核心解析器：支持 群号:Cron时间:类型 这种三段式复杂写法"""
+        """核心解析器：配置项只接受 /sid 获取的纯 UID/Session ID。"""
         if isinstance(conf_list, dict): return conf_list
         res = {}
         if isinstance(conf_list, list):
@@ -724,18 +1026,29 @@ class TaskManager:
                 # 支持中英文冒号混用                
                 s = s.replace("：", ":")
                 parts = [p.strip() for p in s.split(":")]
-                
-                target_id = parts[0]
+
+                target_id = s
+                cron_str = None
+                seq_str = None
+
                 if len(parts) == 1:
-                    # 只有群号
-                    res[target_id] = {"cron": None, "seq": None}
-                elif len(parts) == 2:
-                    # 只有群号和类型
-                    res[target_id] = {"cron": None, "seq": parts[1]}
-                elif len(parts) >= 3:
-                    # 群号 : 时间 : 类型 (例如 123456:0 7 * * *:news)
-                    cron_str = ":".join(parts[1:-1]).strip()
-                    seq_str = parts[-1].strip()
+                    target_id = parts[0]
+                elif self._looks_like_share_sequence(parts[-1]):
+                    seq_str = parts[-1]
+                    if len(parts) >= 3 and self._looks_like_cron(parts[-2]):
+                        cron_str = parts[-2]
+                        target_id = ":".join(parts[:-2]).strip()
+                    else:
+                        target_id = ":".join(parts[:-1]).strip()
+                else:
+                    target_id = s
+
+                if target_id:
+                    if self._is_full_umo(target_id):
+                        _, real_id = self.ctx_service._parse_umo(target_id)
+                        hint = f"请改填 /sid 输出的 UID/Session ID：{real_id}" if real_id else "请改填 /sid 输出的 UID/Session ID"
+                        logger.warning(f"[DailySharing] 配置项只支持纯 UID/Session ID，已跳过完整 UMO: {target_id}。{hint}")
+                        continue
                     res[target_id] = {"cron": cron_str, "seq": seq_str}
         return res
 
@@ -770,15 +1083,20 @@ class TaskManager:
 
             for gid, conf in r_groups.items():
                 if gid:
+                    target_umo = self._build_target_umo(gid, True, default_adapter_id)
+                    if self._is_unsupported_weixin_group_target(target_umo, True):
+                        logger.warning(f"[DailySharing] weixin_oc 不支持群聊，已跳过广播目标: {gid}")
+                        continue
                     # 如果全局广播开启了排除，且这个群有独立定时，跳过！
                     if exclude_custom_cron and isinstance(conf, dict) and conf.get("cron"):
                         continue
-                    targets.append(f"{default_adapter_id}:GroupMessage:{gid}")
+                    targets.append(target_umo)
             for uid, conf in r_users.items():
                 if uid:
                     if exclude_custom_cron and isinstance(conf, dict) and conf.get("cron"):
                         continue
-                    targets.append(f"{default_adapter_id}:FriendMessage:{uid}")
+                    target_umo = self._build_target_umo(uid, False, default_adapter_id)
+                    targets.append(target_umo)
         
         return targets
 
@@ -806,14 +1124,18 @@ class TaskManager:
             b_users = self.extra_shares_conf.get("briefing_users", [])
 
             for gid in b_groups:
-                # 只取纯数字，防止用户误填冒号
-                gid_clean = str(gid).split(":")[0].strip()
-                if gid_clean: 
-                    targets.append(f"{default_adapter_id}:GroupMessage:{gid_clean}")
+                gid_clean = str(gid).strip()
+                if gid_clean:
+                    target_umo = self._build_target_umo(gid_clean, True, default_adapter_id)
+                    if self._is_unsupported_weixin_group_target(target_umo, True):
+                        logger.warning(f"[DailySharing] weixin_oc 不支持群聊，已跳过早报群聊目标: {gid_clean}")
+                        continue
+                    targets.append(target_umo)
             for uid in b_users:
-                uid_clean = str(uid).split(":")[0].strip()
-                if uid_clean: 
-                    targets.append(f"{default_adapter_id}:FriendMessage:{uid_clean}")
+                uid_clean = str(uid).strip()
+                if uid_clean:
+                    target_umo = self._build_target_umo(uid_clean, False, default_adapter_id)
+                    targets.append(target_umo)
         
         return targets
 
@@ -829,6 +1151,25 @@ class TaskManager:
         to_qzone: bool
     ):
         """实际执行分享逻辑的后台任务 (LLM 触发)"""
+        if self.plugin._is_terminated:
+            return
+
+        share_target = str(getattr(event, "unified_msg_origin", "") or "").strip()
+        share_global_scope = bool(to_qzone)
+        if hasattr(self.plugin, "_is_share_busy"):
+            is_busy = self.plugin._is_share_busy(share_target, global_scope=share_global_scope)
+            share_lock = self.plugin._get_share_lock(share_target, global_scope=share_global_scope)
+        else:
+            is_busy = self._lock.locked()
+            share_lock = self._lock
+
+        if is_busy:
+            await event.send(event.plain_result("正如火如荼地准备中，请稍后..."))
+            return
+
+        lock_acquired = False
+        await share_lock.acquire()
+        lock_acquired = True
         try:
             # 特殊图片类型处理 (60s / AI) 
             st_clean = share_type.lower().replace(" ", "")
@@ -1007,7 +1348,7 @@ class TaskManager:
 
             # 获取历史
             is_group = self.ctx_service._is_group_chat(target_umo)
-            hist_data = await self.ctx_service.get_history_data(target_umo, is_group)
+            hist_data = await self.ctx_service.get_history_data(target_umo, is_group, event=event)
             hist_prompt = self.ctx_service.format_history_prompt(hist_data, target_type_enum)
             group_info = hist_data.get("group_info")
             life_prompt = self.ctx_service.format_life_context(life_ctx, target_type_enum, is_group, group_info)
@@ -1025,9 +1366,10 @@ class TaskManager:
                     recent_dynamics_str = "\n".join(lines)
 
             # 获取昵称
-            nickname = ""
+            nickname = self._get_contact_alias(target_umo, event=event)
             if not is_group:
-                nickname = event.get_sender_name()
+                nickname = nickname or await self._get_onebot_nickname(target_umo, event=event)
+                nickname = nickname or self._clean_nickname_candidate(event.get_sender_name(), target_umo, event=event)
 
             # 生成内容
             content = await self.content_service.generate(
@@ -1038,8 +1380,11 @@ class TaskManager:
                 await event.send(event.plain_result("内容生成失败，请稍后再试。"))
                 return
             
+            self.image_service.reset_last_description()
+
             # ================= 视觉生成逻辑 =================
             video_url = None
+            send_img_path = img_path
             should_gen_visual = False
             
             if self.image_conf.get("enable_ai_image", False):
@@ -1051,6 +1396,10 @@ class TaskManager:
                 ai_img_path = await self.image_service.generate_image(content, target_type_enum, life_ctx)
                 if ai_img_path:
                     img_path = ai_img_path
+                    send_img_path = img_path
+                
+                if img_path:
+                    send_img_path = await self._prepare_image_for_target(target_umo, img_path)
                 
                 # 生成视频 (如果明确要求视频)
                 if img_path and self.image_conf.get("enable_ai_video", False):
@@ -1068,7 +1417,7 @@ class TaskManager:
                     audio_path = await self.ctx_service.text_to_speech(content, target_umo, target_type_enum, period)
 
             # 发送 (img_path 可能是热搜截图，也可能是AI画的图)
-            await self.send(target_umo, content, img_path, audio_path, video_url)
+            await self.send(target_umo, content, send_img_path, audio_path, video_url, event=event)
             
             # 记录上下文
             img_desc = self.image_service.get_last_description()
@@ -1080,6 +1429,11 @@ class TaskManager:
             import traceback
             logger.error(traceback.format_exc())
             await event.send(event.plain_result(f"执行出错: {str(e)}"))
+        finally:
+            if lock_acquired and share_lock.locked():
+                share_lock.release()
+            if not share_global_scope and hasattr(self.plugin, "_release_idle_share_lock"):
+                self.plugin._release_idle_share_lock(share_target)
 
     async def execute_briefing_share(self, specific_target: str = None):
         """执行早报分享：依次发送开启的 60s 和 AI 资讯"""
@@ -1146,11 +1500,12 @@ class TaskManager:
         for uid in targets:
             if self.plugin._is_terminated: break
             try:
+                send_event = None
                 for name, original_url, local_path in images_to_send:
                     # 普通会话发送下载到本地的文件
                     msg = MessageChain().file_image(local_path)
                     logger.info(f"[DailySharing] 正在分享 {name} 到 {uid}")
-                    await self.plugin.context.send_message(uid, msg)
+                    await self._send_message_chain(uid, msg, send_event)
                     # 每张图之间间隔 1 秒
                     await asyncio.sleep(1)
                 
@@ -1159,7 +1514,13 @@ class TaskManager:
             except Exception as e:
                 logger.error(f"[DailySharing] 分享早报到 {uid} 失败: {e}")
 
-    async def execute_share(self, force_type: SharingType = None, news_source: str = None, specific_target: str = None):
+    async def execute_share(
+        self,
+        force_type: SharingType = None,
+        news_source: str = None,
+        specific_target: str = None,
+        event: AstrMessageEvent = None,
+    ):
         """执行分享的主流程（支持群聊私聊独立配置与记忆序列）"""
         if self.plugin._is_terminated: return
 
@@ -1188,17 +1549,12 @@ class TaskManager:
             try:
                 is_group = "group" in uid.lower() or "room" in uid.lower() or "guild" in uid.lower()
                 
-                # 提取纯数字ID用于读取字典配置
                 adapter_id, real_id = self.ctx_service._parse_umo(uid)
                 
                 # 读取该群聊、私聊独立的类型策略配置（默认 fallback 为 global 设定的 sharing_type）
                 target_specific_type = self.basic_conf.get("sharing_type", "auto")
-                if is_group and real_id in r_groups:
-                    conf = r_groups[real_id]
-                    st = conf.get("seq") if isinstance(conf, dict) else conf
-                    if st is not None: target_specific_type = st
-                elif not is_group and real_id in r_users:
-                    conf = r_users[real_id]
+                conf = self._get_target_conf(uid, is_group, r_groups, r_users)
+                if conf is not None:
                     st = conf.get("seq") if isinstance(conf, dict) else conf
                     if st is not None: target_specific_type = st
 
@@ -1208,7 +1564,13 @@ class TaskManager:
                 else:
                     stype = await self.decide_type_with_state(period, is_qzone=False, target_id=uid, specific_type=target_specific_type)
 
-                logger.info(f"[DailySharing] 正在为 {uid} 生成内容... 时段: {period.value}, 类型: {stype.value}")
+                # 优先使用本地昵称映射；QQ/OneBot 可通过接口取备注/昵称。
+                nickname = self._get_contact_alias(uid, event=event)
+                if not nickname and not is_group:
+                    nickname = await self._get_onebot_nickname(uid, event=event)
+
+                target_display = f"{nickname}({uid})" if nickname else uid
+                logger.info(f"[DailySharing] 正在为 {target_display} 生成内容... 时段: {period.value}, 类型: {stype.value}")
                 
                 # 独立获取该目标的新闻数据与去重
                 news_data = None
@@ -1224,28 +1586,7 @@ class TaskManager:
                     if news_data:
                         await self.db.update_state_dict(f"target_{uid}", {"last_news_source": news_data[1]})
 
-                # 尝试获取用户昵称 (仅限私聊) 
-                nickname = ""
-                if not is_group:
-                    try:
-                        if adapter_id and real_id:
-                            bot = self.ctx_service._get_bot_instance(adapter_id)
-                            if bot:
-                                ret = await bot.api.call_action("get_stranger_info", user_id=int(real_id))
-                                if ret and isinstance(ret, dict):
-                                    # 安全获取备注和昵称，如果不存在则默认为空字符串
-                                    remark = ret.get("remark", "").strip()
-                                    
-                                    if remark:  # 如果备注存在且不为空
-                                        nickname = remark
-                                        logger.info(f"[DailySharing] 获取到用户备注: {nickname}")
-                                    else:       # 如果没有备注，则退回使用昵称
-                                        nickname = ret.get("nickname", "").strip()
-                                        logger.info(f"[DailySharing] 获取到用户昵称: {nickname}")
-                    except Exception as e:
-                         logger.warning(f"[DailySharing] 获取昵称失败: {e}")
-
-                hist_data = await self.ctx_service.get_history_data(uid, is_group)
+                hist_data = await self.ctx_service.get_history_data(uid, is_group, event=event)
                 if is_group and "group_info" in hist_data:
                     # 手动触发时通常忽略策略检查，但自动触发时需要检查
                     if not specific_target and not self.ctx_service.check_group_strategy(hist_data["group_info"]):
@@ -1282,10 +1623,13 @@ class TaskManager:
                     )
                     continue
                 
+                self.image_service.reset_last_description()
+
                 # 生成多媒体素材 (图片 & 视频 & 语音) 
                 
                 # 1. 配图生成逻辑
                 img_path = None
+                send_img_path = None
                 video_url = None
                 enable_img_global = self.image_conf.get("enable_ai_image", False)
                 img_allowed_types = self.image_conf.get("image_enabled_types", ["greeting", "mood", "knowledge", "recommendation"])
@@ -1307,6 +1651,9 @@ class TaskManager:
                         if ai_img_path:
                             # AI 图片覆盖热搜截图
                             img_path = ai_img_path
+                        
+                        if img_path:
+                            send_img_path = await self._prepare_image_for_target(uid, img_path)
                             
                         # 尝试生成视频
                         if img_path and self.image_conf.get("enable_ai_video", False):
@@ -1328,8 +1675,19 @@ class TaskManager:
                     else:
                         logger.info(f"[DailySharing] 当前类型 {stype.value} 不在语音允许列表，跳过语音。")
 
-                # 分享内容
-                await self.send(uid, content, img_path, audio_path, video_url)
+                # 手动触发当前会话时使用当前事件；定时任务和其它目标走适配器原生 send_by_session。
+                send_event = event if self._event_matches_target(event, uid) else None
+                if send_img_path is None:
+                    send_img_path = img_path
+                sent = await self.send(uid, content, send_img_path, audio_path, video_url, event=send_event)
+                if not sent:
+                    await self.db.add_sent_history(
+                        target_id=uid,
+                        sharing_type=stype.value,
+                        content="发送失败",
+                        success=False
+                    )
+                    continue
                 
                 # 获取图片描述并写入 AstrBot 聊天上下文
                 img_desc = self.image_service.get_last_description()
@@ -1427,6 +1785,7 @@ class TaskManager:
             clean_qzone_content = re.sub(r'\$\$(?:EMO:)?(?:happy|sad|angry|neutral|surprise)\$\$', '', qzone_content, flags=re.IGNORECASE).strip()
 
             # 处理配图逻辑
+            self.image_service.reset_last_description()
             qzone_images = []
             target_local_img = None
             
@@ -1461,66 +1820,39 @@ class TaskManager:
                     pass
 
             if target_local_img:
-                if target_local_img.startswith("http"):
-                    qzone_images.append(target_local_img)
-                else:
-                    qzone_images.append(f"local_path::{target_local_img}")
-                            
-            import sys
-            import aiofiles
-            qzone_utils_mod = None
-            for mod_name, mod in sys.modules.items():
-                if "qzone" in mod_name and "utils" in mod_name and hasattr(mod, "download_file"):
-                    qzone_utils_mod = mod
-                    break
+                prepared_image = await self._prepare_qzone_image(target_local_img)
+                if prepared_image:
+                    qzone_images.append(prepared_image)
+                
+            await self.plugin._safe_publish_qzone(
+                qzone_plugin,
+                text=clean_qzone_content,
+                images=qzone_images
+            )
+            logger.info("[DailySharing] 成功分享内容到QQ空间！")
+            
+            await self.db.add_sent_history(
+                target_id="qzone_broadcast",
+                sharing_type=stype.value,
+                content=clean_qzone_content[:100] + "...",
+                success=True
+            )
+            
+            if event:
+                try:
+                    text_chain = MessageChain().message(clean_qzone_content)
+                    await event.send(text_chain)
                     
-            if qzone_utils_mod:
-                orig_download_file = qzone_utils_mod.download_file
-                async def patched_download_file(url: str):
-                    if isinstance(url, str) and url.startswith("local_path::"):
-                        real_path = url.split("::", 1)[1]
-                        try:
-                            async with aiofiles.open(real_path, "rb") as f:
-                                return await f.read()  
-                        except Exception:
-                            return None
-                    return await orig_download_file(url)
-                qzone_utils_mod.download_file = patched_download_file
-                
-            try:
-                await self.plugin._safe_publish_qzone(
-                    qzone_plugin,
-                    text=clean_qzone_content,
-                    images=qzone_images
-                )
-                logger.info("[DailySharing] 成功分享内容到QQ空间！")
-                
-                await self.db.add_sent_history(
-                    target_id="qzone_broadcast",
-                    sharing_type=stype.value,
-                    content=clean_qzone_content[:100] + "...",
-                    success=True
-                )
-                
-                if event:
-                    try:
-                        text_chain = MessageChain().message(clean_qzone_content)
-                        await event.send(text_chain)
-                        
-                        if target_local_img:
-                            await asyncio.sleep(1.0) 
-                            img_chain = MessageChain()
-                            if target_local_img.startswith("http"):
-                                img_chain.url_image(target_local_img)
-                            else:
-                                img_chain.file_image(target_local_img)
-                            await event.send(img_chain)
-                    except Exception as e:
-                        logger.error(f"[DailySharing] 同步发送内容到会话失败: {e}")
-                
-            finally:
-                if qzone_utils_mod:
-                    qzone_utils_mod.download_file = orig_download_file
+                    if target_local_img:
+                        await asyncio.sleep(1.0) 
+                        img_chain = MessageChain()
+                        if target_local_img.startswith("http"):
+                            img_chain.url_image(target_local_img)
+                        else:
+                            img_chain.file_image(target_local_img)
+                        await event.send(img_chain)
+                except Exception as e:
+                    logger.error(f"[DailySharing] 同步发送内容到会话失败: {e}")
 
         except Exception as e:
             logger.error(f"[DailySharing] 生成并分享到QQ空间失败: {e}")
@@ -1530,9 +1862,138 @@ class TaskManager:
                 except:
                     pass
 
-    async def send(self, uid, text, img_path, audio_path=None, video_url=None):
+    async def _send_message_chain(self, uid, chain: MessageChain, event: AstrMessageEvent = None):
+        if self.ctx_service._is_weixin_platform(uid):
+            self._apply_weixin_timeout(getattr(event, "platform", None) if event else None)
+
+        if event:
+            await event.send(chain)
+            return
+
+        platform_inst = self._select_platform_instance_for_target(uid)
+        session = self._build_message_session_for_target(uid, platform_inst)
+        if platform_inst and session:
+            if self.ctx_service._is_weixin_platform(uid):
+                self._apply_weixin_timeout(platform_inst)
+            if self.ctx_service._is_weixin_platform(uid) and not self._has_weixin_context_token(uid, platform_inst):
+                logger.warning(
+                    f"[DailySharing] weixin_oc 主动发送目标 {uid} 暂无 context_token。"
+                    "需要个人微信私聊发一条消息，AstrBot 收到后会保存 weixin_oc_context_tokens。"
+                )
+            await platform_inst.send_by_session(session, chain)
+            return
+
+        await self.plugin.context.send_message(uid, chain)
+
+    def _get_weixin_timeout_ms(self) -> int:
+        try:
+            timeout_seconds = int(self.image_conf.get("weixin_api_timeout_seconds", 60))
+        except Exception:
+            timeout_seconds = 60
+        timeout_ms = timeout_seconds * 1000
+        return max(15000, min(timeout_ms, 300000))
+
+    def _apply_weixin_timeout(self, platform_inst):
+        """按插件配置调高 weixin_oc API/CDN 上传超时，避免大图上传被 15 秒默认值截断。"""
+        if not platform_inst:
+            return
+        timeout_ms = self._get_weixin_timeout_ms()
+        try:
+            old_timeout = getattr(platform_inst, "api_timeout_ms", None)
+            if old_timeout != timeout_ms:
+                setattr(platform_inst, "api_timeout_ms", timeout_ms)
+
+            client = getattr(platform_inst, "client", None)
+            if client and getattr(client, "api_timeout_ms", None) != timeout_ms:
+                setattr(client, "api_timeout_ms", timeout_ms)
+        except Exception as e:
+            logger.debug(f"[DailySharing] 设置 weixin_oc 超时失败: {e}")
+
+    def _compress_image_for_weixin_sync(
+        self,
+        img_path: str,
+    ) -> str:
+        """为 weixin_oc 发送创建轻量图片副本，降低 CDN 上传超时概率。"""
+        if not img_path or not os.path.exists(img_path):
+            return img_path
+
+        try:
+            from PIL import Image as PILImage
+            from PIL import ImageOps
+        except Exception as e:
+            logger.debug(f"[DailySharing] Pillow 不可用，跳过微信图片压缩: {e}")
+            return img_path
+
+        try:
+            max_side = int(self.image_conf.get("weixin_image_max_side", 4096))
+        except Exception:
+            max_side = 4096
+        try:
+            max_kb = int(self.image_conf.get("weixin_image_max_size_kb", 10240))
+        except Exception:
+            max_kb = 10240
+
+        max_side = max(1600, min(max_side, 8192))
+        target_bytes = max(512, max_kb) * 1024
+        raw_size = os.path.getsize(img_path)
+
+        try:
+            with PILImage.open(img_path) as im:
+                im = ImageOps.exif_transpose(im)
+                width, height = im.size
+                if raw_size <= target_bytes and max(width, height) <= max_side:
+                    return img_path
+
+                if im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info):
+                    bg = PILImage.new("RGB", im.size, (255, 255, 255))
+                    bg.paste(im.convert("RGBA"), mask=im.convert("RGBA").split()[-1])
+                    im = bg
+                else:
+                    im = im.convert("RGB")
+
+                if max(width, height) > max_side:
+                    im.thumbnail((max_side, max_side), PILImage.Resampling.LANCZOS)
+
+                temp_dir = os.path.join(str(self.plugin.data_dir), "Temp")
+                os.makedirs(temp_dir, exist_ok=True)
+                digest_src = f"{img_path}:{raw_size}:{os.path.getmtime(img_path)}:{max_side}:{max_kb}".encode("utf-8", errors="ignore")
+                digest = hashlib.md5(digest_src).hexdigest()[:12]
+                out_path = os.path.join(temp_dir, f"weixin_send_{digest}.jpg")
+
+                for quality in (95, 93, 90, 88, 85, 82, 78, 74, 70):
+                    im.save(
+                        out_path,
+                        format="JPEG",
+                        quality=quality,
+                        optimize=True,
+                        progressive=True,
+                        subsampling=0 if quality >= 90 else -1,
+                    )
+                    if os.path.getsize(out_path) <= target_bytes:
+                        break
+
+                out_size = os.path.getsize(out_path)
+                if out_size < raw_size:
+                    logger.info(
+                        f"[DailySharing] 已为 weixin_oc 优化图片: {raw_size / 1024 / 1024:.2f}MB -> "
+                        f"{out_size / 1024 / 1024:.2f}MB, 分辨率 {width}x{height} -> {im.size[0]}x{im.size[1]}"
+                    )
+                    return out_path
+        except Exception as e:
+            logger.warning(f"[DailySharing] 微信图片压缩失败，继续发送原图: {e}")
+
+        return img_path
+
+    async def _prepare_image_for_target(self, uid: str, img_path: str) -> str:
+        if not img_path:
+            return img_path
+        if self.ctx_service._is_weixin_platform(uid) and self.image_conf.get("weixin_compress_images", True):
+            return await asyncio.to_thread(self._compress_image_for_weixin_sync, img_path)
+        return img_path
+
+    async def send(self, uid, text, img_path, audio_path=None, video_url=None, event: AstrMessageEvent = None) -> bool:
         """分享内容（支持分开分享，支持语音和视频）"""
-        if self.plugin._is_terminated: return
+        if self.plugin._is_terminated: return False
 
         try:
             separate_img = self.image_conf.get("separate_text_and_image", True)
@@ -1556,6 +2017,8 @@ class TaskManager:
                     logger.warning(f"[DailySharing] 图片下载失败，已跳过发送该图片。")
                     img_path = None
 
+            img_path = await self._prepare_image_for_target(uid, img_path)
+
             # 1. 分享文字（如果需要）
             if should_send_text and clean_text: 
                 text_chain = MessageChain().message(clean_text) 
@@ -1564,7 +2027,7 @@ class TaskManager:
                     if img_path.startswith("http"): text_chain.url_image(img_path)
                     else: text_chain.file_image(img_path)
                 
-                await self.plugin.context.send_message(uid, text_chain)
+                await self._send_message_chain(uid, text_chain, event)
                 
                 # 如果后续还有消息，进行随机延迟
                 if audio_path or ((img_path or video_url) and separate_img):
@@ -1574,7 +2037,7 @@ class TaskManager:
             if audio_path:
                 audio_chain = MessageChain()
                 audio_chain.chain.append(Record(file=audio_path))
-                await self.plugin.context.send_message(uid, audio_chain)
+                await self._send_message_chain(uid, audio_chain, event)
                 
                 # 如果后续还有视觉媒体，延迟
                 if (img_path or video_url) and separate_img:
@@ -1590,7 +2053,7 @@ class TaskManager:
                 else:
                     # 如果是本地路径，使用 fromFile
                     video_chain.chain.append(Video.fromFileSystem(video_url))              
-                await self.plugin.context.send_message(uid, video_chain)
+                await self._send_message_chain(uid, video_chain, event)
             elif img_path:
                 # 分享图片（如果视频没生成，或者视频关闭）
                 img_not_sent_yet = separate_img or audio_path
@@ -1598,10 +2061,13 @@ class TaskManager:
                     img_chain = MessageChain()
                     if img_path.startswith("http"): img_chain.url_image(img_path)
                     else: img_chain.file_image(img_path)
-                    await self.plugin.context.send_message(uid, img_chain)
+                    await self._send_message_chain(uid, img_chain, event)
+
+            return True
 
         except Exception as e:
             logger.error(f"[DailySharing] 分享内容给 {uid} 失败: {e}")
+            return False
 
     async def random_sleep(self):
         """随机延迟"""

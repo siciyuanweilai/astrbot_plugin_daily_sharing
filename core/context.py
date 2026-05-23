@@ -92,10 +92,151 @@ class ContextService:
         try:
             parts = target_umo.split(':')
             if len(parts) >= 3:
-                return parts[0], parts[2]
+                return parts[0], ":".join(parts[2:])
             return None, None
         except:
             return None, None
+
+    def _is_onebot_platform(self, adapter_id: str) -> bool:
+        if not adapter_id:
+            return False
+        adapter = adapter_id.lower()
+        return "aiocqhttp" in adapter or "onebot" in adapter
+
+    def _is_onebot_event(self, event) -> bool:
+        try:
+            return self._is_onebot_platform(event.get_platform_name())
+        except Exception:
+            return False
+
+    def _iter_platform_instances(self) -> List[Any]:
+        try:
+            manager = getattr(self.context, "platform_manager", None)
+            if not manager:
+                return []
+            if hasattr(manager, "get_insts"):
+                return list(manager.get_insts())
+            raw = getattr(manager, "insts", None)
+            if raw:
+                return list(raw.values()) if isinstance(raw, dict) else list(raw)
+            return list(getattr(manager, "platform_insts", []) or [])
+        except Exception as e:
+            logger.debug(f"[DailySharing] 获取平台实例失败: {e}")
+            return []
+
+    def _get_platform_meta(self, inst):
+        try:
+            if hasattr(inst, "meta"):
+                return inst.meta()
+        except Exception:
+            pass
+        return getattr(inst, "metadata", None)
+
+    def _get_platform_id(self, inst) -> str:
+        meta = self._get_platform_meta(inst)
+        p_id = str(getattr(meta, "id", "") or "").strip()
+        if p_id:
+            return p_id
+        config = getattr(inst, "config", {}) or {}
+        return str(config.get("id", "") or getattr(inst, "id", "") or "").strip()
+
+    def _get_platform_type(self, inst) -> str:
+        meta = self._get_platform_meta(inst)
+        p_type = str(getattr(meta, "name", "") or "").strip()
+        if p_type:
+            return p_type
+        config = getattr(inst, "config", {}) or {}
+        return str(config.get("type", "") or "").strip()
+
+    def _get_platform_client(self, inst):
+        if not inst:
+            return None
+        try:
+            if hasattr(inst, "get_client"):
+                return inst.get_client()
+        except Exception:
+            pass
+        return getattr(inst, "bot", None)
+
+    def _platform_match_text(self, inst) -> str:
+        meta = self._get_platform_meta(inst)
+        config = getattr(inst, "config", {}) or {}
+        chunks = [
+            self._get_platform_id(inst),
+            self._get_platform_type(inst),
+            inst.__class__.__name__,
+            inst.__class__.__module__,
+            str(config.get("id", "")),
+            str(config.get("type", "")),
+        ]
+        if meta:
+            chunks.append(str(getattr(meta, "__dict__", "")))
+            for attr in ("name", "platform", "platform_type", "adapter", "adapter_type"):
+                chunks.append(str(getattr(meta, attr, "")))
+        return " ".join(chunks).lower()
+
+    def _find_platform_instance_by_keywords(self, keywords: List[str]):
+        lowered = [str(k).lower() for k in keywords if k]
+        exact_types = set(lowered)
+        fallback = None
+        for inst in self._iter_platform_instances():
+            p_type = self._get_platform_type(inst).lower()
+            if p_type in exact_types:
+                return inst
+            text = self._platform_match_text(inst)
+            if any(k in text for k in lowered) and fallback is None:
+                fallback = inst
+        return fallback
+
+    def _get_onebot_bot(self, target_umo: str = "", event=None, adapter_id: str = ""):
+        """获取 OneBot/CQHttp 客户端。UMO 第一段是平台 ID，不能当成平台类型判断。"""
+        if event and self._is_onebot_event(event):
+            bot = getattr(event, "bot", None)
+            if bot:
+                return bot
+
+        if adapter_id and self._is_onebot_platform(adapter_id):
+            bot = self._get_bot_instance(adapter_id)
+            if bot:
+                return bot
+
+        target_s = str(target_umo or "").strip()
+        umo_adapter_id, real_id = self._parse_umo(target_s)
+        if umo_adapter_id:
+            for inst in self._iter_platform_instances():
+                if self._get_platform_id(inst) == umo_adapter_id and self._is_onebot_platform(self._get_platform_type(inst)):
+                    bot = self._get_platform_client(inst)
+                    if bot:
+                        return bot
+
+        probe = real_id or target_s
+        if str(probe).isdigit():
+            inst = self._find_platform_instance_by_keywords(["aiocqhttp", "onebot"])
+            bot = self._get_platform_client(inst)
+            if bot:
+                return bot
+
+        return None
+
+    async def _bot_call_action(self, bot, action: str, **params):
+        api = getattr(bot, "api", None)
+        if api and hasattr(api, "call_action"):
+            return await api.call_action(action, **params)
+        if hasattr(bot, "call_action"):
+            return await bot.call_action(action, **params)
+        raise AttributeError(f"Bot 客户端不支持 call_action: {type(bot).__name__}")
+
+    def _is_weixin_platform(self, target_umo: str) -> bool:
+        raw = str(target_umo or "").lower()
+        adapter_id, real_id = self._parse_umo(raw)
+        return (
+            "weixin" in raw
+            or "wechat" in raw
+            or "@im.wechat" in raw
+            or "@chatroom" in raw
+            or bool(adapter_id and "weixin" in adapter_id)
+            or bool(real_id and ("wechat" in real_id or "@chatroom" in real_id))
+        )
 
     # ==================== Bot 实例管理 ====================
 
@@ -227,6 +368,11 @@ class ContextService:
         """
         # 1. 检查开关
         if not self.tts_conf.get("enable_tts", False):
+            return None
+
+        # 个人微信适配器目前不支持发送语音，自动降级为文字。
+        if self._is_weixin_platform(target_umo):
+            logger.info("[DailySharing] 当前平台为个人微信，目前不支持发送语音，跳过语音发送。")
             return None
 
         # 2. 获取插件
@@ -463,7 +609,11 @@ class ContextService:
         seen_ids = set()
         per_page = min(max_count + 20, 100)
         cursor_seq = 0
-        cutoff_time = time.time() - (max(hours, 24) * 3600)
+        try:
+            effective_hours = max(1, min(int(hours), 168))
+        except Exception:
+            effective_hours = 24
+        cutoff_time = time.time() - (effective_hours * 3600)
         max_rounds = 20
         
         action = "get_group_msg_history" if is_group else "get_friend_msg_history"
@@ -484,7 +634,7 @@ class ContextService:
                 if cursor_seq > 0:
                     params["message_seq"] = cursor_seq
 
-                resp = await bot.api.call_action(action, **params)
+                resp = await self._bot_call_action(bot, action, **params)
                 
                 if isinstance(resp, dict):
                     batch_msgs = resp.get("messages", [])
@@ -553,7 +703,7 @@ class ContextService:
         
         return final_msgs
 
-    async def get_history_data(self, target_umo: str, is_group: bool = None) -> Dict[str, Any]:
+    async def get_history_data(self, target_umo: str, is_group: bool = None, event=None) -> Dict[str, Any]:
         """
         获取聊天历史记录
         """
@@ -565,10 +715,24 @@ class ContextService:
             is_group = self._is_group_chat(target_umo)
         adapter_id, real_id = self._parse_umo(target_umo)
         if not real_id:
-            logger.warning(f"[DailySharing] 无法解析目标ID: {target_umo}")
-            return {}
-        bot = self._get_bot_instance(adapter_id)
-        if not bot: return {}
+            target_s = str(target_umo or "").strip()
+            if target_s.isdigit():
+                real_id = target_s
+            else:
+                logger.warning(f"[DailySharing] 无法解析目标ID: {target_umo}")
+                return {}
+
+        is_onebot_target = (
+            self._is_onebot_platform(adapter_id)
+            or self._is_onebot_event(event)
+            or str(real_id or target_umo).strip().isdigit()
+        )
+        if not is_onebot_target:
+            return await self._get_conversation_history_data(target_umo, is_group)
+
+        bot = self._get_onebot_bot(target_umo, event=event, adapter_id=adapter_id)
+        if not bot:
+            return await self._get_conversation_history_data(target_umo, is_group)
         
         enable_deep = self.history_conf.get("enable_deep_history", True)
         history_hours = int(self.history_conf.get("deep_history_hours", 24))
@@ -605,21 +769,20 @@ class ContextService:
                     
                     payloads = {key: int(real_id), "count": req_count}
                     
-                    result = await bot.api.call_action(action, **payloads)
+                    result = await self._bot_call_action(bot, action, **payloads)
                     raw_msgs = result.get("messages", []) if isinstance(result, dict) else (result or [])
 
             except Exception as e:
                 logger.warning(f"[DailySharing] 获取聊天历史记录失败: {e}")
-                return {}
+                return await self._get_conversation_history_data(target_umo, is_group)
 
             bot_qq = ""
-            if hasattr(bot, "api") and hasattr(bot.api, "call_action"):
-                try:
-                    login_info = await bot.api.call_action("get_login_info")
-                    if login_info and isinstance(login_info, dict):
-                        bot_qq = str(login_info.get("user_id", ""))
-                except Exception as e:
-                    logger.debug(f"[DailySharing] 获取 login_info 失败: {e}")
+            try:
+                login_info = await self._bot_call_action(bot, "get_login_info")
+                if login_info and isinstance(login_info, dict):
+                    bot_qq = str(login_info.get("user_id", ""))
+            except Exception as e:
+                logger.debug(f"[DailySharing] 获取 login_info 失败: {e}")
 
             for msg in raw_msgs:
                 sender_data = msg.get("sender", {})
@@ -650,7 +813,122 @@ class ContextService:
 
         except Exception as e:
             logger.warning(f"[DailySharing] API 获取历史出错: {e}")
+            return await self._get_conversation_history_data(target_umo, is_group)
+
+    async def _get_conversation_history_data(self, target_umo: str, is_group: bool = None) -> Dict[str, Any]:
+        """读取 AstrBot 已保存的会话历史，用于个人微信不支持主动拉取历史的平台。"""
+        if is_group is None:
+            is_group = self._is_group_chat(target_umo)
+
+        conv_manager = getattr(self.context, "conversation_manager", None)
+        if not conv_manager:
             return {}
+
+        try:
+            conversation_id = await conv_manager.get_curr_conversation_id(target_umo)
+            if not conversation_id:
+                return {}
+            conversation = await conv_manager.get_conversation(target_umo, conversation_id)
+            if not conversation:
+                return {}
+
+            history_raw = getattr(conversation, "history", "[]")
+            if isinstance(history_raw, list):
+                history = history_raw
+            else:
+                try:
+                    history = json.loads(history_raw or "[]")
+                except Exception:
+                    history = []
+
+            if not isinstance(history, list):
+                return {}
+
+            max_count = int(
+                self.history_conf.get(
+                    "deep_history_max_count" if is_group else "private_history_count",
+                    50 if is_group else 20
+                )
+            )
+            messages = []
+            for item in history[-max_count:]:
+                msg = self._normalize_conversation_history_item(item)
+                if msg:
+                    messages.append(msg)
+
+            if not messages:
+                return {}
+
+            result = {"messages": messages, "is_group": is_group}
+            if is_group:
+                result["group_info"] = self._analyze_group_chat(messages)
+            logger.debug(f"[DailySharing] 已读取 AstrBot 会话历史: {target_umo} ({len(messages)} 条)")
+            return result
+        except Exception as e:
+            logger.warning(f"[DailySharing] 读取 AstrBot 会话历史失败: {e}")
+            return {}
+
+    def _normalize_conversation_history_item(self, item: Any) -> Optional[Dict[str, str]]:
+        """把 AstrBot conversation.history 中的不同结构归一成 prompt 可用消息。"""
+        if not isinstance(item, dict):
+            return None
+
+        role = str(item.get("role") or item.get("type") or "user").lower()
+        if role not in ("user", "assistant"):
+            role = "assistant" if role in ("ai", "bot") else "user"
+
+        content = item.get("content", "")
+        if isinstance(content, list):
+            content = self._extract_text_from_parts(content)
+        elif isinstance(content, dict):
+            content = self._extract_text_from_parts([content])
+        else:
+            content = str(content or "")
+
+        content = content.strip()
+        if not content:
+            return None
+
+        ts = item.get("timestamp") or item.get("time")
+        try:
+            if isinstance(ts, (int, float)):
+                ts_str = datetime.datetime.fromtimestamp(ts).isoformat()
+            elif ts:
+                ts_str = str(ts)
+            else:
+                ts_str = datetime.datetime.now().isoformat()
+        except Exception:
+            ts_str = datetime.datetime.now().isoformat()
+
+        return {
+            "role": role,
+            "content": content,
+            "timestamp": ts_str,
+            "user_id": str(item.get("user_id") or item.get("name") or role)
+        }
+
+    def _extract_text_from_parts(self, parts: List[Any]) -> str:
+        texts = []
+        for part in parts:
+            if isinstance(part, str):
+                texts.append(part)
+            elif isinstance(part, dict):
+                if "text" in part:
+                    texts.append(str(part.get("text") or ""))
+                elif part.get("type") == "text":
+                    data = part.get("data") or {}
+                    texts.append(str(data.get("text") or part.get("content") or ""))
+                elif "content" in part:
+                    nested = part.get("content")
+                    if isinstance(nested, list):
+                        texts.append(self._extract_text_from_parts(nested))
+                    else:
+                        texts.append(str(nested or ""))
+            else:
+                text = getattr(part, "text", None)
+                if text:
+                    texts.append(str(text))
+        return " ".join(t for t in texts if t).strip()
 
     def _analyze_group_chat(self, messages: List[Dict[str, str]]) -> Dict[str, Any]:
         """分析群聊热度"""

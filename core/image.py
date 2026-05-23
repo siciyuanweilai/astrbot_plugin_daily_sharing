@@ -213,6 +213,7 @@ class ImageService:
 
     async def generate_image(self, content: str, sharing_type: SharingType, life_context: str = None) -> Optional[str]:
         """生成图片的入口函数"""
+        self.reset_last_description()
         if not self.img_conf.get("enable_ai_image", False): return None
 
         # 1. 智能判断：是否画人
@@ -263,7 +264,7 @@ class ImageService:
         # 定义质量词
         quality_tags = "8K分辨率, 高质量, 写实, 高分辨率, 细节丰富, 色彩鲜艳, 电影级光影效果"
 
-        # --- 1. 主体与构图 ---
+        # 1. 主体与构图
         if involves_self:
             # === 人物模式 ===
             action = visuals.get("action", "")
@@ -325,7 +326,7 @@ class ImageService:
         # 统一追加镜头描述
         if comp_desc: prompts.append(comp_desc)
 
-        # --- 2. 环境、光影与天气 ---
+        # 2. 环境、光影与天气
         env = visuals.get("environment", "")
         lighting = visuals.get("lighting", "")
         weather_vibe = visuals.get("weather_vibe", "")
@@ -342,7 +343,7 @@ class ImageService:
 
         if weather_vibe: prompts.append(weather_vibe)
 
-        # --- 3. 质量词 ---
+        # 3. 质量词
         prompts.append(quality_tags)
 
         return ", ".join(filter(None, prompts))
@@ -397,6 +398,9 @@ class ImageService:
     def get_last_description(self) -> Optional[str]:
         return self._last_image_description
 
+    def reset_last_description(self):
+        self._last_image_description = None
+
     async def _get_gitee_reference_images(self) -> List[bytes]:
         """从 Gitee 插件中提取参考图"""
         gitee = self._aiimg_plugin
@@ -441,9 +445,10 @@ class ImageService:
                     # 2. 构建 Prompt 前缀
                     final_prompt = (
                         "请根据参考图生成一张新的生活照：\n"
-                        "1) 保持第1张参考图的人脸身份特征，保持五官/气质一致。\n"
-                        f"2) 画面具体描述：{prompt}\n"
-                        "3) 输出高质量生活照片风格，不要拼图，不要水印。"
+                        "1) 以第1张参考图的人脸身份为准（仅人脸身份特征），保持五官/气质一致。\n"
+                        "2) 如果还有其它参考图，请将它们仅作为服装/姿势/构图/场景的参考。\n"
+                        f"3) 画面具体描述：{prompt}\n"
+                        "4) 输出高质量生活照片风格，不要拼图，不要水印。"
                     )
                     
                     # 3. 调用 Edit 接口

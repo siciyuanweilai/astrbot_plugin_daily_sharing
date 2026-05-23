@@ -1,4 +1,5 @@
 import asyncio
+import importlib
 import json
 import random
 import os
@@ -37,12 +38,14 @@ class DailySharingPlugin(Star):
         self.receiver_conf = self.config.get("receiver", {})
         self.extra_shares_conf = self.config.get("extra_shares", {})
         self.context_conf = self.config.get("context_conf", {})
+        self.contact_aliases = self.config.get("contact_aliases", [])
         
         # 分享内容记录条数 
         self.history_limit = 100
         
         # 锁与防抖
         self._lock = asyncio.Lock()
+        self._target_locks = {}
         self._last_share_time = None
         
         # 生命周期标志位 
@@ -50,9 +53,13 @@ class DailySharingPlugin(Star):
         
         # 缓存 Adapter ID 
         self._cached_adapter_id = None 
+        self._cached_qq_adapter_id = None
+        self._cached_weixin_adapter_id = None
 
         # 临时降级第一个模型缓存
         self._temp_fallback_provider = None
+        self._temp_fallback_until = 0.0
+        self._fallback_ttl_seconds = 600
 
         # 任务追踪 (用于生命周期清理)
         self._bg_tasks = set()
@@ -88,9 +95,131 @@ class DailySharingPlugin(Star):
         self.command_handler = CommandHandler(self)
         
         # 启动延迟初始化 Bot 缓存的任务
-        bot_init_task = asyncio.create_task(self._delayed_init_bots())
-        self._bg_tasks.add(bot_init_task)
-        bot_init_task.add_done_callback(self._bg_tasks.discard)
+        self._track_task(self._delayed_init_bots())
+
+    def _normalize_contact_aliases(self) -> dict:
+        raw_aliases = self.contact_aliases
+        aliases = {}
+        if isinstance(raw_aliases, list):
+            for item in raw_aliases:
+                item_s = str(item or "").strip().replace("：", ":", 1)
+                if ":" not in item_s:
+                    continue
+                key_s, value_s = [part.strip() for part in item_s.split(":", 1)]
+                if key_s and value_s:
+                    aliases[key_s] = value_s
+        return aliases
+
+    def _serialize_contact_aliases(self, aliases: dict) -> list:
+        return [f"{key}:{value}" for key, value in aliases.items() if key and value]
+
+    def _target_alias_keys(self, target_uid: str, event: AstrMessageEvent = None) -> list:
+        keys = []
+        target_s = str(target_uid or "").strip()
+        if target_s:
+            keys.append(target_s)
+            _, real_id = self.ctx_service._parse_umo(target_s)
+            if real_id:
+                keys.append(real_id)
+        if event:
+            origin = str(getattr(event, "unified_msg_origin", "") or "").strip()
+            if origin:
+                keys.append(origin)
+                _, origin_real_id = self.ctx_service._parse_umo(origin)
+                if origin_real_id:
+                    keys.append(origin_real_id)
+            try:
+                sender_id = str(event.get_sender_id() or "").strip()
+                if sender_id:
+                    keys.append(sender_id)
+            except Exception:
+                pass
+        return list(dict.fromkeys(k for k in keys if k))
+
+    def get_contact_alias(self, target_uid: str, event: AstrMessageEvent = None) -> str:
+        aliases = self._normalize_contact_aliases()
+        for key in self._target_alias_keys(target_uid, event):
+            alias = str(aliases.get(key, "") or "").strip()
+            if alias:
+                return alias
+        return ""
+
+    def set_contact_alias(self, target_uid: str, alias: str, event: AstrMessageEvent = None) -> str:
+        aliases = self._normalize_contact_aliases()
+        keys = self._target_alias_keys(target_uid, event)
+        save_key = ""
+        for key in keys:
+            if not self.task_manager._is_full_umo(key):
+                save_key = key
+                break
+        if not save_key and keys:
+            _, real_id = self.ctx_service._parse_umo(keys[0])
+            save_key = real_id or keys[0]
+        if not save_key:
+            return ""
+        aliases[save_key] = str(alias or "").strip()
+        serialized_aliases = self._serialize_contact_aliases(aliases)
+        self.config["contact_aliases"] = serialized_aliases
+        self.contact_aliases = serialized_aliases
+        return save_key
+
+    def remove_contact_alias(self, target_uid: str, event: AstrMessageEvent = None) -> list:
+        aliases = self._normalize_contact_aliases()
+        removed = []
+        for key in self._target_alias_keys(target_uid, event):
+            if key in aliases:
+                aliases.pop(key, None)
+                removed.append(key)
+        serialized_aliases = self._serialize_contact_aliases(aliases)
+        self.config["contact_aliases"] = serialized_aliases
+        self.contact_aliases = serialized_aliases
+        return removed
+
+    def _track_task(self, coro):
+        """创建并追踪后台任务，避免插件重载后留下未管理任务。"""
+        task = asyncio.create_task(coro)
+        self._bg_tasks.add(task)
+
+        def _cleanup(done_task):
+            self._bg_tasks.discard(done_task)
+            if self._is_terminated or done_task.cancelled():
+                return
+            try:
+                exc = done_task.exception()
+            except asyncio.CancelledError:
+                return
+            if exc:
+                logger.error(
+                    f"[DailySharing] 后台任务异常: {exc}",
+                    exc_info=(type(exc), exc, exc.__traceback__)
+                )
+
+        task.add_done_callback(_cleanup)
+        return task
+
+    def _get_share_lock(self, target_uid: str = None, *, global_scope: bool = False):
+        """获取分享锁：广播/空间/定时用全局锁，当前会话分享用会话级锁。"""
+        if global_scope or not target_uid:
+            return self._lock
+        key = str(target_uid or "").strip()
+        lock = self._target_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._target_locks[key] = lock
+        return lock
+
+    def _is_share_busy(self, target_uid: str = None, *, global_scope: bool = False) -> bool:
+        if global_scope:
+            return self._lock.locked() or any(lock.locked() for lock in self._target_locks.values())
+        if self._lock.locked():
+            return True
+        return self._get_share_lock(target_uid).locked()
+
+    def _release_idle_share_lock(self, target_uid: str = None):
+        key = str(target_uid or "").strip()
+        lock = self._target_locks.get(key)
+        if lock and not lock.locked():
+            self._target_locks.pop(key, None)
 
     def _inject_qzone_client(self, qzone_plugin):
         """尝试为 QQ空间 插件注入 CQHttp 客户端，解决自动任务时没有 client 的报错"""
@@ -110,10 +239,59 @@ class DailySharingPlugin(Star):
         except Exception as e:
             logger.warning(f"[DailySharing] QQ空间插件注入客户端失败: {e}")        
 
+    def _remember_event_adapter(self, event: AstrMessageEvent):
+        """记录最近见过的平台 ID，供纯 ID 配置选择 QQ/微信适配器。"""
+        try:
+            origin = str(getattr(event, "unified_msg_origin", "") or "").strip()
+            if not origin:
+                return
+
+            adapter_id = origin.split(":", 1)[0].strip()
+            if adapter_id:
+                self._cached_adapter_id = adapter_id
+                if self.ctx_service._is_weixin_platform(origin):
+                    self._cached_weixin_adapter_id = adapter_id
+                else:
+                    try:
+                        sender_id = str(event.get_sender_id() or "").strip()
+                    except Exception:
+                        sender_id = ""
+                    if sender_id.isdigit():
+                        self._cached_qq_adapter_id = adapter_id
+        except Exception as e:
+            logger.debug(f"[DailySharing] 记录事件平台失败: {e}")
+
     async def _safe_publish_qzone(self, qzone_plugin, text: str = "", images: list = None):
         """调用QQ空间发布接口（附带登录过期自动重试机制）"""
         self._inject_qzone_client(qzone_plugin)
         images = images or []
+        qzone_api_mod = None
+        orig_normalize_images = None
+
+        if any(isinstance(img, str) and img.startswith("local_path::") for img in images):
+            try:
+                qzone_api = getattr(getattr(qzone_plugin, "service", None), "qzone", None)
+                if qzone_api:
+                    qzone_api_mod = importlib.import_module(qzone_api.__class__.__module__)
+                    orig_normalize_images = getattr(qzone_api_mod, "normalize_images", None)
+
+                    async def normalize_images_with_local(image_items):
+                        cleaned = []
+                        for item in image_items or []:
+                            if isinstance(item, str) and item.startswith("local_path::"):
+                                real_path = item.split("::", 1)[1]
+                                try:
+                                    cleaned.append(await asyncio.to_thread(Path(real_path).read_bytes))
+                                except Exception as ex:
+                                    logger.warning(f"[DailySharing] 读取QQ空间本地配图失败: {ex}")
+                            elif orig_normalize_images:
+                                cleaned.extend(await orig_normalize_images([item]))
+                        return cleaned
+
+                    qzone_api_mod.normalize_images = normalize_images_with_local
+            except Exception as e:
+                logger.warning(f"[DailySharing] QQ空间本地配图适配失败: {e}")
+
         try:
             return await qzone_plugin.service.publish_post(text=text, images=images)
         except Exception as e:
@@ -135,12 +313,13 @@ class DailySharingPlugin(Star):
                 return await qzone_plugin.service.publish_post(text=text, images=images)
             else:
                 raise e
+        finally:
+            if qzone_api_mod and orig_normalize_images:
+                qzone_api_mod.normalize_images = orig_normalize_images
 
     async def initialize(self):
         """初始化插件"""
-        task = asyncio.create_task(self._delayed_init())
-        self._bg_tasks.add(task)
-        task.add_done_callback(self._bg_tasks.discard)
+        self._track_task(self._delayed_init())
 
     async def terminate(self):
         """插件卸载/重载时的清理逻辑"""
@@ -151,7 +330,7 @@ class DailySharingPlugin(Star):
                 self.scheduler.shutdown(wait=False)
             
             # 2. 取消所有后台任务
-            for task in self._bg_tasks:
+            for task in list(self._bg_tasks):
                 if not task.done():
                     task.cancel()
             
@@ -177,13 +356,14 @@ class DailySharingPlugin(Star):
         except Exception:
             pass
 
-        has_targets = False
-        if self.receiver_conf:
-            if self.receiver_conf.get("groups") or self.receiver_conf.get("users"):
-                has_targets = True
-        
-        if not has_targets:
-            logger.warning("[DailySharing] 未配置接收对象 (receiver)")
+        if self.config.get("enable_auto_sharing", False):
+            has_targets = False
+            if self.receiver_conf:
+                if self.receiver_conf.get("groups") or self.receiver_conf.get("users"):
+                    has_targets = True
+            
+            if not has_targets:
+                logger.warning("[DailySharing] 未配置接收对象 (receiver)")
 
         # 通过 TaskManager 挂载所有定时任务
         self.task_manager.setup_tasks()
@@ -219,6 +399,94 @@ class DailySharingPlugin(Star):
         except Exception as e:
             logger.error(f"[DailySharing] 保存配置失败: {e}")
 
+    def _is_admin_event(self, event: AstrMessageEvent) -> bool:
+        """尽量兼容 AstrBot 管理员配置，供插件内部权限判断使用。"""
+        try:
+            candidates = set()
+            origin = str(getattr(event, "unified_msg_origin", "") or "").strip()
+            if origin:
+                candidates.add(origin)
+                _, real_id = self.ctx_service._parse_umo(origin)
+                if real_id:
+                    candidates.add(str(real_id))
+
+            try:
+                sender_id = str(event.get_sender_id() or "").strip()
+                if sender_id:
+                    candidates.add(sender_id)
+            except Exception:
+                pass
+
+            cfg = self.context.get_config() or {}
+            admins = cfg.get("admins_id", []) or cfg.get("admins", []) or []
+            return any(str(admin).strip() in candidates for admin in admins)
+        except Exception:
+            return False
+
+    def _target_entry_matches(self, entry, origin: str, real_id: str, extra_candidates=None) -> bool:
+        s = str(entry).strip().replace("：", ":")
+        if not s:
+            return False
+
+        candidates = {str(c).strip() for c in [origin, real_id] + list(extra_candidates or []) if str(c or "").strip()}
+        if s in candidates:
+            return True
+
+        parsed = self.task_manager._parse_targets_config([s])
+        for target_id in parsed.keys():
+            if target_id in candidates:
+                return True
+            _, target_real_id = self.ctx_service._parse_umo(target_id)
+            if target_real_id and target_real_id in candidates:
+                return True
+        return False
+
+    def _is_configured_receiver_event(self, event: AstrMessageEvent) -> bool:
+        """当前会话在接收对象配置中时，允许使用手动分享类命令。"""
+        try:
+            origin = str(getattr(event, "unified_msg_origin", "") or "").strip()
+            if not origin:
+                return False
+
+            is_group = self.ctx_service._is_group_chat(origin)
+            if self.ctx_service._is_weixin_platform(origin):
+                is_group = False
+            _, real_id = self.ctx_service._parse_umo(origin)
+            try:
+                sender_id = str(event.get_sender_id() or "").strip()
+            except Exception:
+                sender_id = ""
+            receiver_map = self.task_manager._parse_targets_config(
+                self.receiver_conf.get("groups" if is_group else "users", [])
+            )
+            if (
+                origin in receiver_map
+                or (real_id and real_id in receiver_map)
+                or (sender_id and sender_id in receiver_map)
+            ):
+                return True
+            for entry in receiver_map.keys():
+                if self._target_entry_matches(entry, origin, real_id, [sender_id]):
+                    return True
+
+            extra_key = "briefing_groups" if is_group else "briefing_users"
+            for entry in self.extra_shares_conf.get(extra_key, []):
+                if self._target_entry_matches(entry, origin, real_id, [sender_id]):
+                    return True
+
+            return False
+        except Exception as e:
+            logger.warning(f"[DailySharing] 接收对象权限判断失败: {e}")
+            return False
+
+    def _plain_permission_denied(self, event: AstrMessageEvent, reason: str = ""):
+        suffix = f"\n{reason}" if reason else ""
+        return event.plain_result(
+            "权限不足：当前会话不在接收对象配置中。"
+            "请先把当前会话加入群聊、私聊或早报接收目标。"
+            f"{suffix}"
+        )
+
     async def _call_llm_wrapper(self, prompt: str, system_prompt: str = None, timeout: int = 60, max_retries: int = 2, tools: list = None) -> Optional[str]:
         """LLM 调用包装器（支持失败重试与自动降级）"""
         if self._is_terminated: return None
@@ -237,12 +505,20 @@ class DailySharingPlugin(Star):
                 pass
             return ""
 
-        user_provider_id = self.llm_conf.get("llm_provider_id", "")
+        configured_provider_id = self.llm_conf.get("llm_provider_id", "")
+        user_provider_id = configured_provider_id
 
-        # 如果存在临时降级缓存，说明指定的模型已经坏了，直接跳过它        
+        # 临时降级只保留一段时间，避免指定模型恢复后仍长期被跳过。
+        now = asyncio.get_running_loop().time()
         if self._temp_fallback_provider:
-            user_provider_id = self._temp_fallback_provider
-            
+            if now < self._temp_fallback_until:
+                user_provider_id = self._temp_fallback_provider
+            else:
+                logger.info("[DailySharing] LLM 临时降级已过期，恢复尝试指定模型。")
+                self._temp_fallback_provider = None
+                self._temp_fallback_until = 0.0
+                user_provider_id = configured_provider_id
+
         current_provider_id = user_provider_id if user_provider_id else _get_system_default_provider()
 
         config_timeout = self.llm_conf.get("llm_timeout", 60)
@@ -253,12 +529,13 @@ class DailySharingPlugin(Star):
             
             # 降级逻辑 1
             is_last_attempt = (attempt == max_retries)
-            if is_last_attempt and attempt > 0 and user_provider_id and current_provider_id == user_provider_id:
+            if is_last_attempt and attempt > 0 and configured_provider_id and current_provider_id == configured_provider_id:
                 default_pid = _get_system_default_provider()
                 if default_pid and default_pid != current_provider_id:
                     logger.info(f"[DailySharing] 指定 LLM 已达到重试次数，降级使用默认的第一个模型({default_pid})...")
                     current_provider_id = default_pid
                     self._temp_fallback_provider = default_pid 
+                    self._temp_fallback_until = asyncio.get_running_loop().time() + self._fallback_ttl_seconds
 
             try:
                 kwargs = {"prompt": prompt}
@@ -293,12 +570,13 @@ class DailySharingPlugin(Star):
                 if "401" in err_str:
                     logger.error(f"[DailySharing] LLM 失败。请检查 API Key。")
                     # 降级逻辑 2                    
-                    if attempt < max_retries and user_provider_id and current_provider_id == user_provider_id:
+                    if attempt < max_retries and configured_provider_id and current_provider_id == configured_provider_id:
                         default_pid = _get_system_default_provider()
                         if default_pid and default_pid != current_provider_id:
                             logger.info(f"[DailySharing] 遇到 401 错误，降级使用默认的第一个模型({default_pid})...")
                             current_provider_id = default_pid
                             self._temp_fallback_provider = default_pid 
+                            self._temp_fallback_until = asyncio.get_running_loop().time() + self._fallback_ttl_seconds
                             await asyncio.sleep(2)
                             continue
                         else:
@@ -342,40 +620,41 @@ class DailySharingPlugin(Star):
         """
         if self._is_terminated: return ""
 
+        self._remember_event_adapter(event)
+        is_admin = self._is_admin_event(event)
+        is_configured_receiver = self._is_configured_receiver_event(event)
+        if to_qzone and not is_admin:
+            await event.send(event.plain_result("分享到QQ空间仅管理员可用。"))
+            return None
+        if not (is_admin or is_configured_receiver):
+            await event.send(self._plain_permission_denied(event))
+            return None
+
         # 1. 防抖检查
-        if self._lock.locked():
+        share_target = str(getattr(event, "unified_msg_origin", "") or "").strip()
+        if self._is_share_busy(share_target, global_scope=to_qzone):
             await event.send(event.plain_result("正如火如荼地准备中，请稍后..."))
             return None
 
         # 2. 启动后台异步任务
-        task = asyncio.create_task(
+        task = self._track_task(
             self.task_manager.async_daily_share_task(
                 event, share_type, source, get_image, need_image, need_video, need_voice, to_qzone
             )
         )
-        self._bg_tasks.add(task)
-        task.add_done_callback(self._bg_tasks.discard)
 
         # 3. 直接返回空字符串，让 LLM 闭嘴，不再生成回复
         return None
 
     @filter.command("分享")
-    @filter.permission_type(filter.PermissionType.ADMIN)
     async def handle_share_main(self, event: AstrMessageEvent):
         """
         每日分享统一命令入口
         """
         msg = event.message_str.strip()
         parts = msg.split()
-        
-        # 指令触发时缓存 Adapter ID
-        try:
-            if event.unified_msg_origin:
-                adapter_id = event.unified_msg_origin.split(":")[0]
-                if adapter_id:
-                    self._cached_adapter_id = adapter_id
-        except Exception:
-            pass
+
+        self._remember_event_adapter(event)
         
         if len(parts) == 1:
             yield event.plain_result("指令格式错误，请指定参数。\n示例：/分享 新闻\n可加后缀：广播、空间")
@@ -386,9 +665,21 @@ class DailySharingPlugin(Star):
         # 判断后缀模式
         is_broadcast = "广播" in parts
         is_qzone_target = "空间" in parts  # 判断是否指向QQ空间
+        is_admin = self._is_admin_event(event)
+        is_configured_receiver = self._is_configured_receiver_event(event)
+        admin_only_args = {"开启", "关闭", "早报空间", "添加当前", "昵称"}
+
+        if arg in admin_only_args or is_broadcast or is_qzone_target:
+            if not is_admin:
+                yield event.plain_result("权限不足：该操作会修改全局配置、广播或发布QQ空间，仅管理员可用。")
+                return
+        elif not (is_admin or is_configured_receiver):
+            yield self._plain_permission_denied(event)
+            return
         
         current_uid = event.unified_msg_origin
         specific_target = None if is_broadcast else current_uid
+        share_global_scope = is_broadcast or is_qzone_target
 
         # =============== 手动触发 60s 新闻 ===============
         if arg == "60s":
@@ -413,7 +704,15 @@ class DailySharingPlugin(Star):
 
             target_desc = "配置的所有群聊和私聊" if is_broadcast else "当前会话"
             yield event.plain_result(f"正在向{target_desc}分享60s新闻...")
-            targets = [specific_target] if specific_target else self.task_manager.get_broadcast_targets()
+            if not is_broadcast:
+                local_path = await self.task_manager._download_image_to_local(url, "manual_60s.png")
+                if local_path:
+                    yield event.image_result(local_path)
+                else:
+                    yield event.plain_result("60s新闻图片下载失败。")
+                return
+
+            targets = self.task_manager.get_broadcast_targets()
             for target in targets:
                 await self.context.send_message(target, MessageChain().url_image(url))
                 await asyncio.sleep(1)
@@ -448,7 +747,15 @@ class DailySharingPlugin(Star):
 
             target_desc = "配置的所有群聊和私聊" if is_broadcast else "当前会话"
             yield event.plain_result(f"正在向{target_desc}分享AI资讯...")
-            targets = [specific_target] if specific_target else self.task_manager.get_broadcast_targets()
+            if not is_broadcast:
+                local_path = await self.task_manager._download_image_to_local(url, "manual_ai_news.png")
+                if local_path:
+                    yield event.image_result(local_path)
+                else:
+                    yield event.plain_result("AI资讯快报图片下载失败。")
+                return
+
+            targets = self.task_manager.get_broadcast_targets()
             for target in targets:
                 await self.context.send_message(target, MessageChain().url_image(url))
                 await asyncio.sleep(1)
@@ -457,6 +764,12 @@ class DailySharingPlugin(Star):
         # =============== 配置命令 ===============
         if arg == "早报空间":
             async for res in self.command_handler.cmd_briefing_qzone_sync(event, parts): yield res
+            return
+        elif arg == "昵称":
+            async for res in self.command_handler.cmd_contact_alias(event, parts): yield res
+            return
+        elif arg == "添加当前":
+            async for res in self.command_handler.cmd_add_current(event, parts): yield res
             return
         elif arg == "状态":
             async for res in self.command_handler.cmd_status(event): yield res
@@ -482,13 +795,21 @@ class DailySharingPlugin(Star):
 
         # =============== 自动或具体类型生成 ===============
         if arg in ["自动", "auto"]:
+            if self._is_share_busy(specific_target, global_scope=share_global_scope):
+                yield event.plain_result("正如火如荼地准备中，请稍后...")
+                return
+            share_lock = self._get_share_lock(specific_target, global_scope=share_global_scope)
             if is_qzone_target:
                 yield event.plain_result("正在向QQ空间生成并分享内容(自动类型)...")
-                await self.task_manager.execute_qzone_share(None, event=event)
+                async with share_lock:
+                    await self.task_manager.execute_qzone_share(None, event=event)
             else:
                 target_desc = "配置的所有群聊和私聊" if is_broadcast else "当前会话"
                 yield event.plain_result(f"正在向{target_desc}生成并分享内容(自动类型)...")
-                await self.task_manager.execute_share(None, specific_target=specific_target)
+                async with share_lock:
+                    await self.task_manager.execute_share(None, specific_target=specific_target, event=event)
+            if not share_global_scope:
+                self._release_idle_share_lock(specific_target)
             return
 
         else:
@@ -536,25 +857,47 @@ class DailySharingPlugin(Star):
                         return
 
                     yield event.plain_result(f"正在获取 [{src_name}] 图片...")
-                    yield event.image_result(img_url)
+                    local_path = await self.task_manager._download_image_to_local(img_url, "manual_hot_news.png")
+                    if local_path:
+                        yield event.image_result(local_path)
+                    else:
+                        yield event.plain_result(f"获取 [{src_name}] 图片下载失败。")
                     return
                     
                 src_info = f" ({NEWS_SOURCE_MAP[news_src]['name']})" if news_src else ""
                 
+                if self._is_share_busy(specific_target, global_scope=share_global_scope):
+                    yield event.plain_result("正如火如荼地准备中，请稍后...")
+                    return
+                share_lock = self._get_share_lock(specific_target, global_scope=share_global_scope)
+
                 if is_qzone_target:
                     yield event.plain_result(f"正在向QQ空间生成并分享{type_cn}{src_info} ...")
-                    await self.task_manager.execute_qzone_share(force_type, news_source=news_src, event=event)
+                    async with share_lock:
+                        await self.task_manager.execute_qzone_share(force_type, news_source=news_src, event=event)
                 else:
                     target_desc = "配置的所有群聊和私聊" if is_broadcast else "当前会话"
                     yield event.plain_result(f"正在向{target_desc}生成并分享{type_cn}{src_info} ...")
-                    await self.task_manager.execute_share(force_type, news_source=news_src, specific_target=specific_target)
+                    async with share_lock:
+                        await self.task_manager.execute_share(force_type, news_source=news_src, specific_target=specific_target, event=event)
+                if not share_global_scope:
+                    self._release_idle_share_lock(specific_target)
                 return
                 
+            if self._is_share_busy(specific_target, global_scope=share_global_scope):
+                yield event.plain_result("正如火如荼地准备中，请稍后...")
+                return
+            share_lock = self._get_share_lock(specific_target, global_scope=share_global_scope)
+
             if is_qzone_target:
                 yield event.plain_result(f"正在向QQ空间生成并分享{type_cn} ...")
-                await self.task_manager.execute_qzone_share(force_type, event=event)
+                async with share_lock:
+                    await self.task_manager.execute_qzone_share(force_type, event=event)
             else:
                 target_desc = "配置的所有群聊和私聊" if is_broadcast else "当前会话"
                 yield event.plain_result(f"正在向{target_desc}生成并分享{type_cn} ...")
-                await self.task_manager.execute_share(force_type, specific_target=specific_target)
+                async with share_lock:
+                    await self.task_manager.execute_share(force_type, specific_target=specific_target, event=event)
+            if not share_global_scope:
+                self._release_idle_share_lock(specific_target)
                 
