@@ -188,7 +188,7 @@ default:FriendMessage:o2cq508wSbYFvbrV5tnC29LoU3NU@im.wechat
    - 接收对象只填写纯 ID，不填写完整 UMO。完整 UMO 形如 `BotID:FriendMessage:SessionID`，会被视为无效配置。
    - 个人微信 `weixin_oc` 官方适配器仅支持个人私聊，不支持群聊；私聊配置可填写 `/sid` 输出的纯 ID，例如个人 QQ `123456`，个人微信 `o2...@im.wechat`。
    - 微信定时发送走 AstrBot 原生 `send_by_session`，不依赖插件事件缓存；但 `weixin_oc` 需要 AstrBot 已保存该 openid 的 `context_token`。如果缺失，请让该微信私聊先给机器人发任意消息刷新。
-   - 联系人昵称映射是可选补充：QQ/OneBot 私聊会优先通过接口获取备注或昵称；个人微信 `weixin_oc` 无法从平台接口稳定获取真实昵称，但私聊称呼会优先读取 AstrBot 人格设定中的用户称呼。`/分享 昵称 未来酱` 主要用于把生活日程/记忆里的“未来酱”等用户称呼识别为当前私聊对象；也可在配置 `contact_aliases` 中手动维护 `UID或Session ID:昵称`。
+   - 联系人昵称映射是可选补充：QQ/OneBot 私聊会优先通过接口获取备注或昵称；个人微信 `weixin_oc` 无法从平台接口稳定获取真实昵称，但私聊称呼会优先读取 AstrBot 人格设定中的用户称呼。`/分享 昵称 用户称呼` 主要用于把生活日程/记忆里的用户称呼识别为当前私聊对象；也可在配置 `contact_aliases` 中手动维护 `UID或Session ID:用户称呼`。
 2. **📚 内容库自定义**
    - 自定义知识和推荐的话题池。格式为 `大类: 标签1, 标签2`。（例如：`游戏: 独立神作, 治愈解谜`）。
 3. **📅 早报设置**
@@ -234,11 +234,11 @@ default:FriendMessage:o2cq508wSbYFvbrV5tnC29LoU3NU@im.wechat
 
 ### Q5：为什么个人微信图片小于 10240KB 也可能上传超时？
 
-`10240KB` 是插件压缩目标，不是微信 CDN 上传一定成功的保证。`weixin_oc` 上传还受网络、CDN、适配器超时影响。遇到 `upload_to_cdn TimeoutError` 时，可优先调高 `weixin_api_timeout_seconds`，或降低 `weixin_image_max_size_kb`。
+`10240KB` 是插件压缩目标，不是微信 CDN 上传一定成功的保证。`weixin_oc` 上传还受网络、CDN、适配器超时影响。遇到 `upload_to_cdn TimeoutError` 时，可优先调高 `weixin_api_timeout_seconds`（个人微信发送超时），或降低 `weixin_image_max_size_kb`（个人微信图片目标大小）。
 
 ### Q6：QQ 能识别昵称，个人微信为什么不一定能？
 
-QQ/OneBot 通常能通过接口读取备注或昵称；`weixin_oc` 个人微信接口不稳定提供真实昵称。个人微信私聊称呼会优先使用 AstrBot 人格设定里的用户称呼；`/分享 昵称 名称` 主要用于把日程、记忆里的用户称呼映射到当前私聊对象。
+QQ/OneBot 通常能通过接口读取备注或昵称；`weixin_oc` 个人微信接口不稳定提供真实昵称。个人微信私聊称呼会优先使用 AstrBot 人格设定里的用户称呼；`/分享 昵称 称呼` 主要用于把日程、记忆里的用户称呼映射到当前私聊对象。
 
 ### Q7：为什么 `/分享 添加当前` 提示权限不足？
 
