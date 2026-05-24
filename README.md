@@ -102,6 +102,8 @@
 | 个人微信 (`weixin_oc`) | 仅个人私聊 | 填微信 openid / `Session ID` | 平台接口不稳定提供真实昵称；优先使用 AstrBot 人格设定中的用户称呼 | 不支持群聊；主动发送需要 AstrBot 已保存该 openid 的 `context_token` |
 | QQ空间 | 说说发布 | 不填普通聊天接收对象 | 使用 `astrbot_plugin_qzone` 发布 | 通过“空间”指令或 QQ空间专属配置触发 |
 
+个人微信专属逻辑只对平台名或适配器元信息精确为 `weixin_oc` 的适配器启用，不会把公众号、企业微信等其它微信系适配器自动当作个人微信处理。
+
 ---
 
 ## 🎯 目标 ID 与配置示例
@@ -187,6 +189,7 @@ default:FriendMessage:o2cq508wSbYFvbrV5tnC29LoU3NU@im.wechat
    - 接收对象 ID 通过 `/sid` 获取：在目标私聊或群聊发送 `/sid`，私聊复制 `UID`/`Session ID`，群聊复制 `Session ID`。
    - 接收对象只填写纯 ID，不填写完整 UMO。完整 UMO 形如 `default:FriendMessage:SessionID`，会被视为无效配置。
    - 个人微信 `weixin_oc` 官方适配器仅支持个人私聊，不支持群聊；私聊配置可填写 `/sid` 输出的纯 ID，例如个人 QQ `123456`，个人微信 `o2...@im.wechat`。
+   - 个人微信专属逻辑只识别精确的 `weixin_oc` 适配器；其它微信系平台不会自动套用个人微信发送和图片优化规则。
    - 微信定时发送走 AstrBot 原生 `send_by_session`，不依赖插件事件缓存；但 `weixin_oc` 需要 AstrBot 已保存该 openid 的 `context_token`。如果缺失，请让该微信私聊先给机器人发任意消息刷新。
    - 自定义用户称呼映射是可选补充：QQ/OneBot 私聊会优先通过接口获取用户称呼备注或用户昵称；个人微信 `weixin_oc` 无法从平台接口稳定获取用户昵称，但私聊称呼会优先读取 AstrBot 人格设定中的用户称呼。`/分享 昵称 用户称呼` 主要用于把生活日程/记忆里的用户称呼识别为当前私聊对象；也可在配置 `contact_aliases` 中手动维护 `UID或Session ID:用户称呼`。
 2. **📚 内容库自定义**

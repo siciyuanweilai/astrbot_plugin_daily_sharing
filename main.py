@@ -249,7 +249,10 @@ class DailySharingPlugin(Star):
             adapter_id = origin.split(":", 1)[0].strip()
             if adapter_id:
                 self._cached_adapter_id = adapter_id
-                if self.ctx_service._is_weixin_platform(origin):
+                if (
+                    self.ctx_service._is_weixin_oc_event(event)
+                    and self.ctx_service._is_weixin_platform(origin)
+                ):
                     self._cached_weixin_adapter_id = adapter_id
                 else:
                     try:
@@ -449,7 +452,10 @@ class DailySharingPlugin(Star):
                 return False
 
             is_group = self.ctx_service._is_group_chat(origin)
-            if self.ctx_service._is_weixin_platform(origin):
+            if (
+                self.ctx_service._is_weixin_oc_event(event)
+                and self.ctx_service._is_weixin_platform(origin)
+            ):
                 is_group = False
             _, real_id = self.ctx_service._parse_umo(origin)
             try:

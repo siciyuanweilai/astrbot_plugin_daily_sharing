@@ -194,6 +194,31 @@ class TaskManager:
                 fallback = inst
         return fallback
 
+    def _is_weixin_oc_instance(self, inst) -> bool:
+        names = [self._get_platform_type(inst), self._get_platform_id(inst)]
+        try:
+            meta = self._get_platform_meta(inst)
+            if meta:
+                names.extend(
+                    [
+                        str(getattr(meta, "name", "") or ""),
+                        str(getattr(meta, "id", "") or ""),
+                    ]
+                )
+        except Exception:
+            pass
+        return any(str(name).strip().lower() == "weixin_oc" for name in names)
+
+    def _find_weixin_oc_platform_instance(self):
+        for inst in self._iter_platform_instances():
+            if self._is_weixin_oc_instance(inst):
+                return inst
+        return None
+
+    def _find_weixin_oc_adapter_id(self) -> str:
+        inst = self._find_weixin_oc_platform_instance()
+        return self._get_platform_id(inst) if inst else ""
+
     def _find_adapter_id_by_keywords(self, keywords):
         """从平台实例信息里尽量按适配器类型找 bot id。"""
         try:
@@ -210,7 +235,7 @@ class TaskManager:
         if self.ctx_service._is_weixin_platform(target_s):
             return (
                 getattr(self.plugin, "_cached_weixin_adapter_id", None)
-                or self._find_adapter_id_by_keywords(["weixin", "wechat", "openclaw"])
+                or self._find_weixin_oc_adapter_id()
                 or default_adapter_id
             )
 
@@ -235,7 +260,7 @@ class TaskManager:
         probe = real_id or target_s
 
         if self.ctx_service._is_weixin_platform(target_s):
-            return self._find_platform_instance_by_keywords(["weixin_oc", "openclaw"])
+            return self._find_weixin_oc_platform_instance()
 
         if probe.isdigit():
             return self._find_platform_instance_by_keywords(["aiocqhttp", "onebot"])

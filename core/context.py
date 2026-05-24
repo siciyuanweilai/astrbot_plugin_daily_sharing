@@ -1,11 +1,11 @@
 import datetime
 import time
-import re 
-import json 
+import re
+import json
 import asyncio
 from typing import Optional, Dict, Any, List
 from astrbot.api import logger
-from ..config import SharingType, TimePeriod 
+from ..config import SharingType, TimePeriod
 
 try:
     from astrbot.core.agent.message import (
@@ -188,6 +188,39 @@ class ContextService:
                 fallback = inst
         return fallback
 
+    def _is_weixin_oc_instance(self, inst) -> bool:
+        names = [self._get_platform_type(inst), self._get_platform_id(inst)]
+        try:
+            meta = self._get_platform_meta(inst)
+            if meta:
+                names.extend(
+                    [
+                        str(getattr(meta, "name", "") or ""),
+                        str(getattr(meta, "id", "") or ""),
+                    ]
+                )
+        except Exception:
+            pass
+        return any(str(name).strip().lower() == "weixin_oc" for name in names)
+
+    def _is_weixin_oc_event(self, event) -> bool:
+        if not event:
+            return False
+        names = []
+        try:
+            names.append(str(event.get_platform_name() or ""))
+        except Exception:
+            pass
+        platform_inst = getattr(event, "platform", None)
+        if platform_inst:
+            names.extend(
+                [
+                    self._get_platform_type(platform_inst),
+                    self._get_platform_id(platform_inst),
+                ]
+            )
+        return any(str(name).strip().lower() == "weixin_oc" for name in names)
+
     def _get_onebot_bot(self, target_umo: str = "", event=None, adapter_id: str = ""):
         """获取 OneBot/CQHttp 客户端。UMO 第一段是平台 ID，不能当成平台类型判断。"""
         if event and self._is_onebot_event(event):
@@ -229,13 +262,11 @@ class ContextService:
     def _is_weixin_platform(self, target_umo: str) -> bool:
         raw = str(target_umo or "").lower()
         adapter_id, real_id = self._parse_umo(raw)
+        session_id = real_id or raw
         return (
-            "weixin" in raw
-            or "wechat" in raw
-            or "@im.wechat" in raw
-            or "@chatroom" in raw
-            or bool(adapter_id and "weixin" in adapter_id)
-            or bool(real_id and ("wechat" in real_id or "@chatroom" in real_id))
+            session_id.endswith("@im.wechat")
+            or session_id.endswith("@chatroom")
+            or bool(adapter_id and adapter_id.strip().lower() == "weixin_oc")
         )
 
     # ==================== Bot 实例管理 ====================
