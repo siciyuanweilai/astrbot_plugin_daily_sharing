@@ -517,10 +517,10 @@
         "hint": "开启后，发送到 weixin_oc 个人微信前会自动生成高质量图片副本：优先保留最大分辨率和高画质，仅在文件过大时降低 JPEG 质量，降低大图上传微信 CDN 超时概率。QQ、QQ空间不受影响。"
       },
       "weixin_image_max_side": {
-        "description": "个人微信图片最长边",
+        "description": "个人微信图片最大分辨率",
         "type": "int",
         "default": 4096,
-        "hint": "仅对 weixin_oc 生效。默认保留 4K 最长边；图片超过该值时才缩小。想完全不缩分辨率可设为更大值。"
+        "hint": "仅对 weixin_oc 生效。默认保留 4K 最大分辨率；图片超过该值时才缩小。想完全不缩分辨率可设为更大值。"
       },
       "weixin_image_max_size_mb": {
         "description": "个人微信图片目标大小(KB)",
