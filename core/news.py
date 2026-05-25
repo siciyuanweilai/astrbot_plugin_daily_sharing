@@ -1,6 +1,8 @@
 import random
 import aiohttp
 import asyncio
+import html
+import re
 from typing import Optional, List, Dict, Any 
 from astrbot.api import logger
 from ..config import NEWS_SOURCE_MAP, NEWS_TIME_PREFERENCES, TimePeriod
@@ -105,7 +107,7 @@ class NewsService:
         logger.info(f"[新闻] {period_label}智能选择: {NEWS_SOURCE_MAP[selected]['name']}")
         return selected
 
-    async def get_hot_news(self, specific_source: str = None) -> Optional[tuple]:
+    async def get_hot_news(self, specific_source: str = None, limit: int = None, allow_fallback: bool = True) -> Optional[tuple]:
         """获取热搜 (包含降级重试逻辑)"""
         # 检查开关和Key
         if not self.conf.get("enable_news_api", True): return None
@@ -121,9 +123,13 @@ class NewsService:
         else:
              pri_source = self.select_news_source()
 
-        res = await self._fetch_news(pri_source, key)
+        res = await self._fetch_news(pri_source, key, limit=limit)
         if res: 
             return (res, pri_source)
+
+        if not allow_fallback:
+            logger.warning(f"[新闻] 指定新闻源 {pri_source} 获取失败，已按要求跳过备用源")
+            return None
 
         logger.warning(f"[新闻] 主要源 {pri_source} 失败，尝试备用源...")
         
@@ -147,7 +153,7 @@ class NewsService:
         back_source = random.choice(fallback_pool)
         logger.info(f"[新闻] 尝试备用源: {NEWS_SOURCE_MAP[back_source]['name']}")
         
-        res = await self._fetch_news(back_source, key)
+        res = await self._fetch_news(back_source, key, limit=limit)
         if res:
             logger.info(f"[新闻] 备用源成功")
             return (res, back_source)
@@ -169,7 +175,7 @@ class NewsService:
             final_url += f"&apikey={key}"
             
         return final_url, NEWS_SOURCE_MAP[source]['name']
-    async def _fetch_news(self, source: str, key: str) -> Optional[List[Dict]]:
+    async def _fetch_news(self, source: str, key: str, limit: int = None) -> Optional[List[Dict]]:
         """执行 HTTP 请求 """
         if source not in NEWS_SOURCE_MAP: return None
         
@@ -193,7 +199,7 @@ class NewsService:
                         return None
                     
                     data = await resp.json(content_type=None)
-                    parsed = self._parse_response(data)
+                    parsed = self._parse_response(data, limit=limit)
                     
                     if parsed:
                         logger.info(f"[新闻] 成功获取 {len(parsed)} 条{source_name}")
@@ -213,7 +219,7 @@ class NewsService:
             logger.error(f"[新闻] 解析新闻失败: {e}", exc_info=True)
             return None
 
-    def _parse_response(self, data: Any) -> Optional[List[Dict]]:
+    def _parse_response(self, data: Any, limit: int = None) -> Optional[List[Dict]]:
         """
         解析响应数据
         支持多层级 JSON 和多种字段名 (hot/heat/hotValue/hot_value)
@@ -259,9 +265,24 @@ class NewsService:
         
         if not items: return None
 
-        limit = self.conf.get("news_items_count", 5)
+        if limit is None:
+            limit = self.conf.get("news_items_count", 5)
+        try:
+            limit = max(1, int(limit))
+        except Exception:
+            limit = 5
 
-        # 3. 提取字段 (title, hot, url)
+        def clean_text(value: Any, max_len: int = 800) -> str:
+            if value is None:
+                return ""
+            text = html.unescape(str(value))
+            text = re.sub(r"<[^>]+>", " ", text)
+            text = re.sub(r"\s+", " ", text).strip()
+            if max_len > 0 and len(text) > max_len:
+                return text[:max_len].rstrip() + "..."
+            return text
+
+        # 3. 提取字段 (title, hot, url, description)
         res = []
         for i in items: 
             # 如果列表非常长，仅在收集满时停止
@@ -274,25 +295,56 @@ class NewsService:
             if not title: continue
             
             # 热度提取 (兼容多种字段名)
-            # 增加了 'hot_value' 适配头条
             hot = (
                 i.get("hot") or 
                 i.get("hotValue") or 
                 i.get("hot_value") or 
+                i.get("hot_value_desc") or
                 i.get("heat") or 
                 i.get("hotScore") or 
                 i.get("like_count") or 
+                i.get("score_desc") or
+                i.get("score") or
                 ""
             )
             
             # URL 提取 (兼容多种字段名)
-            url_link = i.get("url") or i.get("link") or i.get("mobileUrl") or ""
+            url_link = (
+                i.get("url") or
+                i.get("link") or
+                i.get("mobileUrl") or
+                i.get("mobile_url") or
+                i.get("mobile_link") or
+                ""
+            )
+
+            description = (
+                i.get("description") or
+                i.get("desc") or
+                i.get("summary") or
+                i.get("abstract") or
+                i.get("digest") or
+                i.get("brief") or
+                i.get("intro") or
+                i.get("detail") or
+                i.get("content") or
+                ""
+            )
             
-            res.append({
+            parsed_item = {
                 "title": str(title).strip(),
                 "hot": str(hot).strip() if hot else "",
                 "url": str(url_link).strip() if url_link else ""
-            })
+            }
+            clean_description = clean_text(description)
+            if clean_description and clean_description != parsed_item["title"]:
+                parsed_item["description"] = clean_description
+
+            for extra_key in ("author", "cover", "created", "created_at", "source"):
+                if i.get(extra_key):
+                    parsed_item[extra_key] = i.get(extra_key)
+
+            res.append(parsed_item)
             
         return res if res else None
 

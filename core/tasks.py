@@ -92,6 +92,234 @@ class TaskManager:
             logger.warning(f"[DailySharing] 图片下载异常: {e}")
         return None
 
+    def get_news_snapshot_limit(self) -> int:
+        """缓存新闻长图对应 JSON 时尽量保留完整列表。"""
+        return 50
+
+    def _news_snapshot_key(self, target_uid: str) -> str:
+        target = str(target_uid or "").strip() or "global"
+        return f"news_snapshot:{target}"
+
+    def _clean_snapshot_text(self, value, max_len: int = 300) -> str:
+        text = re.sub(r"\s+", " ", str(value or "")).strip()
+        if max_len > 0 and len(text) > max_len:
+            return text[:max_len].rstrip() + "..."
+        return text
+
+    def _normalize_news_snapshot_items(self, items) -> list:
+        normalized = []
+        for item in list(items or [])[: self.get_news_snapshot_limit()]:
+            if not isinstance(item, dict):
+                continue
+
+            title = self._clean_snapshot_text(item.get("title") or item.get("name"), 180)
+            if not title:
+                continue
+
+            entry = {
+                "title": title,
+                "url": self._clean_snapshot_text(
+                    item.get("url")
+                    or item.get("link")
+                    or item.get("mobile_link")
+                    or item.get("mobile_url")
+                    or item.get("mobileUrl"),
+                    500
+                ),
+                "hot": self._clean_snapshot_text(
+                    item.get("hot")
+                    or item.get("hotValue")
+                    or item.get("hot_value")
+                    or item.get("hot_value_desc")
+                    or item.get("score_desc")
+                    or item.get("score"),
+                    80
+                ),
+                "description": self._clean_snapshot_text(
+                    item.get("description")
+                    or item.get("summary")
+                    or item.get("desc")
+                    or item.get("content")
+                    or item.get("detail"),
+                    300
+                ),
+            }
+
+            for extra_key in ("author", "cover", "created", "created_at"):
+                if item.get(extra_key):
+                    entry[extra_key] = item.get(extra_key)
+
+            normalized.append(entry)
+        return normalized
+
+    async def cache_news_snapshot(self, target_uid: str, news_data=None, source_key: str = None, image_url: str = None) -> bool:
+        """
+        缓存一次新闻热搜 JSON 快照，用来把长图里的序号反查到原文链接。
+        发送长图时传 source_key 会重新取同源 JSON；失败时不切到备用源，避免图文错位。
+        """
+        try:
+            target = str(target_uid or "").strip()
+            if not target:
+                return False
+
+            items = None
+            actual_source = source_key
+
+            if news_data:
+                if isinstance(news_data, tuple) and len(news_data) >= 2:
+                    items = news_data[0]
+                    actual_source = news_data[1] or actual_source
+                elif isinstance(news_data, list):
+                    items = news_data
+
+            if not items and source_key:
+                fetched = await self.news_service.get_hot_news(
+                    source_key,
+                    limit=self.get_news_snapshot_limit(),
+                    allow_fallback=False
+                )
+                if fetched:
+                    items, actual_source = fetched
+
+            snapshot_items = self._normalize_news_snapshot_items(items)
+            if not snapshot_items:
+                return False
+
+            source_name = NEWS_SOURCE_MAP.get(actual_source or "", {}).get("name") or "新闻热搜"
+            snapshot = {
+                "source_key": actual_source,
+                "source_name": source_name,
+                "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "image_url": image_url or "",
+                "items": snapshot_items,
+            }
+
+            await self.db.set_state(self._news_snapshot_key(target), snapshot)
+            logger.info(f"[DailySharing] 已缓存 {target} 的新闻快照: {source_name} {len(snapshot_items)} 条")
+            return True
+        except Exception as e:
+            logger.warning(f"[DailySharing] 缓存新闻快照失败: {e}")
+            return False
+
+    def _parse_chinese_number(self, value: str) -> Optional[int]:
+        text = str(value or "").strip().translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+        text = re.sub(r"^(第)\s*", "", text)
+        text = re.sub(r"\s*(条|个|则|篇)$", "", text)
+        if not text:
+            return None
+        if text.isdigit():
+            return int(text)
+
+        digits = {
+            "零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
+            "五": 5, "六": 6, "七": 7, "八": 8, "九": 9,
+        }
+        if text in digits:
+            return digits[text]
+        if "十" in text:
+            left, right = text.split("十", 1)
+            tens = 1 if not left else digits.get(left)
+            ones = 0 if not right else digits.get(right)
+            if tens is not None and ones is not None:
+                return tens * 10 + ones
+        return None
+
+    def parse_news_link_request_text(self, text: str):
+        """从“第3条链接 / 链接第三条 / 这个第十二个新闻原文”中提取序号。"""
+        content = str(text or "").strip()
+        if not content:
+            return None
+
+        num = r"([0-9０-９一二两三四五六七八九十零〇]{1,6})"
+        patterns = [
+            rf"(?:第\s*)?{num}\s*(?:条|个|则|篇)?\s*(?:新闻|热搜)?\s*(?:链接|原文|网址|地址|link)",
+            rf"(?:链接|原文|网址|地址|link).*?(?:第\s*)?{num}\s*(?:条|个|则|篇)?",
+            rf"(?:这个|刚才|上面).*?(?:第\s*)?{num}\s*(?:条|个|则|篇).*?(?:新闻|热搜|链接|原文|网址|地址)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, content, flags=re.IGNORECASE)
+            if match:
+                parsed = self._parse_chinese_number(match.group(1))
+                if parsed:
+                    return str(parsed)
+        return None
+
+    def _parse_news_query_index(self, query: str) -> Optional[int]:
+        text = str(query or "").strip()
+        if not text:
+            return None
+        num = r"([0-9０-９一二两三四五六七八九十零〇]{1,6})"
+        match = re.fullmatch(rf"(?:第\s*)?{num}\s*(?:条|个|则|篇)?", text)
+        if not match:
+            return None
+        return self._parse_chinese_number(match.group(1))
+
+    def _format_news_link_item(self, snapshot: dict, item: dict, index: int) -> str:
+        source_name = snapshot.get("source_name") or "新闻热搜"
+        title = item.get("title") or "未命名新闻"
+        url = item.get("url") or ""
+        if not url:
+            return f"【{source_name}】第 {index} 条暂时没有可用原文链接。\n{title}"
+
+        lines = [f"【{source_name}】第 {index} 条", title, url]
+        desc = self._clean_snapshot_text(item.get("description"), 160)
+        if desc and desc != title:
+            lines.append(f"摘要：{desc}")
+        return "\n".join(lines)
+
+    async def get_cached_news_link(
+        self,
+        target_uid: str,
+        query: str = "",
+        source_key: str = None,
+        refresh_source: bool = True
+    ) -> str:
+        """从最近一次新闻快照中按序号或关键词取原文链接。"""
+        target = str(target_uid or "").strip()
+        if not target:
+            return "没找到当前会话，暂时无法读取新闻链接缓存。"
+
+        if source_key and refresh_source:
+            ok = await self.cache_news_snapshot(target, source_key=source_key)
+            if not ok:
+                source_name = NEWS_SOURCE_MAP.get(source_key, {}).get("name", source_key)
+                return f"获取【{source_name}】新闻列表失败，暂时拿不到原文链接。"
+
+        snapshot = await self.db.get_state(self._news_snapshot_key(target), {})
+        if not isinstance(snapshot, dict) or not snapshot.get("items"):
+            return "还没有可用的新闻列表缓存。先发送一次新闻热搜长图或新闻分享，再问“第3条链接”就可以。"
+
+        if source_key and not refresh_source and snapshot.get("source_key") != source_key:
+            wanted_name = NEWS_SOURCE_MAP.get(source_key, {}).get("name", source_key)
+            current_name = snapshot.get("source_name") or "新闻热搜"
+            return f"最近缓存的是【{current_name}】，不是【{wanted_name}】。请先发送对应新闻源长图，或用 /分享 新闻链接 {source_key} 序号 手动刷新。"
+
+        items = snapshot.get("items") or []
+        text = str(query or "").strip()
+        if not text:
+            preview = "\n".join(
+                f"{idx}. {item.get('title', '未命名新闻')}"
+                for idx, item in enumerate(items[:5], start=1)
+            )
+            return (
+                f"最近缓存的是【{snapshot.get('source_name', '新闻热搜')}】，共 {len(items)} 条。\n"
+                "请带上序号，例如：/分享 新闻链接 3\n"
+                f"{preview}"
+            )
+
+        index = self._parse_news_query_index(text)
+        if index is not None:
+            if index < 1 or index > len(items):
+                return f"这次缓存里只有 {len(items)} 条，换个序号试试。"
+            return self._format_news_link_item(snapshot, items[index - 1], index)
+
+        keyword = text.lower()
+        for idx, item in enumerate(items, start=1):
+            if keyword in str(item.get("title", "")).lower():
+                return self._format_news_link_item(snapshot, item, idx)
+
+        return f"最近缓存的【{snapshot.get('source_name', '新闻热搜')}】里没找到“{text}”。可以直接用序号，比如“第3条链接”。"
+
     async def _prepare_qzone_image(self, image_ref):
         """将 QQ 空间图片参数整理为 URL 或本地路径标记。"""
         if not image_ref:
@@ -392,6 +620,8 @@ class TaskManager:
         return bool(is_group and self.ctx_service._is_weixin_platform(target_umo))
 
     def setup_tasks(self):
+        self.setup_weixin_temp_cleanup()
+
         if not self.plugin.config.get("enable_auto_sharing", False):
             logger.debug("[DailySharing] 分享内容已禁用")
             return
@@ -417,6 +647,87 @@ class TaskManager:
 
         # 启动时恢复因为重启而中断的延迟任务
         self.plugin._track_task(self._recover_pending_jobs())
+
+    def _get_weixin_temp_cleanup_max_count(self) -> int:
+        try:
+            max_count = int(self.image_conf.get("weixin_temp_cleanup_max_count", 10))
+        except Exception:
+            max_count = 10
+        return max(0, min(max_count, 1000))
+
+    def setup_weixin_temp_cleanup(self):
+        """注册 weixin_oc 压缩图片临时文件清理任务。"""
+        job_id = "weixin_temp_cleanup"
+        try:
+            if self.scheduler.get_job(job_id):
+                self.scheduler.remove_job(job_id)
+        except Exception:
+            pass
+
+        max_count = self._get_weixin_temp_cleanup_max_count()
+        if max_count <= 0:
+            logger.debug("[DailySharing] 个人微信压缩图自动清理已关闭")
+            return
+
+        self._setup_cron_job_custom(job_id, "20 3 * * *", self.cleanup_weixin_temp_images)
+        self.plugin._track_task(self.cleanup_weixin_temp_images())
+
+    def _cleanup_weixin_temp_images_sync(self, max_count: int):
+        temp_dir = os.path.join(str(self.plugin.data_dir), "Temp")
+        if not os.path.isdir(temp_dir):
+            return
+
+        files = []
+
+        for name in os.listdir(temp_dir):
+            if not name.startswith("weixin_send_") or not name.lower().endswith(".jpg"):
+                continue
+
+            path = os.path.join(temp_dir, name)
+            try:
+                if not os.path.isfile(path):
+                    continue
+                files.append((os.path.getmtime(path), path, os.path.getsize(path)))
+            except FileNotFoundError:
+                continue
+            except Exception as e:
+                logger.debug(f"[DailySharing] 扫描微信压缩临时图失败: {path}, {e}")
+
+        if len(files) <= max_count:
+            return
+
+        files.sort(key=lambda item: item[0], reverse=True)
+        deleted = 0
+        freed_bytes = 0
+        for _, path, size in files[max_count:]:
+            try:
+                os.remove(path)
+                deleted += 1
+                freed_bytes += size
+            except FileNotFoundError:
+                continue
+            except Exception as e:
+                logger.debug(f"[DailySharing] 清理微信压缩临时图失败: {path}, {e}")
+
+        if deleted > 0:
+            logger.debug(
+                f"[DailySharing] 已清理个人微信压缩临时图 {deleted} 张，释放 "
+                f"{freed_bytes / 1024 / 1024:.2f}MB (保留最新 {max_count} 张)"
+            )
+
+    async def cleanup_weixin_temp_images(self):
+        """清理发送前压缩生成的 weixin_oc 图片副本。"""
+        if self.plugin._is_terminated:
+            return
+
+        max_count = self._get_weixin_temp_cleanup_max_count()
+        if max_count <= 0:
+            return
+
+        try:
+            await asyncio.to_thread(self._cleanup_weixin_temp_images_sync, max_count)
+        except Exception as e:
+            logger.warning(f"[DailySharing] 个人微信压缩图清理失败: {e}")
 
     async def clear_pending_delay_jobs(self):
         """清理已记录但尚未执行的延迟任务，确保关闭后不会补发旧任务。"""
@@ -1299,15 +1610,32 @@ class TaskManager:
                 try:
                     img_url = None
                     src_name = ""
+                    actual_source_key = news_src_key
                     # 优先使用指定的源热搜
                     if news_src_key:
                         img_url, src_name = self.news_service.get_hot_news_image_url(news_src_key)
                     else:
                         # 如果没有指定，则随机选择一个已启用的新闻源发送
                         random_src = self.news_service.select_news_source()
+                        actual_source_key = random_src
                         img_url, src_name = self.news_service.get_hot_news_image_url(random_src)
 
                     if img_url:
+                        snapshot_data = await self.news_service.get_hot_news(
+                            actual_source_key,
+                            limit=self.get_news_snapshot_limit(),
+                            allow_fallback=False
+                        )
+                        if to_qzone:
+                            await self.cache_news_snapshot("qzone_broadcast", news_data=snapshot_data, source_key=actual_source_key, image_url=img_url)
+                            current_target = str(getattr(event, "unified_msg_origin", "") or "").strip()
+                            if current_target:
+                                await self.cache_news_snapshot(current_target, news_data=snapshot_data, source_key=actual_source_key, image_url=img_url)
+                        else:
+                            current_target = str(getattr(event, "unified_msg_origin", "") or "").strip()
+                            if current_target:
+                                await self.cache_news_snapshot(current_target, news_data=snapshot_data, source_key=actual_source_key, image_url=img_url)
+
                         if to_qzone:
                             qzone_plugin = self.ctx_service._find_plugin("qzone")
                             if qzone_plugin and hasattr(qzone_plugin, "service"):
@@ -1363,11 +1691,16 @@ class TaskManager:
                 if not news_src_key:
                     news_src_key = self.news_service.select_news_source()
                 news_data = await self.news_service.get_hot_news(news_src_key)
+                if news_data:
+                    news_src_key = news_data[1]
+                    await self.cache_news_snapshot(target_umo, news_data=news_data)
                 
                 # 如果在主流程中且配置允许带上新闻图
                 if get_image and not need_image and self.image_conf.get("attach_hot_news_image", True):
                     try:
                         img_path, _ = self.news_service.get_hot_news_image_url(news_src_key)
+                        if img_path and news_data:
+                            await self.cache_news_snapshot(target_umo, source_key=news_data[1], image_url=img_path)
                     except Exception as e:
                         logger.warning(f"[DailySharing] 主流程获取热搜图片失败: {e}")
 
@@ -1610,6 +1943,7 @@ class TaskManager:
                     news_data = await self.news_service.get_hot_news(current_news_source)
                     if news_data:
                         await self.db.update_state_dict(f"target_{uid}", {"last_news_source": news_data[1]})
+                        await self.cache_news_snapshot(uid, news_data=news_data)
 
                 hist_data = await self.ctx_service.get_history_data(uid, is_group, event=event)
                 if is_group and "group_info" in hist_data:
@@ -1667,6 +2001,8 @@ class TaskManager:
                         last_source = state.get("last_news_source")
                         if last_source:
                             img_path, _ = self.news_service.get_hot_news_image_url(last_source)
+                            if img_path:
+                                await self.cache_news_snapshot(uid, source_key=last_source, image_url=img_path)
                     except Exception as e:
                         logger.warning(f"[DailySharing] 自动任务获取新闻图片失败: {e}")
 
@@ -1772,6 +2108,11 @@ class TaskManager:
                 news_data = await self.news_service.get_hot_news(actual_source)
                 if news_data:
                     await self.db.update_state_dict("qzone", {"last_news_source": news_data[1]})
+                    await self.cache_news_snapshot("qzone_broadcast", news_data=news_data)
+                    if event:
+                        current_target = str(getattr(event, "unified_msg_origin", "") or "").strip()
+                        if current_target:
+                            await self.cache_news_snapshot(current_target, news_data=news_data)
 
             # 屏蔽历史记录，使用纯净的提示词让LLM写说说
             qzone_life_prompt = self.ctx_service.format_life_context(life_ctx, stype, False, None)
@@ -1841,6 +2182,16 @@ class TaskManager:
                     if news_data:
                         img_url, _ = self.news_service.get_hot_news_image_url(news_data[1])
                         target_local_img = img_url
+                        snapshot_data = await self.news_service.get_hot_news(
+                            news_data[1],
+                            limit=self.get_news_snapshot_limit(),
+                            allow_fallback=False
+                        )
+                        await self.cache_news_snapshot("qzone_broadcast", news_data=snapshot_data, source_key=news_data[1], image_url=img_url)
+                        if event:
+                            current_target = str(getattr(event, "unified_msg_origin", "") or "").strip()
+                            if current_target:
+                                await self.cache_news_snapshot(current_target, news_data=snapshot_data, source_key=news_data[1], image_url=img_url)
                 except Exception as e:
                     pass
 
@@ -2003,7 +2354,15 @@ class TaskManager:
                         f"[DailySharing] 已为 weixin_oc 优化图片: {raw_size / 1024 / 1024:.2f}MB -> "
                         f"{out_size / 1024 / 1024:.2f}MB, 分辨率 {width}x{height} -> {im.size[0]}x{im.size[1]}"
                     )
+                    max_count = self._get_weixin_temp_cleanup_max_count()
+                    if max_count > 0:
+                        self._cleanup_weixin_temp_images_sync(max_count)
                     return out_path
+
+                try:
+                    os.remove(out_path)
+                except Exception:
+                    pass
         except Exception as e:
             logger.warning(f"[DailySharing] 微信图片压缩失败，继续发送原图: {e}")
 

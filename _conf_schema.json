@@ -397,7 +397,7 @@
         "type": "list",
         "items": {
           "type": "string",
-          "options": ["zhihu", "weibo", "bili", "xiaohongshu", "douyin", "toutiao", "baidu", "tencent", "quark", "36kr", "51cto", "acfun", "ifanr", "netease", "sina", "thepaper", "yicai"],
+          "options": ["zhihu", "weibo", "bili", "xiaohongshu", "douyin", "toutiao", "baidu", "tencent", "quark", "36kr", "51cto", "acfun", "ifanr", "netease", "sina", "thepaper", "yicai", "cls"],
           "hint": "新闻热搜源模式为'config'或'time_based'时生效。从此列表中随机选择新闻热搜源，增加内容多样性。推荐配置2-5个常用新闻热搜源。"
         },
         "default": ["zhihu", "weibo", "bili"]
@@ -406,7 +406,7 @@
         "description": "固定新闻热搜源",
         "type": "string",
         "default": "zhihu",
-        "options": ["zhihu", "weibo", "bili", "xiaohongshu", "douyin", "toutiao", "baidu", "tencent", "quark", "36kr", "51cto", "acfun", "ifanr", "netease", "sina", "thepaper", "yicai"],
+        "options": ["zhihu", "weibo", "bili", "xiaohongshu", "douyin", "toutiao", "baidu", "tencent", "quark", "36kr", "51cto", "acfun", "ifanr", "netease", "sina", "thepaper", "yicai", "cls"],
         "hint": "仅在新闻热搜源模式为 fixed 时生效。"
       },
       "news_items_count": {
@@ -441,7 +441,7 @@
         "description": "启用 Web 检索分享内容",
         "type": "bool",
         "default": true,
-        "hint": "开启后，在分享新闻、知识和推荐时调用搜索引擎检索分享内容背景（在 AstrBot 普通配置-AI配置-网页搜索配置 Tavily或Brave），关闭则由 LLM 脑补生成。"
+        "hint": "开启后，新闻分享优先使用新闻源 API 返回的摘要/正文，缺少背景时才调用搜索引擎补充；知识和推荐分享仍会调用搜索引擎检索背景（在 AstrBot 普通配置-AI配置-网页搜索配置 Tavily或Brave）。关闭后不会补充 Web 检索。"
       }    
     }
   },
@@ -538,6 +538,17 @@
             "step": 1
         },    
         "hint": "仅对 weixin_oc 生效。发送前会把个人微信适配器的上传超时调到该值。大图建议 60-120 秒。"
+      },
+      "weixin_temp_cleanup_max_count": {
+        "description": "个人微信压缩图最多保留张数",
+        "type": "int",
+        "default": 10,
+        "slider": {
+            "min": 0,
+            "max": 100,
+            "step": 1
+        },
+        "hint": "仅清理 Temp/weixin_send_*.jpg。默认最多保留最新 10 张，超过后删除最旧的；设为 0 可关闭自动清理。"
       },
       "record_image_description": {
         "description": "记录配图描述到历史",

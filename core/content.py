@@ -662,14 +662,47 @@ class ContentService:
         items_limit = self.news_conf.get("news_items_count", 5)
         selected_to_search = news_list[:items_limit]
 
-        # 并发调用内置的 Web 搜索来获取新闻真相
-        if enable_web_search:
-            logger.info(f"[内容服务] 正在为 {source_name} 自动检索新闻背景...")
-            tasks = [self._fetch_web_search(item.get("title", ""), "news") for item in selected_to_search]
-            search_results = await asyncio.gather(*tasks)
+        def get_api_background(item: dict) -> str:
+            title = str(item.get("title", "") or "").strip()
+            desc = str(item.get("description", "") or "").strip()
+            if not desc or desc == title or len(desc) < 20:
+                return ""
+            return desc
+
+        # 优先使用新闻源 API 自带摘要/正文；只有缺少背景时才调用 Web 搜索。
+        search_results = [None] * len(selected_to_search)
+        pending_tasks = []
+        pending_indexes = []
+        api_bg_count = 0
+        for idx, item in enumerate(selected_to_search):
+            title = item.get("title", "")
+            api_bg = get_api_background(item)
+            if api_bg:
+                search_results[idx] = (title, api_bg)
+                api_bg_count += 1
+            elif enable_web_search:
+                pending_indexes.append(idx)
+                pending_tasks.append(self._fetch_web_search(title, "news"))
+            else:
+                search_results[idx] = (title, "")
+
+        if pending_tasks:
+            logger.info(
+                f"[内容服务] {source_name} 有 {api_bg_count} 条使用 API 摘要，"
+                f"{len(pending_tasks)} 条补充 Web 检索..."
+            )
+            fetched_results = await asyncio.gather(*pending_tasks)
+            for idx, result in zip(pending_indexes, fetched_results):
+                search_results[idx] = result
+        elif api_bg_count:
+            logger.info(f"[内容服务] {source_name} 已使用 API 自带摘要/正文，跳过 Web 检索。")
         else:
-            logger.info(f"[内容服务] Web 搜索功能已关闭，跳过检索。")
-            search_results = [(item.get("title", ""), "") for item in selected_to_search]
+            logger.info(f"[内容服务] Web 搜索功能已关闭，且 API 未提供可用摘要。")
+
+        search_results = [
+            result if result is not None else (item.get("title", ""), "")
+            for item, result in zip(selected_to_search, search_results)
+        ]
         
         raw_share_count = self.news_conf.get("news_share_count", "1-2")
         try:
@@ -746,7 +779,7 @@ class ContentService:
 {ctx['life_hint']}
 {ctx['chat_hint']}
 {dynamics_prompt}
-{source_name}（含检索真相）：
+{source_name}（含 API 摘要/检索真相）：
 {news_text}
 
 【严重警告 - 拒绝尴尬开头】

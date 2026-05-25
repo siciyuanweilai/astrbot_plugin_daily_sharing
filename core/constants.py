@@ -37,5 +37,6 @@ SOURCE_CN_MAP.update({
     "网易": "netease",
     "新浪": "sina",
     "澎湃": "thepaper",
-    "第一财经": "yicai"       
+    "第一财经": "yicai",
+    "财联社": "cls"       
 })

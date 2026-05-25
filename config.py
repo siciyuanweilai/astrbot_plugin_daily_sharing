@@ -117,28 +117,33 @@ NEWS_SOURCE_MAP = {
         "url": "https://api.nycnm.cn/API/yicai.php",
         "name": "第一财经热搜",
         "icon": "💴"
-    }    
+    },
+    "cls": {
+        "url": "https://api.nycnm.cn/API/cls.php",
+        "name": "财联社热搜",
+        "icon": "💹"
+    }
 }
 
-# 时间段新闻源偏好 (已包含所有 17 个新闻源)
+# 时间段新闻源偏好 (已包含所有 18 个新闻源)
 NEWS_TIME_PREFERENCES = {
     # 凌晨
     TimePeriod.DAWN: {
         "netease": 0.20, "weibo": 0.15, "douyin": 0.15, "zhihu": 0.10, "sina": 0.10,
         "quark": 0.05, "thepaper": 0.05, "toutiao": 0.03, "baidu": 0.03, "tencent": 0.02,
-        "36kr": 0.02, "51cto": 0.02, "ifanr": 0.02, "yicai": 0.02, "acfun": 0.02, 
-        "bili": 0.01, "xiaohongshu": 0.01
+        "36kr": 0.02, "51cto": 0.02, "ifanr": 0.02, "yicai": 0.02, "cls": 0.02,
+        "acfun": 0.02, "bili": 0.01, "xiaohongshu": 0.01
     },    
     # 早晨
     TimePeriod.MORNING: {
         "weibo": 0.15, "quark": 0.10, "zhihu": 0.10, "36kr": 0.10, "thepaper": 0.08, 
         "netease": 0.08, "sina": 0.08, "toutiao": 0.05, "baidu": 0.05, "tencent": 0.05, 
-        "51cto": 0.05, "yicai": 0.05, "xiaohongshu": 0.02, "ifanr": 0.02, "bili": 0.01, 
+        "51cto": 0.05, "yicai": 0.05, "cls": 0.06, "xiaohongshu": 0.02, "ifanr": 0.02, "bili": 0.01, 
         "douyin": 0.01, "acfun": 0.01
     },
     # 上午
     TimePeriod.FORENOON: {
-        "douyin": 0.15, "tencent": 0.12, "weibo": 0.10, "quark": 0.10, "yicai": 0.10,
+        "douyin": 0.15, "tencent": 0.12, "cls": 0.12, "weibo": 0.10, "quark": 0.10, "yicai": 0.10,
         "toutiao": 0.08, "zhihu": 0.08, "baidu": 0.05, "51cto": 0.05, "thepaper": 0.05, 
         "sina": 0.05, "netease": 0.05, "36kr": 0.02, "ifanr": 0.02, "bili": 0.01, 
         "xiaohongshu": 0.01, "acfun": 0.01
@@ -146,27 +151,27 @@ NEWS_TIME_PREFERENCES = {
     # 下午
     TimePeriod.AFTERNOON: {
         "netease": 0.15, "zhihu": 0.15, "quark": 0.10, "weibo": 0.10, "douyin": 0.10, 
-        "sina": 0.08, "baidu": 0.05, "toutiao": 0.05, "thepaper": 0.05, "tencent": 0.05, 
+        "sina": 0.08, "cls": 0.10, "baidu": 0.05, "toutiao": 0.05, "thepaper": 0.05, "tencent": 0.05, 
         "acfun": 0.05, "36kr": 0.02, "51cto": 0.02, "yicai": 0.02, "ifanr": 0.01, 
         "xiaohongshu": 0.01, "bili": 0.01
     },
     # 傍晚
     TimePeriod.EVENING: {
         "weibo": 0.15, "douyin": 0.15, "quark": 0.10, "thepaper": 0.10, "netease": 0.10,
-        "tencent": 0.08, "sina": 0.08, "zhihu": 0.08, "baidu": 0.05, "toutiao": 0.05, 
+        "tencent": 0.08, "sina": 0.08, "zhihu": 0.08, "cls": 0.08, "baidu": 0.05, "toutiao": 0.05, 
         "36kr": 0.01, "51cto": 0.01, "ifanr": 0.01, "acfun": 0.01, "xiaohongshu": 0.01, 
         "bili": 0.01, "yicai": 0.01
     },
     # 晚上
     TimePeriod.NIGHT: {
         "douyin": 0.20, "zhihu": 0.15, "weibo": 0.15, "netease": 0.10, "tencent": 0.10, 
-        "quark": 0.08, "baidu": 0.05, "sina": 0.05, "yicai": 0.05, "toutiao": 0.02, 
+        "quark": 0.08, "cls": 0.08, "baidu": 0.05, "sina": 0.05, "yicai": 0.05, "toutiao": 0.02, 
         "36kr": 0.01, "51cto": 0.01, "ifanr": 0.01, "acfun": 0.01, "bili": 0.01, 
         "thepaper": 0.01, "xiaohongshu": 0.01
     },
     # 深夜
     TimePeriod.LATE_NIGHT: {
-        "weibo": 0.20, "zhihu": 0.20, "yicai": 0.15, "douyin": 0.15, "sina": 0.10, 
+        "weibo": 0.20, "zhihu": 0.20, "yicai": 0.15, "douyin": 0.15, "sina": 0.10, "cls": 0.08, 
         "netease": 0.05, "quark": 0.05, "baidu": 0.02, "toutiao": 0.02, "tencent": 0.02,
         "36kr": 0.01, "51cto": 0.01, "ifanr": 0.01, "acfun": 0.01, "xiaohongshu": 0.01, 
         "thepaper": 0.01, "bili": 0.01

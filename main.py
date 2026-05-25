@@ -493,6 +493,54 @@ class DailySharingPlugin(Star):
             f"{suffix}"
         )
 
+    def _resolve_news_link_args(self, tokens):
+        source_key = None
+        query_parts = []
+        skip_words = {"图片", "广播", "空间", "qzone"}
+
+        for raw in tokens or []:
+            token = str(raw or "").strip()
+            if not token or token in skip_words:
+                continue
+            token_lower = token.lower()
+            if token in SOURCE_CN_MAP:
+                source_key = SOURCE_CN_MAP[token]
+                continue
+            if token_lower in NEWS_SOURCE_MAP:
+                source_key = token_lower
+                continue
+            query_parts.append(token)
+
+        return " ".join(query_parts).strip(), source_key
+
+    def _resolve_news_source_name(self, source: str = None):
+        token = str(source or "").strip()
+        if not token:
+            return None
+
+        token_lower = token.lower()
+        if token in SOURCE_CN_MAP:
+            return SOURCE_CN_MAP[token]
+        if token_lower in NEWS_SOURCE_MAP:
+            return token_lower
+
+        for name, key in SOURCE_CN_MAP.items():
+            if token in name or name in token:
+                return key
+        return None
+
+    def _has_reply_component(self, event: AstrMessageEvent) -> bool:
+        try:
+            messages = event.get_messages()
+        except Exception:
+            messages = getattr(getattr(event, "message_obj", None), "message", []) or []
+        for comp in messages or []:
+            if comp.__class__.__name__ == "Reply":
+                return True
+            if str(getattr(comp, "type", "")).lower().endswith("reply"):
+                return True
+        return False
+
     async def _call_llm_wrapper(self, prompt: str, system_prompt: str = None, timeout: int = 60, max_retries: int = 2, tools: list = None) -> Optional[str]:
         """LLM 调用包装器（支持失败重试与自动降级）"""
         if self._is_terminated: return None
@@ -617,7 +665,7 @@ class DailySharingPlugin(Star):
 
         Args:
             share_type(string): 分享类型。支持：'自动', '问候', '新闻', '心情', '知识', '推荐', '60s新闻', 'AI资讯'。当用户没有明确指出发什么类型的内容（比如只说“发个说说”、“分享一下”）时，请务必将其设为 '自动'。
-            source(string): 仅当 share_type 为'新闻'时有效。指定新闻平台。支持：微博, 知乎, B站, 抖音, 头条, 百度, 腾讯, 小红书, 夸克, 36氪, 51CTO, A站, 爱范儿, 网易, 新浪, 澎湃, 第一财经。如果不指定则留空。
+            source(string): 仅当 share_type 为'新闻'时有效。指定新闻平台。支持：微博, 知乎, B站, 抖音, 头条, 百度, 腾讯, 小红书, 夸克, 36氪, 51CTO, A站, 爱范儿, 网易, 新浪, 澎湃, 第一财经, 财联社。如果不指定则留空。
             get_image(boolean): 仅当 share_type 为'新闻'时有效。默认为 True (优先分享热搜长图)。只有当用户明确要求“文字版”、“文本”、“不要图片”或“写一段新闻”时，才将其设为 False。
             need_image(boolean): 是否需要AI为这段文案配图。默认为 False。仅当用户明确说“配图”、“带图”、“发张图”时，才将其设为 True。
             need_video(boolean): 是否需要AI为这段文案生成视频。默认为 False。仅当用户明确说“视频”、“动态图”、“动起来”时，才将其设为 True。
@@ -651,6 +699,97 @@ class DailySharingPlugin(Star):
 
         # 3. 直接返回空字符串，让 LLM 闭嘴，不再生成回复
         return None
+
+    @filter.llm_tool(name="news_link")
+    async def news_link_tool(
+        self,
+        event: AstrMessageEvent,
+        index: str = "",
+        query: str = "",
+        source: str = None,
+        to_qzone: bool = False
+    ):
+        """
+        获取最近一次新闻热搜长图或新闻分享中某条新闻的原文链接。
+        当用户用自然语言询问“刚才热搜图第三条是什么链接”、“把上面第3条新闻原文发我”、“第十二条网址”、“财联社第三条链接”等需求时调用。
+        只负责按序号或标题关键词查链接；不要用它重新生成新闻分享。
+
+        Args:
+            index(string): 用户要看的新闻序号，1 表示第 1 条。能提取到序号时优先填写此参数，例如 "3" 或 "第三条"。
+            query(string): 没有明确序号时填写标题关键词；也可以填写“第三条”“第3条原文”等原句片段。
+            source(string): 可选新闻源，如 财联社、微博、知乎、cls。只有用户明确指定某个新闻源时填写；追问刚才长图时留空。
+            to_qzone(boolean): 是否查询最近一次 QQ 空间新闻缓存。只有用户明确说“空间/QQ空间那条”时设为 True。
+        """
+        if self._is_terminated:
+            return ""
+
+        self._remember_event_adapter(event)
+        is_admin = self._is_admin_event(event)
+        is_configured_receiver = self._is_configured_receiver_event(event)
+        if to_qzone and not is_admin:
+            return "QQ空间新闻链接仅管理员可查询。"
+        if not (is_admin or is_configured_receiver):
+            return "权限不足：当前会话不在接收对象配置中。"
+
+        lookup_query = ""
+        index_text = str(index or "").strip()
+        parsed_index = self.task_manager._parse_news_query_index(index_text)
+        if parsed_index:
+            lookup_query = str(parsed_index)
+
+        if not lookup_query:
+            lookup_query = self.task_manager.parse_news_link_request_text(query) or str(query or "").strip()
+
+        source_key = self._resolve_news_source_name(source)
+        target_uid = "qzone_broadcast" if to_qzone else event.unified_msg_origin
+        result = await self.task_manager.get_cached_news_link(
+            target_uid,
+            lookup_query,
+            source_key=source_key,
+            refresh_source=False
+        )
+        try:
+            event.set_extra("daily_sharing_news_link_result", result)
+            event.set_extra("daily_sharing_news_link_clean_result", result)
+        except Exception:
+            pass
+        logger.info(f"[DailySharing] LLM 工具 news_link 已触发: target={target_uid}, query={lookup_query}, source={source_key or ''}")
+        return result
+
+    @filter.on_llm_response(priority=-10000)
+    async def force_news_link_tool_response(self, event: AstrMessageEvent, resp):
+        """当 news_link 被调用时，最终只发送工具查到的原始链接结果。"""
+        try:
+            result = event.get_extra("daily_sharing_news_link_result")
+        except Exception:
+            result = None
+        if not result:
+            return
+
+        try:
+            resp.result_chain = MessageChain().message(str(result))
+            resp.completion_text = str(result)
+            event.set_extra("daily_sharing_news_link_result", None)
+            logger.info("[DailySharing] 已将 LLM 最终回复替换为 news_link 原始结果")
+        except Exception as e:
+            logger.warning(f"[DailySharing] 替换 news_link 最终回复失败: {e}")
+
+    @filter.on_decorating_result(priority=-10000)
+    async def force_news_link_decorating_result(self, event: AstrMessageEvent):
+        """发送前兜底，避免其它 LLM/装饰钩子给 news_link 结果追加引用。"""
+        try:
+            result = event.get_extra("daily_sharing_news_link_clean_result")
+        except Exception:
+            result = None
+        if not result:
+            return
+
+        try:
+            event.set_result(event.plain_result(str(result)))
+            event.set_extra("daily_sharing_news_link_clean_result", None)
+            logger.info("[DailySharing] 已在发送前清理 news_link 附加引用")
+        except Exception as e:
+            logger.warning(f"[DailySharing] 发送前清理 news_link 附加引用失败: {e}")
 
     @filter.command("分享")
     async def handle_share_main(self, event: AstrMessageEvent):
@@ -686,6 +825,14 @@ class DailySharingPlugin(Star):
         current_uid = event.unified_msg_origin
         specific_target = None if is_broadcast else current_uid
         share_global_scope = is_broadcast or is_qzone_target
+
+        # =============== 新闻长图链接反查 ===============
+        if arg in {"新闻链接", "原文", "链接", "newslink", "link"}:
+            query, source_key = self._resolve_news_link_args(parts[2:])
+            target_uid = "qzone_broadcast" if is_qzone_target else current_uid
+            result = await self.task_manager.get_cached_news_link(target_uid, query, source_key=source_key)
+            yield event.plain_result(result)
+            return
 
         # =============== 手动触发 60s 新闻 ===============
         if arg == "60s":
@@ -847,8 +994,15 @@ class DailySharingPlugin(Star):
                 if is_image_mode:
                     if not news_src: news_src = self.news_service.select_news_source()
                     img_url, src_name = self.news_service.get_hot_news_image_url(news_src)
+                    snapshot_data = await self.news_service.get_hot_news(
+                        news_src,
+                        limit=self.task_manager.get_news_snapshot_limit(),
+                        allow_fallback=False
+                    )
                     
                     if is_qzone_target:
+                        await self.task_manager.cache_news_snapshot("qzone_broadcast", news_data=snapshot_data, source_key=news_src, image_url=img_url)
+                        await self.task_manager.cache_news_snapshot(current_uid, news_data=snapshot_data, source_key=news_src, image_url=img_url)
                         yield event.plain_result(f"正在获取[{src_name}]图片并分享到QQ空间...")
                         qzone_plugin = self.ctx_service._find_plugin("qzone")
                         if qzone_plugin and hasattr(qzone_plugin, "service"):
@@ -862,6 +1016,7 @@ class DailySharingPlugin(Star):
                             yield event.plain_result("未检测到QQ空间插件！")
                         return
 
+                    await self.task_manager.cache_news_snapshot(current_uid, news_data=snapshot_data, source_key=news_src, image_url=img_url)
                     yield event.plain_result(f"正在获取 [{src_name}] 图片...")
                     local_path = await self.task_manager._download_image_to_local(img_url, "manual_hot_news.png")
                     if local_path:
