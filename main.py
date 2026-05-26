@@ -493,25 +493,24 @@ class DailySharingPlugin(Star):
             f"{suffix}"
         )
 
-    def _resolve_news_link_args(self, tokens):
-        source_key = None
-        query_parts = []
-        skip_words = {"图片", "广播", "空间", "qzone"}
+    def _strip_news_link_reference_tail(self, text: str) -> str:
+        """移除 news_link 自然回复末尾由模型补出的参考链接列表。"""
+        if not text:
+            return text
 
-        for raw in tokens or []:
-            token = str(raw or "").strip()
-            if not token or token in skip_words:
-                continue
-            token_lower = token.lower()
-            if token in SOURCE_CN_MAP:
-                source_key = SOURCE_CN_MAP[token]
-                continue
-            if token_lower in NEWS_SOURCE_MAP:
-                source_key = token_lower
-                continue
-            query_parts.append(token)
+        match = re.search(
+            r"\n\s*(?:#{1,6}\s*)?(?:参考链接|参考来源|参考资料|引用来源|References?)\s*[:：]?\s*\n",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            return text
 
-        return " ".join(query_parts).strip(), source_key
+        tail = text[match.end():]
+        if not re.search(r"https?://", tail, flags=re.IGNORECASE):
+            return text
+
+        return text[:match.start()].rstrip()
 
     def _resolve_news_source_name(self, source: str = None):
         token = str(source or "").strip()
@@ -715,8 +714,8 @@ class DailySharingPlugin(Star):
         只负责按序号或标题关键词查链接；不要用它重新生成新闻分享。
 
         Args:
-            index(string): 用户要看的新闻序号，1 表示第 1 条。能提取到序号时优先填写此参数，例如 "3" 或 "第三条"。
-            query(string): 没有明确序号时填写标题关键词；也可以填写“第三条”“第3条原文”等原句片段。
+            index(string): 用户要看的新闻序号，1 表示第 1 条。用户问“第十八条链接”等序号请求时，必须由你识别并填写此参数，优先使用阿拉伯数字字符串，例如 "18"。
+            query(string): 没有明确序号时填写标题关键词；不要把“第三条”“第3条原文”等序号原句片段填到这里。
             source(string): 可选新闻源，如 财联社、微博、知乎、cls。只有用户明确指定某个新闻源时填写；追问刚才长图时留空。
             to_qzone(boolean): 是否查询最近一次 QQ 空间新闻缓存。只有用户明确说“空间/QQ空间那条”时设为 True。
         """
@@ -738,7 +737,7 @@ class DailySharingPlugin(Star):
             lookup_query = str(parsed_index)
 
         if not lookup_query:
-            lookup_query = self.task_manager.parse_news_link_request_text(query) or str(query or "").strip()
+            lookup_query = str(query or "").strip()
 
         source_key = self._resolve_news_source_name(source)
         target_uid = "qzone_broadcast" if to_qzone else event.unified_msg_origin
@@ -749,47 +748,54 @@ class DailySharingPlugin(Star):
             refresh_source=False
         )
         try:
-            event.set_extra("daily_sharing_news_link_result", result)
-            event.set_extra("daily_sharing_news_link_clean_result", result)
+            event.set_extra("daily_sharing_news_link_used", True)
         except Exception:
             pass
         logger.info(f"[DailySharing] LLM 工具 news_link 已触发: target={target_uid}, query={lookup_query}, source={source_key or ''}")
         return result
 
     @filter.on_llm_response(priority=-10000)
-    async def force_news_link_tool_response(self, event: AstrMessageEvent, resp):
-        """当 news_link 被调用时，最终只发送工具查到的原始链接结果。"""
+    async def clean_news_link_llm_references(self, event: AstrMessageEvent, resp):
+        """保留 LLM 自然回复，只移除 news_link 场景下模型补出的参考链接尾巴。"""
         try:
-            result = event.get_extra("daily_sharing_news_link_result")
+            used = event.get_extra("daily_sharing_news_link_used")
         except Exception:
-            result = None
-        if not result:
+            used = None
+        if not used or not resp:
             return
 
         try:
-            resp.result_chain = MessageChain().message(str(result))
-            resp.completion_text = str(result)
-            event.set_extra("daily_sharing_news_link_result", None)
-            logger.info("[DailySharing] 已将 LLM 最终回复替换为 news_link 原始结果")
+            original = str(resp.completion_text or "")
+            cleaned = self._strip_news_link_reference_tail(original)
+            if cleaned != original:
+                resp.completion_text = cleaned
+                logger.info("[DailySharing] 已清理 news_link LLM 回复中的参考链接尾部")
         except Exception as e:
-            logger.warning(f"[DailySharing] 替换 news_link 最终回复失败: {e}")
+            logger.warning(f"[DailySharing] 清理 news_link LLM 参考链接失败: {e}")
 
     @filter.on_decorating_result(priority=-10000)
-    async def force_news_link_decorating_result(self, event: AstrMessageEvent):
-        """发送前兜底，避免其它 LLM/装饰钩子给 news_link 结果追加引用。"""
+    async def clean_news_link_decorating_references(self, event: AstrMessageEvent):
+        """发送前兜底清理参考链接尾部，但不覆盖 LLM 正文。"""
         try:
-            result = event.get_extra("daily_sharing_news_link_clean_result")
+            used = event.get_extra("daily_sharing_news_link_used")
         except Exception:
-            result = None
-        if not result:
+            used = None
+        if not used:
+            return
+
+        result = event.get_result()
+        if not result or not result.chain:
             return
 
         try:
-            event.set_result(event.plain_result(str(result)))
-            event.set_extra("daily_sharing_news_link_clean_result", None)
-            logger.info("[DailySharing] 已在发送前清理 news_link 附加引用")
+            original = result.get_plain_text()
+            cleaned = self._strip_news_link_reference_tail(original)
+            if cleaned != original:
+                event.set_result(event.plain_result(cleaned))
+                logger.info("[DailySharing] 已在发送前清理 news_link 参考链接尾部")
+            event.set_extra("daily_sharing_news_link_used", None)
         except Exception as e:
-            logger.warning(f"[DailySharing] 发送前清理 news_link 附加引用失败: {e}")
+            logger.warning(f"[DailySharing] 发送前清理 news_link 参考链接失败: {e}")
 
     @filter.command("分享")
     async def handle_share_main(self, event: AstrMessageEvent):
@@ -825,14 +831,6 @@ class DailySharingPlugin(Star):
         current_uid = event.unified_msg_origin
         specific_target = None if is_broadcast else current_uid
         share_global_scope = is_broadcast or is_qzone_target
-
-        # =============== 新闻长图链接反查 ===============
-        if arg in {"新闻链接", "原文", "链接", "newslink", "link"}:
-            query, source_key = self._resolve_news_link_args(parts[2:])
-            target_uid = "qzone_broadcast" if is_qzone_target else current_uid
-            result = await self.task_manager.get_cached_news_link(target_uid, query, source_key=source_key)
-            yield event.plain_result(result)
-            return
 
         # =============== 手动触发 60s 新闻 ===============
         if arg == "60s":

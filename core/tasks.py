@@ -202,9 +202,12 @@ class TaskManager:
             return False
 
     def _parse_chinese_number(self, value: str) -> Optional[int]:
-        text = str(value or "").strip().translate(str.maketrans("０１２３４５６７８９", "0123456789"))
-        text = re.sub(r"^(第)\s*", "", text)
-        text = re.sub(r"\s*(条|个|则|篇)$", "", text)
+        text = "".join(
+            str(value or "")
+            .strip()
+            .translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+            .split()
+        )
         if not text:
             return None
         if text.isdigit():
@@ -224,35 +227,22 @@ class TaskManager:
                 return tens * 10 + ones
         return None
 
-    def parse_news_link_request_text(self, text: str):
-        """从“第3条链接 / 链接第三条 / 这个第十二个新闻原文”中提取序号。"""
-        content = str(text or "").strip()
-        if not content:
-            return None
-
-        num = r"([0-9０-９一二两三四五六七八九十零〇]{1,6})"
-        patterns = [
-            rf"(?:第\s*)?{num}\s*(?:条|个|则|篇)?\s*(?:新闻|热搜)?\s*(?:链接|原文|网址|地址|link)",
-            rf"(?:链接|原文|网址|地址|link).*?(?:第\s*)?{num}\s*(?:条|个|则|篇)?",
-            rf"(?:这个|刚才|上面).*?(?:第\s*)?{num}\s*(?:条|个|则|篇).*?(?:新闻|热搜|链接|原文|网址|地址)",
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, content, flags=re.IGNORECASE)
-            if match:
-                parsed = self._parse_chinese_number(match.group(1))
-                if parsed:
-                    return str(parsed)
-        return None
-
     def _parse_news_query_index(self, query: str) -> Optional[int]:
-        text = str(query or "").strip()
+        text = "".join(
+            str(query or "")
+            .strip()
+            .translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+            .split()
+        )
         if not text:
             return None
-        num = r"([0-9０-９一二两三四五六七八九十零〇]{1,6})"
-        match = re.fullmatch(rf"(?:第\s*)?{num}\s*(?:条|个|则|篇)?", text)
-        if not match:
-            return None
-        return self._parse_chinese_number(match.group(1))
+        if text.startswith("第"):
+            text = text[1:]
+        for suffix in ("条", "个", "则", "篇"):
+            if text.endswith(suffix):
+                text = text[:-len(suffix)]
+                break
+        return self._parse_chinese_number(text)
 
     def _format_news_link_item(self, snapshot: dict, item: dict, index: int) -> str:
         source_name = snapshot.get("source_name") or "新闻热搜"
@@ -292,7 +282,7 @@ class TaskManager:
         if source_key and not refresh_source and snapshot.get("source_key") != source_key:
             wanted_name = NEWS_SOURCE_MAP.get(source_key, {}).get("name", source_key)
             current_name = snapshot.get("source_name") or "新闻热搜"
-            return f"最近缓存的是【{current_name}】，不是【{wanted_name}】。请先发送对应新闻源长图，或用 /分享 新闻链接 {source_key} 序号 手动刷新。"
+            return f"最近缓存的是【{current_name}】，不是【{wanted_name}】。请先发送对应新闻源长图，再直接问第几条链接。"
 
         items = snapshot.get("items") or []
         text = str(query or "").strip()
@@ -303,7 +293,7 @@ class TaskManager:
             )
             return (
                 f"最近缓存的是【{snapshot.get('source_name', '新闻热搜')}】，共 {len(items)} 条。\n"
-                "请带上序号，例如：/分享 新闻链接 3\n"
+                "请带上序号，例如：第3条链接\n"
                 f"{preview}"
             )
 
