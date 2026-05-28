@@ -961,6 +961,23 @@ class TaskManager:
             self.plugin._track_task(self._schedule_daily_qzone_random_jobs())
             logger.debug(f"[DailySharing] QQ空间已启用多时间段随机生成模式")
 
+    def _parse_random_period(self, base_dt: datetime, period_str: str) -> tuple[datetime, datetime]:
+        start_str, end_str = period_str.split('-', 1)
+        start_h, start_m = map(int, start_str.split(':'))
+        end_h, end_m = map(int, end_str.split(':'))
+
+        start_dt = base_dt.replace(hour=start_h, minute=start_m, second=0, microsecond=0)
+        end_dt = base_dt.replace(hour=end_h, minute=end_m, second=0, microsecond=0)
+        return start_dt, end_dt
+
+    def _get_random_run_time(self, base_dt: datetime, period_str: str) -> Optional[datetime]:
+        start_dt, end_dt = self._parse_random_period(base_dt, period_str)
+        total_seconds = int((end_dt - start_dt).total_seconds())
+        if total_seconds <= 0:
+            return None
+
+        return start_dt + timedelta(seconds=random.randrange(total_seconds))
+
     async def _schedule_daily_random_jobs(self):
         """每天计算并在 scheduler 中添加当天的随机时间点任务"""
         if self.plugin._is_terminated: return
@@ -991,18 +1008,9 @@ class TaskManager:
         for period_str in periods:
             if period_str not in jobs:
                 try:
-                    start_str, end_str = period_str.split('-')
-                    start_h, start_m = map(int, start_str.split(':'))
-                    end_h, end_m = map(int, end_str.split(':'))
-                    
-                    start_dt = now.replace(hour=start_h, minute=start_m, second=0, microsecond=0)
-                    end_dt = now.replace(hour=end_h, minute=end_m, second=59, microsecond=0)
-                    
-                    if end_dt <= start_dt:
+                    run_time = self._get_random_run_time(now, period_str)
+                    if run_time is None:
                         continue 
-                    
-                    random_seconds = random.randint(0, int((end_dt - start_dt).total_seconds()))
-                    run_time = start_dt + timedelta(seconds=random_seconds)
                     
                     jobs[period_str] = run_time.timestamp()
                     is_modified = True
@@ -1055,17 +1063,9 @@ class TaskManager:
         for period_str in periods:
             if period_str not in jobs:
                 try:
-                    start_str, end_str = period_str.split('-')
-                    start_h, start_m = map(int, start_str.split(':'))
-                    end_h, end_m = map(int, end_str.split(':'))
-                    
-                    start_dt = now.replace(hour=start_h, minute=start_m, second=0, microsecond=0)
-                    end_dt = now.replace(hour=end_h, minute=end_m, second=59, microsecond=0)
-                    if end_dt <= start_dt: 
+                    run_time = self._get_random_run_time(now, period_str)
+                    if run_time is None:
                         continue
-                    
-                    random_seconds = random.randint(0, int((end_dt - start_dt).total_seconds()))
-                    run_time = start_dt + timedelta(seconds=random_seconds)
                     
                     jobs[period_str] = run_time.timestamp()
                     is_modified = True
