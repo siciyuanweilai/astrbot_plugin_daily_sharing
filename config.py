@@ -33,93 +33,93 @@ CRON_TEMPLATES = {
 # 新闻源配置
 NEWS_SOURCE_MAP = {
     "zhihu": {
-        "url": "https://api.nycnm.cn/API/zhihu.php",
+        "url": "https://api.nycnm.cn/api/v2/zhihu",
         "name": "知乎热搜",
         "icon": "📚"
     },
     "weibo": {
-        "url": "https://api.nycnm.cn/API/wb.php",
+        "url": "https://api.nycnm.cn/api/v2/wb",
         "name": "微博热搜",
         "icon": "🔥"
     },
     "quark": {
-        "url": "https://api.nycnm.cn/API/quark.php",
+        "url": "https://api.nycnm.cn/api/v2/quark",
         "name": "夸克热搜",
         "icon": "⚛️"
     },
     "bili": {
-        "url": "https://api.nycnm.cn/API/bilibilirs.php",
+        "url": "https://api.nycnm.cn/api/v2/bilibilirs",
         "name": "B站热搜",
         "icon": "📺"
     },
     "xiaohongshu": {
-        "url": "https://api.nycnm.cn/API/xhsrs.php",
+        "url": "https://api.nycnm.cn/api/v2/xhsrs",
         "name": "小红书热搜",
         "icon": "📕"
     },
     "douyin": {
-        "url": "https://api.nycnm.cn/API/douyinrs.php",
+        "url": "https://api.nycnm.cn/api/v2/douyinrs",
         "name": "抖音热搜",
         "icon": "🎵"
     },
     "toutiao": {
-        "url": "https://api.nycnm.cn/API/toutiao.php",
+        "url": "https://api.nycnm.cn/api/v2/toutiao",
         "name": "头条热搜",
         "icon": "🗞️"
     },
     "baidu": {
-        "url": "https://api.nycnm.cn/API/baidu.php",
+        "url": "https://api.nycnm.cn/api/v2/baidu",
         "name": "百度热搜",
         "icon": "🔍"
     },
     "tencent": {
-        "url": "https://api.nycnm.cn/API/txxw.php",
+        "url": "https://api.nycnm.cn/api/v2/txxw",
         "name": "腾讯热搜",
         "icon": "🐧"
     },
     "36kr": {
-        "url": "https://api.nycnm.cn/API/36kr.php",
+        "url": "https://api.nycnm.cn/api/v2/36kr",
         "name": "36氪热搜",
         "icon": "📈",
         "extra_params": "&type=comment"
     },
     "51cto": {
-        "url": "https://api.nycnm.cn/API/51cto.php",
+        "url": "https://api.nycnm.cn/api/v2/51cto",
         "name": "51CTO热搜",
         "icon": "💻"
     },
     "acfun": {
-        "url": "https://api.nycnm.cn/API/acfun.php",
+        "url": "https://api.nycnm.cn/api/v2/acfun",
         "name": "A站热搜",
         "icon": "📺"
     },
     "ifanr": {
-        "url": "https://api.nycnm.cn/API/ifanr.php",
+        "url": "https://api.nycnm.cn/api/v2/ifanr",
         "name": "爱范儿热搜",
         "icon": "📱"
     },
     "netease": {
-        "url": "https://api.nycnm.cn/API/netease.php",
+        "url": "https://api.nycnm.cn/api/v2/netease",
         "name": "网易热搜",
         "icon": "📰"
     },
     "sina": {
-        "url": "https://api.nycnm.cn/API/sina.php",
+        "url": "https://api.nycnm.cn/api/v2/sina",
         "name": "新浪热搜",
         "icon": "👀"
     },
     "thepaper": {
-        "url": "https://api.nycnm.cn/API/thepaper.php",
+        "url": "https://api.nycnm.cn/api/v2/thepaper",
         "name": "澎湃热搜",
         "icon": "🌊"
     },
     "yicai": {
-        "url": "https://api.nycnm.cn/API/yicai.php",
+        "url": "https://api.nycnm.cn/api/v2/yicai",
         "name": "第一财经热搜",
         "icon": "💴"
     },
     "cls": {
-        "url": "https://api.nycnm.cn/API/cls.php",
+        "url": "https://api.nycnm.cn/api/v2/cls",
         "name": "财联社热搜",
         "icon": "💹"
     }

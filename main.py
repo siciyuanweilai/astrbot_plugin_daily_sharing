@@ -22,6 +22,7 @@ from .core.context import ContextService
 from .core.db import DatabaseManager 
 from .core.tasks import TaskManager
 from .core.commands import CommandHandler
+from .core.command_args import find_invalid_non_news_args
 
 class DailySharingPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -711,8 +712,7 @@ class DailySharingPlugin(Star):
         """
         获取最近一次新闻热搜长图或新闻分享中某条新闻的链接。
         当用户用自然语言询问“刚才热搜图第三条是什么链接”、“把上面第3条新闻链接发我”、“第十二条网址”、“财联社第三条链接”等需求时调用。
-        只负责按序号或标题关键词查链接；不要用它重新生成新闻分享。
-        调用本工具后，必须把工具结果中的链接自然的回复用户。        
+        只负责按序号或标题关键词查链接；不要用它重新生成新闻分享。      
         
 
         Args:
@@ -753,7 +753,6 @@ class DailySharingPlugin(Star):
             event.set_extra("daily_sharing_news_link_used", True)
         except Exception:
             pass
-        logger.info(f"[DailySharing] LLM 工具 news_link 已触发: target={target_uid}, query={lookup_query}, source={source_key or ''}")
         return result
 
     @filter.on_llm_response(priority=-10000)
@@ -948,6 +947,11 @@ class DailySharingPlugin(Star):
 
         # =============== 自动或具体类型生成 ===============
         if arg in ["自动", "auto"]:
+            invalid_args = find_invalid_non_news_args(parts)
+            if invalid_args:
+                yield event.plain_result(f"无效参数: {' '.join(invalid_args)}。非新闻类型仅支持后缀：广播、空间。")
+                return
+
             if self._is_share_busy(specific_target, global_scope=share_global_scope):
                 yield event.plain_result("正如火如荼地准备中，请稍后...")
                 return
@@ -1044,7 +1048,12 @@ class DailySharingPlugin(Star):
                 if not share_global_scope:
                     self._release_idle_share_lock(specific_target)
                 return
-                
+
+            invalid_args = find_invalid_non_news_args(parts)
+            if invalid_args:
+                yield event.plain_result(f"无效参数: {' '.join(invalid_args)}。非新闻类型仅支持后缀：广播、空间。")
+                return
+                 
             if self._is_share_busy(specific_target, global_scope=share_global_scope):
                 yield event.plain_result("正如火如荼地准备中，请稍后...")
                 return

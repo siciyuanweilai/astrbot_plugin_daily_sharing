@@ -2,6 +2,7 @@ import random
 import aiohttp
 import asyncio
 import html
+import json
 import re
 from typing import Optional, List, Dict, Any 
 from astrbot.api import logger
@@ -198,7 +199,7 @@ class NewsService:
                             logger.error("[新闻] API密钥无效或已过期！")
                         return None
                     
-                    data = await resp.json(content_type=None)
+                    data = self._loads_json_payload(await resp.text())
                     parsed = self._parse_response(data, limit=limit)
                     
                     if parsed:
@@ -218,6 +219,26 @@ class NewsService:
         except Exception as e:
             logger.error(f"[新闻] 解析新闻失败: {e}", exc_info=True)
             return None
+
+    def _loads_json_payload(self, text: str) -> Any:
+        """从可能包含调试文本的API响应中解码第一个JSON值"""
+        if not text:
+            raise json.JSONDecodeError("Empty response", "", 0)
+
+        decoder = json.JSONDecoder()
+        clean = text.lstrip("\ufeff \t\r\n")
+
+        try:
+            data, _ = decoder.raw_decode(clean)
+            return data
+        except json.JSONDecodeError as direct_error:
+            for match in re.finditer(r"[\{\[]", clean):
+                try:
+                    data, _ = decoder.raw_decode(clean[match.start():])
+                    return data
+                except json.JSONDecodeError:
+                    continue
+            raise direct_error
 
     def _parse_response(self, data: Any, limit: int = None) -> Optional[List[Dict]]:
         """

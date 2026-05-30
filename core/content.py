@@ -330,12 +330,12 @@ class ContentService:
         
         # 清晨(6-9) -> 早间问候放开头
         if period in [TimePeriod.MORNING]:
-            greeting_constraint = "4. 文案开头必须是自然的早间问候语，例如“早安”“早上好”“早呀”“早哦”；不要固定只用“早安”。"
+            greeting_constraint = "4. 文案开头必须是自然的早间问候语，例如“早安”“早上好”“早呀”“早哦”"
             opening_rule = f"- 早间问候开头：\"{'大家' if is_group else ''}早上好，\" / \"{'大家' if is_group else ''}早安，\" / \"{'大家' if is_group else ''}早呀，\""
             
         # 深夜(22-24) 和 凌晨(0-6) -> 睡前祝福放结尾
         elif period in [TimePeriod.LATE_NIGHT, TimePeriod.DAWN]:
-            greeting_constraint = "4. 文案不得以睡前祝福开头；必须在正文最后、情感标签之前自然收束一句睡前祝福，例如“晚安”“安安”“好梦”“早点睡，做个好梦”；不要固定只用“晚安”。"
+            greeting_constraint = "4. 文案不得以睡前祝福开头；必须在正文最后、情感标签之前自然收束一句睡前祝福，例如“晚安”“安安”“好梦”“早点睡，做个好梦”"
             opening_rule = "- 睡前问候：不要用“晚安/安安/好梦”开头，可从当前状态、困意、被窝、夜色等自然切入，最后再用睡前祝福收束。"
 
         # 上午/下午/傍晚/晚上 -> 自然打招呼
@@ -958,7 +958,9 @@ class ContentService:
                 await self.db.record_topic(target_id, "knowledge", keyword)
             except: pass
             
-            return f"知识类型: {main_cat} - {sub_cat}\n\n{res}"
+            if self.content_lib_conf.get("show_knowledge_type_prefix", True):
+                return f"知识类型: {main_cat} - {sub_cat}\n\n{res}"
+            return res
         return None
 
     async def _gen_rec(self, ctx: dict):
@@ -1094,6 +1096,8 @@ class ContentService:
                 keyword = matches[0] if matches else target_work or res[:10]
                 await self.db.record_topic(target_id, "rec", keyword)
             except: pass
-            return f"推荐类型: {rec_type} - {sub_style}\n\n{res}"
+            if self.content_lib_conf.get("show_rec_type_prefix", True):
+                return f"推荐类型: {rec_type} - {sub_style}\n\n{res}"
+            return res
         return None
         

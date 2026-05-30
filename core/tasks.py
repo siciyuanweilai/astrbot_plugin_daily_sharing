@@ -1684,6 +1684,10 @@ class TaskManager:
                 if news_data:
                     news_src_key = news_data[1]
                     await self.cache_news_snapshot(target_umo, news_data=news_data)
+                else:
+                    source_name = NEWS_SOURCE_MAP.get(news_src_key or "", {}).get("name") or "新闻源"
+                    await event.send(event.plain_result(f"获取【{source_name}】新闻失败，分享已取消。"))
+                    return
                 
                 # 如果在主流程中且配置允许带上新闻图
                 if get_image and not need_image and self.image_conf.get("attach_hot_news_image", True):
@@ -1886,6 +1890,8 @@ class TaskManager:
 
         if not targets:
             logger.warning("[DailySharing] 未配置接收对象，且未指定目标，请在配置页填写群号或QQ号")
+            if event:
+                await event.send(event.plain_result("分享失败：未配置接收对象，也没有指定当前会话目标。"))
             return
 
         # 加载并解析带冒号的独立配置
@@ -1934,6 +1940,18 @@ class TaskManager:
                     if news_data:
                         await self.db.update_state_dict(f"target_{uid}", {"last_news_source": news_data[1]})
                         await self.cache_news_snapshot(uid, news_data=news_data)
+                    else:
+                        source_name = NEWS_SOURCE_MAP.get(current_news_source or "", {}).get("name") or "新闻源"
+                        logger.warning(f"[DailySharing] 获取新闻失败: {source_name} ({current_news_source})")
+                        await self.db.add_sent_history(
+                            target_id=uid,
+                            sharing_type=stype.value,
+                            content=f"获取新闻失败: {source_name}",
+                            success=False
+                        )
+                        if event:
+                            await event.send(event.plain_result(f"获取【{source_name}】新闻失败，分享已取消。"))
+                        return
 
                 hist_data = await self.ctx_service.get_history_data(uid, is_group, event=event)
                 if is_group and "group_info" in hist_data:
@@ -1970,7 +1988,9 @@ class TaskManager:
                         content="生成失败 (LLM无响应)",
                         success=False
                     )
-                    continue
+                    if event:
+                        await event.send(event.plain_result("内容生成失败，请稍后再试。"))
+                    return
                 
                 self.image_service.reset_last_description()
 
@@ -2038,7 +2058,9 @@ class TaskManager:
                         content="发送失败",
                         success=False
                     )
-                    continue
+                    if event:
+                        await event.send(event.plain_result("内容已生成，但发送失败，请查看日志或检查平台连接状态。"))
+                    return
                 
                 # 获取图片描述并写入 AstrBot 聊天上下文
                 img_desc = self.image_service.get_last_description()
@@ -2062,7 +2084,12 @@ class TaskManager:
             except Exception as e:
                 logger.error(f"[DailySharing] 处理 {uid} 时出错: {e}")
                 import traceback
-                logger.error(traceback.format_exc())               
+                logger.error(traceback.format_exc())
+                if event:
+                    await event.send(event.plain_result(f"分享执行出错: {e}"))
+                return
+
+        return
 
     async def execute_qzone_share(self, force_type: SharingType = None, news_source: str = None, event: AstrMessageEvent = None):
         """完全独立的 QQ 空间执行主流程"""
@@ -2103,6 +2130,13 @@ class TaskManager:
                         current_target = str(getattr(event, "unified_msg_origin", "") or "").strip()
                         if current_target:
                             await self.cache_news_snapshot(current_target, news_data=news_data)
+                else:
+                    source_name = NEWS_SOURCE_MAP.get(actual_source or "", {}).get("name") or "新闻源"
+                    logger.warning(f"[DailySharing] QQ空间获取新闻失败: {source_name} ({actual_source})")
+                    await self.db.add_sent_history("qzone_broadcast", "news", f"获取新闻失败: {source_name}", False)
+                    if event:
+                        await event.send(event.plain_result(f"获取【{source_name}】新闻失败，QQ空间分享已取消。"))
+                    return
 
             # 屏蔽历史记录，使用纯净的提示词让LLM写说说
             qzone_life_prompt = self.ctx_service.format_life_context(life_ctx, stype, False, None)
@@ -2220,6 +2254,8 @@ class TaskManager:
                 except Exception as e:
                     logger.error(f"[DailySharing] 同步发送内容到会话失败: {e}")
 
+            return None
+
         except Exception as e:
             logger.error(f"[DailySharing] 生成并分享到QQ空间失败: {e}")
             if event:
@@ -2227,6 +2263,7 @@ class TaskManager:
                     await event.send(event.plain_result(f"生成并分享到QQ空间失败: {e}"))
                 except:
                     pass
+            return
 
     async def _send_message_chain(self, uid, chain: MessageChain, event: AstrMessageEvent = None):
         if self.ctx_service._is_weixin_platform(uid):
