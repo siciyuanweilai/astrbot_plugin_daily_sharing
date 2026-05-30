@@ -770,7 +770,7 @@ class DailySharingPlugin(Star):
             cleaned = self._strip_news_link_reference_tail(original)
             if cleaned != original:
                 resp.completion_text = cleaned
-                logger.info("[DailySharing] 已清理 news_link LLM 回复中的参考链接尾部")
+                logger.debug("[DailySharing] 已清理 news_link LLM 回复中的参考链接尾部")
         except Exception as e:
             logger.warning(f"[DailySharing] 清理 news_link LLM 参考链接失败: {e}")
 
@@ -793,7 +793,7 @@ class DailySharingPlugin(Star):
             cleaned = self._strip_news_link_reference_tail(original)
             if cleaned != original:
                 event.set_result(event.plain_result(cleaned))
-                logger.info("[DailySharing] 已在发送前清理 news_link 参考链接尾部")
+                logger.debug("[DailySharing] 已在发送前清理 news_link 参考链接尾部")
             event.set_extra("daily_sharing_news_link_used", None)
         except Exception as e:
             logger.warning(f"[DailySharing] 发送前清理 news_link 参考链接失败: {e}")
