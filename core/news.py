@@ -379,7 +379,7 @@ class NewsService:
         keyword = keyword.replace("《", "").replace("》", "").replace("【", "").replace("】", "").strip()
         if not keyword: return None
         
-        url = "https://api.nycnm.cn/API/baike.php"
+        url = "https://api.nycnm.cn/api/v2/baike"
         params = {
             "word": keyword,
             "format": "json", 
@@ -432,7 +432,7 @@ class NewsService:
             logger.error("[新闻] 未配置柠柚API密钥")
             return None
             
-        url = f"https://api.nycnm.cn/API/aizixun.php?format=json&apikey={key}"
+        url = f"https://api.nycnm.cn/api/v2/aizixun?format=json&apikey={key}"
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, timeout=10) as resp:
@@ -457,7 +457,7 @@ class NewsService:
         if not key:
             logger.error("[新闻] 未配置柠柚API密钥")
             return None
-        return f"https://api.nycnm.cn/API/60s.php?format=image&apikey={key}"
+        return f"https://api.nycnm.cn/api/v2/60s?format=image&apikey={key}"
 
     def get_ai_news_image_url(self) -> Optional[str]:
         """获取每日AI资讯图片URL"""
@@ -465,5 +465,5 @@ class NewsService:
         if not key:
             logger.error("[新闻] 未配置柠柚API密钥")
             return None
-        return f"https://api.nycnm.cn/API/aizixun.php?format=image&apikey={key}"
+        return f"https://api.nycnm.cn/api/v2/aizixun?format=image&apikey={key}"
         
