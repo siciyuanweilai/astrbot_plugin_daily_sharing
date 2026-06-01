@@ -16,7 +16,6 @@
 *   **新闻失败不再静默兜底**：普通会话、手动触发与 QQ 空间新闻分享在新闻源全部失败时会明确取消，并写入失败历史，避免 LLM 在缺少新闻数据时继续生成无依据内容。
 *   **内容前缀可配置**：新增 `show_knowledge_type_prefix`、`show_rec_type_prefix`，可分别关闭知识和推荐正文前的类型前缀。
 *   **命令参数校验更严格**：非新闻类型现在只接受 `广播`、`空间` 后缀；多余参数会给出“无效参数”提示，避免用户误以为 `/分享 推荐 动漫` 已指定主题。
-*   **回归测试补充**：新增 `test_command_args.py`、`test_content_prefix_switches.py`、`test_news_payload_decoding.py`、`test_task_failure_messages.py`，覆盖本次关键行为。
 
 ### v5.3.5
 **🧹 个人微信压缩图片临时文件清理优化**
