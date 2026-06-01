@@ -1,7 +1,7 @@
 name: astrbot_plugin_daily_sharing
-display_name: 定时主动分享所见所闻
-desc: "Daily Sharing 是为 AstrBot 设计的高级主动交互插件。它打破了单一的图文限制，让 Bot 拥有了“开口说话”的能力，根据时间段、生活状态、聊天记忆和网络热搜，通过带有情绪的语音、文字、配图与视频，向指定的好友或群组分享生活点滴。"
-version: 5.3.6
+display_name: 愿此见闻温柔你的日常
+desc: "在恰好的时刻，循着时间、生活状态、聊天记忆与网络热搜，将一路拾来的所见所闻化作文字、语音、配图或视频，主动分享到指定的私聊或群聊，为平凡日常添一点新鲜与温柔。"
+version: 5.4.0
 author: 四次元未来
 repo: https://github.com/siciyuanweilai/astrbot_plugin_daily_sharing
 support_platforms:

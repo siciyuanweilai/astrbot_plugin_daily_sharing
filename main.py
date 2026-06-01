@@ -133,8 +133,8 @@ class DailySharingPlugin(Star):
                 sender_id = str(event.get_sender_id() or "").strip()
                 if sender_id:
                     keys.append(sender_id)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"[DailySharing] 读取发送者 ID 失败: {e}")
         return list(dict.fromkeys(k for k in keys if k))
 
     def get_contact_alias(self, target_uid: str, event: AstrMessageEvent = None) -> str:
@@ -357,8 +357,8 @@ class DailySharingPlugin(Star):
         try:
             days_limit = self.content_service.dedup_days
             await self.db.clean_expired_data(days_limit)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"[DailySharing] 启动清理过期数据失败: {e}")
 
         if self.config.get("enable_auto_sharing", False):
             has_targets = False
@@ -418,13 +418,14 @@ class DailySharingPlugin(Star):
                 sender_id = str(event.get_sender_id() or "").strip()
                 if sender_id:
                     candidates.add(sender_id)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"[DailySharing] 管理员检查读取发送者 ID 失败: {e}")
 
             cfg = self.context.get_config() or {}
             admins = cfg.get("admins_id", []) or cfg.get("admins", []) or []
             return any(str(admin).strip() in candidates for admin in admins)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[DailySharing] 管理员检查失败: {e}")
             return False
 
     def _target_entry_matches(self, entry, origin: str, real_id: str, extra_candidates=None) -> bool:
@@ -555,8 +556,8 @@ class DailySharingPlugin(Star):
                     for p in cfg.get("provider", []):
                         if p.get("enable", False) and "chat" in p.get("provider_type", "chat"):
                             return p.get("id")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"[DailySharing] 读取默认 LLM Provider 失败: {e}")
             return ""
 
         configured_provider_id = self.llm_conf.get("llm_provider_id", "")
@@ -660,7 +661,7 @@ class DailySharingPlugin(Star):
     ):
         """
         主动分享日常内容、新闻热搜、获取热搜图片等。
-        当用户想要看新闻、热搜、早安晚安、冷知识、心情或推荐时调用此工具。
+        当用户想要看新闻、热搜、早安、晚安、知识、心情或推荐时调用此工具。
         也支持获取"每天60s读世界"或"AI资讯快报"图片。
 
         Args:
@@ -751,8 +752,8 @@ class DailySharingPlugin(Star):
         )
         try:
             event.set_extra("daily_sharing_news_link_used", True)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"[DailySharing] 标记 news_link 状态失败: {e}")
         return result
 
     @filter.on_llm_response(priority=-10000)
@@ -798,6 +799,66 @@ class DailySharingPlugin(Star):
         except Exception as e:
             logger.warning(f"[DailySharing] 发送前清理 news_link 参考链接失败: {e}")
 
+    async def _handle_static_news_image_share(
+        self,
+        event: AstrMessageEvent,
+        *,
+        url: str,
+        display_name: str,
+        broadcast_name: str,
+        history_text: str,
+        current_filename: str,
+        broadcast_filename: str,
+        download_fail_message: str,
+        is_broadcast: bool,
+        is_qzone_target: bool,
+    ):
+        if is_qzone_target:
+            yield event.plain_result(f"正在分享{display_name}到QQ空间...")
+            qzone_plugin = self.ctx_service._find_plugin("qzone")
+            if qzone_plugin and hasattr(qzone_plugin, "service"):
+                try:
+                    await self._safe_publish_qzone(qzone_plugin, text=history_text, images=[url])
+                    yield event.plain_result(f"{display_name}已成功分享到QQ空间！")
+                    await self.db.add_sent_history("qzone_broadcast", "news", f"{history_text}(手动)", True)
+                except Exception as e:
+                    yield event.plain_result(f"QQ空间分享失败: {e}")
+            else:
+                yield event.plain_result("未检测到QQ空间插件！")
+            return
+
+        target_desc = "配置的所有群聊和私聊" if is_broadcast else "当前会话"
+        yield event.plain_result(f"正在向{target_desc}分享{broadcast_name}...")
+        if not is_broadcast:
+            local_path = await self.task_manager._download_image_to_local(url, current_filename)
+            if local_path:
+                yield event.image_result(local_path)
+            else:
+                yield event.plain_result(download_fail_message)
+            return
+
+        targets = self.task_manager.get_broadcast_targets()
+        local_path = await self.task_manager._download_image_to_local(url, broadcast_filename)
+        if not local_path:
+            yield event.plain_result(download_fail_message)
+            return
+
+        success_count = 0
+        fail_count = 0
+        for target in targets:
+            try:
+                prepared_path = await self.task_manager._prepare_image_for_target(target, local_path)
+                await self.task_manager._send_message_chain(
+                    target,
+                    MessageChain().file_image(prepared_path),
+                )
+                success_count += 1
+            except Exception as e:
+                fail_count += 1
+                logger.error(f"[DailySharing] 分享{broadcast_name}到 {target} 失败: {e}")
+            await asyncio.sleep(1)
+        yield event.plain_result(f"{broadcast_name}广播完成：成功 {success_count} 个，失败 {fail_count} 个。")
+
     @filter.command("分享")
     async def handle_share_main(self, event: AstrMessageEvent):
         """
@@ -840,34 +901,19 @@ class DailySharingPlugin(Star):
                 yield event.plain_result("获取60s新闻失败，请检查API Key配置。")
                 return
                 
-            if is_qzone_target:
-                yield event.plain_result("正在分享每天60s读世界到QQ空间...")
-                qzone_plugin = self.ctx_service._find_plugin("qzone")
-                if qzone_plugin and hasattr(qzone_plugin, "service"):
-                    try:
-                        await self._safe_publish_qzone(qzone_plugin, text="【每天60秒读懂世界】", images=[url])
-                        yield event.plain_result("每天60s读世界已成功分享到QQ空间！")
-                        await self.db.add_sent_history("qzone_broadcast", "news", "【每天60秒读懂世界】(手动)", True)
-                    except Exception as e:
-                        yield event.plain_result(f"QQ空间分享失败: {e}")
-                else:
-                    yield event.plain_result("未检测到QQ空间插件！")
-                return
-
-            target_desc = "配置的所有群聊和私聊" if is_broadcast else "当前会话"
-            yield event.plain_result(f"正在向{target_desc}分享60s新闻...")
-            if not is_broadcast:
-                local_path = await self.task_manager._download_image_to_local(url, "manual_60s.png")
-                if local_path:
-                    yield event.image_result(local_path)
-                else:
-                    yield event.plain_result("60s新闻图片下载失败。")
-                return
-
-            targets = self.task_manager.get_broadcast_targets()
-            for target in targets:
-                await self.context.send_message(target, MessageChain().url_image(url))
-                await asyncio.sleep(1)
+            async for res in self._handle_static_news_image_share(
+                event,
+                url=url,
+                display_name="每天60s读世界",
+                broadcast_name="60s新闻",
+                history_text="【每天60秒读懂世界】",
+                current_filename="manual_60s.png",
+                broadcast_filename="manual_60s_broadcast.png",
+                download_fail_message="60s新闻图片下载失败。",
+                is_broadcast=is_broadcast,
+                is_qzone_target=is_qzone_target,
+            ):
+                yield res
             return
 
         # =============== 手动触发AI资讯 ===============
@@ -883,34 +929,19 @@ class DailySharingPlugin(Star):
                 yield event.plain_result("获取AI资讯图片失败，请检查API Key配置。")
                 return
 
-            if is_qzone_target:
-                yield event.plain_result("正在分享AI资讯快报到QQ空间...")
-                qzone_plugin = self.ctx_service._find_plugin("qzone")
-                if qzone_plugin and hasattr(qzone_plugin, "service"):
-                    try:
-                        await self._safe_publish_qzone(qzone_plugin, text="【AI资讯快报】", images=[url])
-                        yield event.plain_result("AI资讯快报已成功分享到QQ空间！")
-                        await self.db.add_sent_history("qzone_broadcast", "news", "【AI资讯快报】(手动)", True)
-                    except Exception as e:
-                        yield event.plain_result(f"QQ空间分享失败: {e}")
-                else:
-                    yield event.plain_result("未检测到QQ空间插件！")
-                return
-
-            target_desc = "配置的所有群聊和私聊" if is_broadcast else "当前会话"
-            yield event.plain_result(f"正在向{target_desc}分享AI资讯...")
-            if not is_broadcast:
-                local_path = await self.task_manager._download_image_to_local(url, "manual_ai_news.png")
-                if local_path:
-                    yield event.image_result(local_path)
-                else:
-                    yield event.plain_result("AI资讯快报图片下载失败。")
-                return
-
-            targets = self.task_manager.get_broadcast_targets()
-            for target in targets:
-                await self.context.send_message(target, MessageChain().url_image(url))
-                await asyncio.sleep(1)
+            async for res in self._handle_static_news_image_share(
+                event,
+                url=url,
+                display_name="AI资讯快报",
+                broadcast_name="AI资讯",
+                history_text="【AI资讯快报】",
+                current_filename="manual_ai_news.png",
+                broadcast_filename="manual_ai_news_broadcast.png",
+                download_fail_message="AI资讯快报图片下载失败。",
+                is_broadcast=is_broadcast,
+                is_qzone_target=is_qzone_target,
+            ):
+                yield res
             return
         
         # =============== 配置命令 ===============
