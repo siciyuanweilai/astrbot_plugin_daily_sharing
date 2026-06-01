@@ -1,4 +1,4 @@
-### v5.5.0
+### v5.4.0
 **🧭 任务系统模块化、早报随机延迟与发送链路修复**
 
 *   **任务系统按职责拆分**：将原本集中在 `core/tasks.py` 的任务逻辑拆分为 `core/tasks/` 包，按 `scheduler`、`targets`、`executor`、`delivery`、`news_cache`、`manager` 等模块组织；`TaskManager` 对外入口保持一致，便于后续维护、测试和定位定时链路问题。
