@@ -1,7 +1,7 @@
 ### v5.4.0
 **🧭 任务系统模块化、早报随机延迟与发送链路修复**
 
-*   **任务系统按职责拆分**：将原本集中在 `core/tasks.py` 的任务逻辑拆分为 `core/tasks/` 包，按 `scheduler`、`targets`、`executor`、`delivery`、`news_cache`、`manager` 等模块组织；`TaskManager` 对外入口保持一致，便于后续维护、测试和定位定时链路问题。
+*   **任务系统按职责拆分**：将原本集中在 `core/tasks.py` 的任务逻辑拆分为 `core/tasks/` 包，按 `scheduler`、`targets`、`executor`、`delivery`、`cache`、`manager` 等模块组织；`TaskManager` 对外入口保持一致，便于后续维护、测试和定位定时链路问题。
 *   **早报定时支持随机延迟**：新增 `briefing_cron_random_delay` 配置项，早报 Cron 触发后可在 `0-N` 分钟内随机发送；默认 `0` 表示准点发送。
 *   **早报延迟任务可恢复**：早报随机延迟会写入 SQLite 的 `briefing.pending_delay_job`；Bot 重启后会恢复尚未执行的早报任务，近期错过的早报会自动补偿执行，过期太久的记录会自动清理。
 *   **关闭任务时清理更完整**：清理待执行延迟任务时同步清理普通分享、QQ空间和早报记录，避免停用自动分享后旧早报任务意外补发。
