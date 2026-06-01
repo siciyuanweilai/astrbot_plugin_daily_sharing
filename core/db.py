@@ -126,13 +126,22 @@ class DatabaseManager:
         conn = self._get_conn()
         cursor = conn.cursor()
         cursor.execute('''
-            SELECT created_at, sharing_type, content 
+            SELECT created_at, target_id, sharing_type, content, success
             FROM sent_history 
             ORDER BY id DESC LIMIT ?
         ''', (limit,))
         rows = cursor.fetchall()
         conn.close()
-        return [{"timestamp": r[0], "type": r[1], "content": r[2]} for r in rows]
+        return [
+            {
+                "timestamp": r[0],
+                "target_id": r[1],
+                "type": r[2],
+                "content": r[3],
+                "success": bool(r[4]),
+            }
+            for r in rows
+        ]
 
     async def get_recent_history(self, limit: int = 5):
         return await self._execute(self._sync_get_recent_history, limit)
@@ -141,14 +150,23 @@ class DatabaseManager:
         conn = self._get_conn()
         cursor = conn.cursor()
         cursor.execute('''
-            SELECT created_at, sharing_type, content 
+            SELECT created_at, target_id, sharing_type, content, success
             FROM sent_history 
             WHERE target_id = ? AND success = 1
             ORDER BY id DESC LIMIT ?
         ''', (str(target_id), limit))
         rows = cursor.fetchall()
         conn.close()
-        return [{"timestamp": r[0], "type": r[1], "content": r[2]} for r in rows]
+        return [
+            {
+                "timestamp": r[0],
+                "target_id": r[1],
+                "type": r[2],
+                "content": r[3],
+                "success": bool(r[4]),
+            }
+            for r in rows
+        ]
 
     async def get_recent_history_by_target(self, target_id: str, limit: int = 3):
         return await self._execute(self._sync_get_recent_history_by_target, target_id, limit)

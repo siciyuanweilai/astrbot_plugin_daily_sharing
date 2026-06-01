@@ -6,6 +6,7 @@ import os
 import re 
 from typing import Optional
 from pathlib import Path
+from datetime import datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from astrbot.api import logger
@@ -23,6 +24,13 @@ from .core.db import DatabaseManager
 from .core.tasks import TaskManager
 from .core.commands import CommandHandler
 from .core.command_args import find_invalid_non_news_args
+
+try:
+    from quart import jsonify as _quart_jsonify
+    from quart import request as _quart_request
+except Exception:
+    _quart_jsonify = None
+    _quart_request = None
 
 class DailySharingPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -94,9 +102,345 @@ class DailySharingPlugin(Star):
         # 核心逻辑解耦器
         self.task_manager = TaskManager(self)
         self.command_handler = CommandHandler(self)
+        self._page_action_seq = 0
+        self._page_action_runs = {}
+        self._register_page_web_apis()
         
         # 启动延迟初始化 Bot 缓存的任务
         self._track_task(self._delayed_init_bots())
+
+    def _register_page_web_apis(self) -> None:
+        routes = (
+            ("page/status", self.page_status, ["GET"], "Daily sharing dashboard status"),
+            ("page/history", self.page_history, ["GET"], "Daily sharing history"),
+            ("page/toggle", self.page_toggle, ["POST"], "Daily sharing toggle"),
+            ("page/run", self.page_run, ["POST"], "Daily sharing manual run"),
+        )
+        for endpoint, handler, methods, desc in routes:
+            self.context.register_web_api(
+                f"/astrbot_plugin_daily_sharing/{endpoint}",
+                handler,
+                methods,
+                desc,
+            )
+
+    async def _page_response(self, payload: dict, status: int = 200):
+        if _quart_jsonify is None:
+            return payload
+        response = _quart_jsonify(payload)
+        response.status_code = status
+        return response
+
+    async def _page_json(self, callback):
+        try:
+            payload = await callback()
+            status = 200
+        except Exception as exc:
+            logger.exception("[DailySharing] dashboard api failed: %s", exc)
+            payload = {
+                "ok": False,
+                "error": {"message": str(exc) or "请求失败"},
+            }
+            status = 200
+        return await self._page_response(payload, status)
+
+    async def _page_query_params(self) -> dict:
+        if _quart_request is None:
+            return {}
+        args = getattr(_quart_request, "args", {}) or {}
+        return {str(key): value for key, value in args.items()}
+
+    async def _page_json_body(self) -> dict:
+        if _quart_request is None:
+            return {}
+        try:
+            data = await _quart_request.get_json(silent=True)
+        except TypeError:
+            data = await _quart_request.get_json()
+        return data if isinstance(data, dict) else {}
+
+    def _page_jobs(self) -> list:
+        jobs = []
+        for job in self.scheduler.get_jobs():
+            next_run_time = getattr(job, "next_run_time", None)
+            jobs.append(
+                {
+                    "id": str(getattr(job, "id", "")),
+                    "name": str(getattr(job, "name", "")),
+                    "trigger": str(getattr(job, "trigger", "")),
+                    "next_run_time": (
+                        next_run_time.isoformat(timespec="seconds")
+                        if next_run_time
+                        else ""
+                    ),
+                }
+            )
+        return sorted(jobs, key=lambda item: item["next_run_time"] or "9999")
+
+    def _page_target_item(self, target_id: str, conf, kind: str) -> dict:
+        cron = None
+        sequence = None
+        if isinstance(conf, dict):
+            cron = conf.get("cron")
+            sequence = conf.get("seq")
+        elif conf:
+            sequence = str(conf)
+        return {
+            "id": str(target_id),
+            "kind": kind,
+            "cron": cron or "",
+            "sequence": sequence or "auto",
+        }
+
+    def _page_targets(self) -> dict:
+        r_groups = self.task_manager._parse_targets_config(
+            self.receiver_conf.get("groups", [])
+        )
+        r_users = self.task_manager._parse_targets_config(
+            self.receiver_conf.get("users", [])
+        )
+        briefing_groups = [
+            self._page_target_item(item, None, "briefing_group")
+            for item in self.extra_shares_conf.get("briefing_groups", [])
+            if str(item or "").strip()
+        ]
+        briefing_users = [
+            self._page_target_item(item, None, "briefing_user")
+            for item in self.extra_shares_conf.get("briefing_users", [])
+            if str(item or "").strip()
+        ]
+        groups = [
+            self._page_target_item(target_id, conf, "group")
+            for target_id, conf in r_groups.items()
+        ]
+        users = [
+            self._page_target_item(target_id, conf, "user")
+            for target_id, conf in r_users.items()
+        ]
+        return {
+            "groups": groups,
+            "users": users,
+            "briefing_groups": briefing_groups,
+            "briefing_users": briefing_users,
+            "summary": {
+                "share_targets": len(groups) + len(users),
+                "briefing_targets": len(briefing_groups) + len(briefing_users),
+            },
+        }
+
+    async def _page_states(self) -> dict:
+        states = {}
+        for key in ("global", "qzone", "briefing"):
+            value = await self.db.get_state(key, {})
+            states[key] = value if isinstance(value, dict) else {}
+        return states
+
+    def _page_recent_actions(self) -> list:
+        runs = sorted(
+            self._page_action_runs.values(),
+            key=lambda item: item.get("started_at", ""),
+            reverse=True,
+        )
+        return runs[:10]
+
+    def _page_prune_actions(self) -> None:
+        runs = sorted(
+            self._page_action_runs.values(),
+            key=lambda item: item.get("started_at", ""),
+            reverse=True,
+        )
+        self._page_action_runs = {item["id"]: item for item in runs[:20]}
+
+    def _page_share_type(self, value):
+        raw = str(value or "auto").strip()
+        if not raw or raw.lower() == "auto" or raw == "自动":
+            return None
+        if raw in CMD_CN_MAP:
+            return CMD_CN_MAP[raw]
+        try:
+            return SharingType(raw)
+        except ValueError as exc:
+            raise RuntimeError(f"不支持的分享类型: {raw}") from exc
+
+    def _page_news_source(self, value: str):
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        if raw in NEWS_SOURCE_MAP:
+            return raw
+        if raw in SOURCE_CN_MAP:
+            return SOURCE_CN_MAP[raw]
+        raise RuntimeError(f"不支持的新闻源: {raw}")
+
+    async def _build_page_status(self) -> dict:
+        period = self.task_manager.get_curr_period()
+        qzone_plugin = self.ctx_service._find_plugin("qzone")
+        jobs = self._page_jobs()
+        targets = self._page_targets()
+        history = await self.db.get_recent_history(limit=8)
+        return {
+            "ok": True,
+            "data": {
+                "enabled": bool(self.config.get("enable_auto_sharing", False)),
+                "terminated": self._is_terminated,
+                "busy": self._is_share_busy(global_scope=True),
+                "scheduler": {
+                    "running": bool(self.scheduler.running),
+                    "job_count": len(jobs),
+                    "jobs": jobs,
+                },
+                "period": {
+                    "key": period.value,
+                    "range": self.task_manager.get_period_range_str(period),
+                },
+                "config": {
+                    "trigger_mode": self.basic_conf.get("trigger_mode", "cron"),
+                    "sharing_cron": self.basic_conf.get("sharing_cron", "twice"),
+                    "sharing_type": self.basic_conf.get("sharing_type", "auto"),
+                    "qzone_enabled": bool(self.qzone_conf.get("enable_qzone", False)),
+                    "qzone_trigger_mode": self.qzone_conf.get(
+                        "qzone_trigger_mode", "cron"
+                    ),
+                    "qzone_cron": self.qzone_conf.get("qzone_cron", "0 20 * * *"),
+                    "briefing_60s": bool(
+                        self.extra_shares_conf.get("enable_60s_news", False)
+                    ),
+                    "briefing_ai": bool(
+                        self.extra_shares_conf.get("enable_ai_news", False)
+                    ),
+                    "briefing_qzone_sync": bool(
+                        self.extra_shares_conf.get("sync_briefing_to_qzone", False)
+                    ),
+                },
+                "targets": targets,
+                "states": await self._page_states(),
+                "qzone": {
+                    "available": bool(qzone_plugin and hasattr(qzone_plugin, "service")),
+                    "configured": bool(self.qzone_conf.get("enable_qzone", False)),
+                },
+                "news_sources": [
+                    {
+                        "key": key,
+                        "name": str(value.get("name") or key),
+                    }
+                    for key, value in NEWS_SOURCE_MAP.items()
+                ],
+                "history": history,
+                "actions": self._page_recent_actions(),
+            },
+        }
+
+    async def page_status(self):
+        return await self._page_json(self._build_page_status)
+
+    async def page_history(self):
+        async def handler():
+            params = await self._page_query_params()
+            try:
+                limit = min(max(int(params.get("limit") or 30), 1), 100)
+            except Exception:
+                limit = 30
+            target_id = str(params.get("target_id") or "").strip()
+            history = (
+                await self.db.get_recent_history_by_target(target_id, limit=limit)
+                if target_id
+                else await self.db.get_recent_history(limit=limit)
+            )
+            return {"ok": True, "data": {"items": history}}
+
+        return await self._page_json(handler)
+
+    async def page_toggle(self):
+        async def handler():
+            body = await self._page_json_body()
+            enable = bool(body.get("enable"))
+            self.config["enable_auto_sharing"] = enable
+            await self._save_config_file()
+            self.scheduler.remove_all_jobs()
+            if enable:
+                self.task_manager.setup_tasks()
+                if self.scheduler.get_jobs() and not self.scheduler.running:
+                    self.scheduler.start()
+            else:
+                await self.task_manager.clear_pending_delay_jobs()
+            status = await self._build_page_status()
+            return {
+                "ok": True,
+                "data": status["data"],
+                "message": "自动分享已启用" if enable else "自动分享已停用",
+            }
+
+        return await self._page_json(handler)
+
+    async def _run_page_action(
+        self,
+        run_id: str,
+        target: str,
+        share_type: str,
+        news_source: str,
+    ) -> None:
+        run = self._page_action_runs.get(run_id)
+        if not run:
+            return
+        try:
+            force_type = self._page_share_type(share_type)
+            source_key = self._page_news_source(news_source)
+            async with self._lock:
+                if target == "qzone":
+                    await self.task_manager.execute_qzone_share(
+                        force_type=force_type,
+                        news_source=source_key,
+                    )
+                elif target == "briefing":
+                    await self.task_manager.execute_briefing_share()
+                else:
+                    await self.task_manager.execute_share(
+                        force_type=force_type,
+                        news_source=source_key,
+                    )
+            run["status"] = "done"
+            run["message"] = "执行完成"
+        except Exception as exc:
+            logger.exception("[DailySharing] dashboard action failed: %s", exc)
+            run["status"] = "error"
+            run["message"] = str(exc) or "执行失败"
+        finally:
+            run["finished_at"] = datetime.now().isoformat(timespec="seconds")
+            self._page_prune_actions()
+
+    async def page_run(self):
+        async def handler():
+            body = await self._page_json_body()
+            target = str(body.get("target") or "broadcast").strip()
+            if target not in {"broadcast", "qzone", "briefing"}:
+                raise RuntimeError(f"不支持的执行目标: {target}")
+            if self._is_share_busy(global_scope=True):
+                raise RuntimeError("已有分享任务正在执行，请稍后再试")
+
+            share_type = str(body.get("share_type") or "auto").strip()
+            news_source = str(body.get("news_source") or "").strip()
+            self._page_share_type(share_type)
+            self._page_news_source(news_source)
+
+            self._page_action_seq += 1
+            run_id = f"dashboard-{self._page_action_seq}"
+            run = {
+                "id": run_id,
+                "target": target,
+                "share_type": share_type or "auto",
+                "news_source": news_source,
+                "status": "running",
+                "message": "执行中",
+                "started_at": datetime.now().isoformat(timespec="seconds"),
+                "finished_at": "",
+            }
+            self._page_action_runs[run_id] = run
+            self._track_task(
+                self._run_page_action(run_id, target, share_type, news_source)
+            )
+            return {"ok": True, "data": {"run": run}, "message": "任务已开始"}
+
+        return await self._page_json(handler)
 
     def _normalize_contact_aliases(self) -> dict:
         raw_aliases = self.contact_aliases
