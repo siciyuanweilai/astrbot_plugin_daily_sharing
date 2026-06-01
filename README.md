@@ -5,7 +5,7 @@
 
 **在恰好的时刻，把 Bot 一路拾来的所见所闻，化作文字、语音、配图或视频，主动分享到私聊、群聊与 QQ 空间，为平凡日常添一点新鲜与温柔。**
 
-`astrbot_plugin_daily_sharing` · AstrBot 主动分享插件
+`astrbot_plugin_daily_sharing` · AstrBot 每日主动分享插件
 
 </div>
 
