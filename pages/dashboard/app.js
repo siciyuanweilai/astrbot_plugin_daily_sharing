@@ -18,6 +18,11 @@ const typeLabels = {
   recommendation: "推荐",
 };
 
+const triggerModeLabels = {
+  cron: "定时触发",
+  random_period: "随机时段",
+};
+
 const periodLabels = {
   dawn: "凌晨",
   morning: "早晨",
@@ -132,9 +137,38 @@ function typeLabel(value) {
   return typeLabels[text(value)] || text(value) || "--";
 }
 
+function triggerModeLabel(value) {
+  return triggerModeLabels[text(value)] || text(value) || "--";
+}
+
 function sourceName(key) {
   const item = state.status?.news_sources?.find((source) => source.key === key);
   return item?.name || key || "自动";
+}
+
+function targetLabel(value) {
+  const raw = text(value).trim();
+  if (!raw) return "全局";
+  const knownLabels = {
+    qzone_broadcast: "QQ 空间",
+    global: "全局分享",
+    briefing: "早报",
+  };
+  if (knownLabels[raw]) return knownLabels[raw];
+
+  const parts = raw.split(":");
+  if (parts.length >= 3) {
+    const platform = parts[0] || "";
+    const messageType = parts[1].toLowerCase();
+    const id = parts.slice(2).join(":");
+    const platformLabel = platform === "weixin_oc" ? "微信" : "";
+    if (messageType.includes("group")) return `${platformLabel}群聊 ${id}`.trim();
+    if (messageType.includes("friend") || messageType.includes("private")) {
+      return `${platformLabel}私聊 ${id}`.trim();
+    }
+  }
+
+  return raw;
 }
 
 function replaceChildren(target, children) {
@@ -187,10 +221,10 @@ function renderConfig() {
   const cfg = state.status?.config || {};
   const qzone = state.status?.qzone || {};
   replaceChildren(el.configList, [
-    configRow("全局触发", `${cfg.trigger_mode || "--"} / ${cfg.sharing_cron || "--"}`),
+    configRow("全局触发", `${triggerModeLabel(cfg.trigger_mode)} / ${cfg.sharing_cron || "--"}`),
     configRow("全局类型", typeLabel(cfg.sharing_type)),
     configRow("QQ 空间", `${cfg.qzone_enabled ? "定时开启" : "定时关闭"} / ${qzone.available ? "插件可用" : "插件不可用"}`),
-    configRow("空间触发", `${cfg.qzone_trigger_mode || "--"} / ${cfg.qzone_cron || "--"}`),
+    configRow("空间触发", `${triggerModeLabel(cfg.qzone_trigger_mode)} / ${cfg.qzone_cron || "--"}`),
     configRow("早报", `${cfg.briefing_60s ? "60s" : ""}${cfg.briefing_60s && cfg.briefing_ai ? " + " : ""}${cfg.briefing_ai ? "AI" : ""}` || "关闭"),
     configRow("早报同步空间", cfg.briefing_qzone_sync ? "开启" : "关闭"),
   ]);
@@ -237,7 +271,8 @@ function renderJobs() {
     const node = document.createElement("article");
     node.className = "job-item";
     const title = document.createElement("strong");
-    title.textContent = job.id || job.name || "job";
+    title.textContent = job.display_name || job.name || job.id || "任务";
+    title.title = job.id || job.name || "";
     const next = document.createElement("span");
     next.className = "item-meta";
     next.textContent = `下次 ${formatDate(job.next_run_time)}`;
@@ -264,7 +299,8 @@ function renderHistory() {
     const content = document.createElement("div");
     content.className = "history-content";
     const strong = document.createElement("strong");
-    strong.textContent = item.target_id || "全局";
+    strong.textContent = targetLabel(item.target_id);
+    strong.title = item.target_id || "";
     const body = document.createElement("div");
     body.className = "item-meta";
     body.textContent = clampContent(item.content);

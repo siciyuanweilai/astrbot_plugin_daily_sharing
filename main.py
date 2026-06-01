@@ -159,14 +159,58 @@ class DailySharingPlugin(Star):
             data = await _quart_request.get_json()
         return data if isinstance(data, dict) else {}
 
+    def _page_job_display_name(self, job_id: str, job_name: str = "") -> str:
+        job_id = str(job_id or "")
+        job_name = str(job_name or "")
+        static_names = {
+            "auto_share": "全局定时分享",
+            "qzone_share": "QQ空间定时分享",
+            "share_briefing": "早报分享",
+            "weixin_temp_cleanup": "微信临时图片清理",
+            "daily_random_scheduler": "每日随机分享排程",
+            "daily_qzone_random_scheduler": "每日QQ空间随机排程",
+            "delayed_auto_share": "全局分享延迟执行",
+            "delayed_qzone_share": "QQ空间延迟执行",
+            "delayed_briefing_share": "早报延迟执行",
+            "resume_auto_share": "恢复全局延迟分享",
+            "resume_qzone_share": "恢复QQ空间延迟分享",
+            "resume_briefing_share": "恢复早报延迟分享",
+        }
+        if job_id in static_names:
+            return static_names[job_id]
+
+        patterns = (
+            (r"^random_share_(\d+)$", "今日随机分享 {}", 1),
+            (r"^qzone_random_share_(\d+)$", "今日QQ空间随机分享 {}", 1),
+            (r"^custom_share_(.+)$", "独立定时分享 {}", 0),
+            (r"^delayed_custom_share_(.+)$", "独立分享延迟执行 {}", 0),
+            (r"^resume_custom_share_(.+)$", "恢复独立延迟分享 {}", 0),
+        )
+        for pattern, label, offset in patterns:
+            match = re.match(pattern, job_id)
+            if not match:
+                continue
+            value = match.group(1)
+            if offset:
+                try:
+                    value = str(int(value) + offset)
+                except ValueError:
+                    pass
+            return label.format(value)
+
+        return job_name or job_id or "任务"
+
     def _page_jobs(self) -> list:
         jobs = []
         for job in self.scheduler.get_jobs():
             next_run_time = getattr(job, "next_run_time", None)
+            job_id = str(getattr(job, "id", ""))
+            job_name = str(getattr(job, "name", ""))
             jobs.append(
                 {
-                    "id": str(getattr(job, "id", "")),
-                    "name": str(getattr(job, "name", "")),
+                    "id": job_id,
+                    "name": job_name,
+                    "display_name": self._page_job_display_name(job_id, job_name),
                     "trigger": str(getattr(job, "trigger", "")),
                     "next_run_time": (
                         next_run_time.isoformat(timespec="seconds")
