@@ -23,7 +23,7 @@ from .core.context import ContextService
 from .core.db import DatabaseManager 
 from .core.tasks import TaskManager
 from .core.commands import CommandHandler
-from .core.command_args import find_invalid_non_news_args
+from .core.args import find_invalid_non_news_args
 
 try:
     from quart import jsonify as _quart_jsonify
@@ -930,7 +930,15 @@ class DailySharingPlugin(Star):
                 return True
         return False
 
-    async def _call_llm_wrapper(self, prompt: str, system_prompt: str = None, timeout: int = 60, max_retries: int = 2, tools: list = None) -> Optional[str]:
+    async def _call_llm_wrapper(
+        self,
+        prompt: str,
+        system_prompt: str = None,
+        timeout: int = 60,
+        max_retries: int = 2,
+        tools: list = None,
+        umo: str = None,
+    ) -> Optional[str]:
         """LLM 调用包装器（支持失败重试与自动降级）"""
         if self._is_terminated: return None
         
@@ -948,37 +956,59 @@ class DailySharingPlugin(Star):
                 logger.debug(f"[DailySharing] 读取默认 LLM Provider 失败: {e}")
             return ""
 
-        configured_provider_id = self.llm_conf.get("llm_provider_id", "")
-        user_provider_id = configured_provider_id
+        async def _get_session_provider(umo_value: str) -> str:
+            if not umo_value:
+                return ""
+            try:
+                getter = getattr(self.context, "get_current_chat_provider_id", None)
+                if callable(getter):
+                    return await getter(umo_value)
+            except Exception as e:
+                logger.debug(f"[DailySharing] 读取会话 LLM Provider 失败: {e}")
+            return ""
+
+        configured_provider_id = str(self.llm_conf.get("llm_provider_id", "") or "").strip()
+        session_provider_id = ""
+        if not configured_provider_id:
+            session_provider_id = await _get_session_provider(umo)
+        primary_provider_id = configured_provider_id or session_provider_id or _get_system_default_provider()
+        current_provider_id = primary_provider_id
 
         # 临时降级只保留一段时间，避免指定模型恢复后仍长期被跳过。
         now = asyncio.get_running_loop().time()
-        if self._temp_fallback_provider:
+        if configured_provider_id and self._temp_fallback_provider:
             if now < self._temp_fallback_until:
-                user_provider_id = self._temp_fallback_provider
+                current_provider_id = self._temp_fallback_provider
             else:
                 logger.info("[DailySharing] LLM 临时降级已过期，恢复尝试指定模型。")
                 self._temp_fallback_provider = None
                 self._temp_fallback_until = 0.0
-                user_provider_id = configured_provider_id
+                current_provider_id = primary_provider_id
 
-        current_provider_id = user_provider_id if user_provider_id else _get_system_default_provider()
-
-        config_timeout = self.llm_conf.get("llm_timeout", 60)
-        actual_timeout = max(timeout, config_timeout)
+        try:
+            config_timeout = int(self.llm_conf.get("llm_timeout", 60))
+        except Exception:
+            config_timeout = 60
+        actual_timeout = max(int(timeout or 60), config_timeout)
+        if tools:
+            logger.debug("[DailySharing] 当前 AstrBot llm_generate 不支持工具名列表，已忽略 tools 参数。")
+        if not current_provider_id:
+            logger.error("[DailySharing] 未找到可用的 LLM Provider，无法生成内容。")
+            return None
 
         for attempt in range(max_retries + 1):
             if self._is_terminated: return None
             
             # 降级逻辑 1
             is_last_attempt = (attempt == max_retries)
-            if is_last_attempt and attempt > 0 and configured_provider_id and current_provider_id == configured_provider_id:
+            if is_last_attempt and attempt > 0 and primary_provider_id and current_provider_id == primary_provider_id:
                 default_pid = _get_system_default_provider()
                 if default_pid and default_pid != current_provider_id:
                     logger.info(f"[DailySharing] 指定 LLM 已达到重试次数，降级使用默认的第一个模型({default_pid})...")
                     current_provider_id = default_pid
-                    self._temp_fallback_provider = default_pid 
-                    self._temp_fallback_until = asyncio.get_running_loop().time() + self._fallback_ttl_seconds
+                    if configured_provider_id:
+                        self._temp_fallback_provider = default_pid
+                        self._temp_fallback_until = asyncio.get_running_loop().time() + self._fallback_ttl_seconds
 
             try:
                 kwargs = {"prompt": prompt}
@@ -986,8 +1016,6 @@ class DailySharingPlugin(Star):
                     kwargs["system_prompt"] = system_prompt
                 if current_provider_id:
                     kwargs["chat_provider_id"] = current_provider_id
-                if tools:
-                    kwargs["func_tool_names"] = tools
 
                 resp = await asyncio.wait_for(
                     self.context.llm_generate(**kwargs),
@@ -1013,13 +1041,14 @@ class DailySharingPlugin(Star):
                 if "401" in err_str:
                     logger.error(f"[DailySharing] LLM 失败。请检查 API Key。")
                     # 降级逻辑 2                    
-                    if attempt < max_retries and configured_provider_id and current_provider_id == configured_provider_id:
+                    if attempt < max_retries and primary_provider_id and current_provider_id == primary_provider_id:
                         default_pid = _get_system_default_provider()
                         if default_pid and default_pid != current_provider_id:
                             logger.info(f"[DailySharing] 遇到 401 错误，降级使用默认的第一个模型({default_pid})...")
                             current_provider_id = default_pid
-                            self._temp_fallback_provider = default_pid 
-                            self._temp_fallback_until = asyncio.get_running_loop().time() + self._fallback_ttl_seconds
+                            if configured_provider_id:
+                                self._temp_fallback_provider = default_pid
+                                self._temp_fallback_until = asyncio.get_running_loop().time() + self._fallback_ttl_seconds
                             await asyncio.sleep(2)
                             continue
                         else:
