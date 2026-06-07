@@ -485,14 +485,14 @@
         "description": "生图提供者",
         "type": "string",
         "default": "gitee_aiimg",
-        "options": ["gitee_aiimg", "generic_plugin", "auto"],
-        "hint": "gitee_aiimg=使用万象画卷专用适配；generic_plugin=按下方配置调用任意插件方法；auto=优先万象画卷，找不到时使用通用插件方法。"
+        "options": ["gitee_aiimg", "generic_plugin", "auto_scan", "auto"],
+        "hint": "gitee_aiimg=使用万象画卷专用适配；generic_plugin=按下方配置调用指定插件方法；auto_scan=自动扫描已加载插件里的常见生图方法；auto=优先万象画卷，其次指定通用方法，最后自动扫描。"
       },
       "generic_image_plugin_name": {
         "description": "通用生图插件名",
         "type": "string",
         "default": "",
-        "hint": "当生图提供者为 generic_plugin 或 auto 降级时使用。填写插件注册名或名称片段，例如 astrbot_plugin_xxx_image。"
+        "hint": "当生图提供者为 generic_plugin 或 auto 降级时使用。填写插件注册名或名称片段，例如 astrbot_plugin_xxx_image。留空时 auto 可改走自动扫描。"
       },
       "generic_image_method_path": {
         "description": "通用生图方法路径",
@@ -510,7 +510,7 @@
         "description": "通用生图额外参数",
         "type": "text",
         "default": "",
-        "hint": "JSON 对象，会和 prompt 参数一起传给目标方法。例如：{\"size\":\"1024x1024\",\"style\":\"photo\"}。"
+        "hint": "JSON 对象，会和 prompt 参数一起传给目标方法，也会用于 auto_scan 候选方法的额外必填参数。例如：{\"size\":\"1024x1024\",\"style\":\"photo\"}。"
       },
       "generic_image_result_field": {
         "description": "通用生图结果字段",

@@ -502,6 +502,10 @@ class ImageService:
             if use_ref_selfie:
                 logger.info("[DailySharing] 当前为通用生图 provider，形象参考图仅在 Gitee provider 下生效")
             return await self.provider_manager.generate_with_generic_plugin(prompt)
+        if provider == "auto_scan":
+            if use_ref_selfie:
+                logger.info("[DailySharing] 当前为自动扫描生图 provider，形象参考图仅在 Gitee provider 下生效")
+            return await self.provider_manager.generate_with_auto_scan(prompt)
 
         return await self._call_gitee_aiimg(prompt, use_ref_selfie=use_ref_selfie)
 

@@ -146,9 +146,70 @@ class ImageProviderTests(unittest.IsolatedAsyncioTestCase):
 
     def test_auto_falls_back_to_generic_plugin(self):
         mod = _load_provider_module()
-        manager = mod.ImageProviderManager(_Context([]), {"image_provider": "auto"})
+        manager = mod.ImageProviderManager(
+            _Context([]),
+            {
+                "image_provider": "auto",
+                "generic_image_plugin_name": "custom_drawer",
+                "generic_image_method_path": "generate",
+            },
+        )
 
         self.assertEqual(manager.select_provider(), "generic_plugin")
+
+    def test_auto_falls_back_to_auto_scan_without_manual_config(self):
+        mod = _load_provider_module()
+        manager = mod.ImageProviderManager(_Context([]), {"image_provider": "auto"})
+
+        self.assertEqual(manager.select_provider(), "auto_scan")
+
+    async def test_auto_scan_discovers_image_like_method(self):
+        mod = _load_provider_module()
+
+        class Plugin:
+            def __init__(self):
+                self.calls = []
+
+            async def generate_image(self, prompt):
+                self.calls.append(prompt)
+                return {"image_url": "https://example.test/scan.png"}
+
+        plugin = Plugin()
+        manager = mod.ImageProviderManager(
+            _Context([_Star("astrbot_plugin_flux_image", plugin)]),
+            {"image_provider": "auto_scan"},
+        )
+
+        self.assertEqual(manager.select_provider(), "auto_scan")
+        result = await manager.generate_with_auto_scan("scan prompt")
+
+        self.assertEqual(result, "https://example.test/scan.png")
+        self.assertEqual(plugin.calls, ["scan prompt"])
+
+    async def test_auto_scan_skips_candidates_with_unfilled_required_args(self):
+        mod = _load_provider_module()
+
+        class BadPlugin:
+            async def generate_image(self, prompt, required_backend):
+                return {"path": "should-not-run.png"}
+
+        class GoodPlugin:
+            async def draw_image(self, prompt):
+                return {"path": "C:/tmp/auto-scan.png"}
+
+        manager = mod.ImageProviderManager(
+            _Context(
+                [
+                    _Star("astrbot_plugin_image_bad", BadPlugin()),
+                    _Star("astrbot_plugin_image_good", GoodPlugin()),
+                ]
+            ),
+            {"image_provider": "auto_scan"},
+        )
+
+        result = await manager.generate_with_auto_scan("prompt")
+
+        self.assertEqual(result, "C:/tmp/auto-scan.png")
 
 
 if __name__ == "__main__":
