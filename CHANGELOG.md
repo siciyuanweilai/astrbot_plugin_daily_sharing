@@ -1,3 +1,10 @@
+### v5.4.6
+**🎨 通用生图插件适配**
+
+*   **新增生图提供者配置**：`image_provider` 支持 `gitee_aiimg`、`generic_plugin` 与 `auto`；默认保持原有万象画卷适配，避免影响现有用户。
+*   **通用插件方法调用**：新增 `generic_image_plugin_name`、`generic_image_method_path`、`generic_image_prompt_arg`、`generic_image_extra_args` 与 `generic_image_result_field`，可将每日分享生成的配图 Prompt 传给其它生图插件暴露的方法，并自动识别常见返回字段中的图片路径或 URL。
+*   **保留万象画卷专属能力**：形象参考图、图生图与视频生成仍走 `astrbot_plugin_gitee_aiimg` 专用路径；切换到通用 provider 时会自动跳过参考图能力，保证普通文生图兼容性。
+
 ### v5.4.5
 **🧠 AstrBot 上下文、会话模型、平台历史与触发反馈修复**
 

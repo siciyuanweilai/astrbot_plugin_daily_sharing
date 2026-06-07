@@ -479,7 +479,44 @@
         "description": "启用生成配图",
         "type": "bool",
         "default": false,
-        "hint": "需要安装 astrbot_plugin_gitee_aiimg 插件才能使用。"
+        "hint": "开启后会按下方“生图提供者”配置调用对应生图插件。默认使用 astrbot_plugin_gitee_aiimg。"
+      },
+      "image_provider": {
+        "description": "生图提供者",
+        "type": "string",
+        "default": "gitee_aiimg",
+        "options": ["gitee_aiimg", "generic_plugin", "auto"],
+        "hint": "gitee_aiimg=使用万象画卷专用适配；generic_plugin=按下方配置调用任意插件方法；auto=优先万象画卷，找不到时使用通用插件方法。"
+      },
+      "generic_image_plugin_name": {
+        "description": "通用生图插件名",
+        "type": "string",
+        "default": "",
+        "hint": "当生图提供者为 generic_plugin 或 auto 降级时使用。填写插件注册名或名称片段，例如 astrbot_plugin_xxx_image。"
+      },
+      "generic_image_method_path": {
+        "description": "通用生图方法路径",
+        "type": "string",
+        "default": "",
+        "hint": "在目标插件实例上的方法路径，例如 draw.generate、service.generate_image、generate。方法会以关键字参数调用。"
+      },
+      "generic_image_prompt_arg": {
+        "description": "Prompt 参数名",
+        "type": "string",
+        "default": "prompt",
+        "hint": "目标生图方法接收提示词的参数名。常见值：prompt、text、query。"
+      },
+      "generic_image_extra_args": {
+        "description": "通用生图额外参数",
+        "type": "text",
+        "default": "",
+        "hint": "JSON 对象，会和 prompt 参数一起传给目标方法。例如：{\"size\":\"1024x1024\",\"style\":\"photo\"}。"
+      },
+      "generic_image_result_field": {
+        "description": "通用生图结果字段",
+        "type": "string",
+        "default": "",
+        "hint": "可选。目标方法返回 dict/object 时从这里取图片路径或 URL，支持点路径，例如 data.url。留空时自动尝试 path、url、image_url 等常见字段。"
       },
       "attach_hot_news_image": {
         "description": "新闻热搜附带长图",

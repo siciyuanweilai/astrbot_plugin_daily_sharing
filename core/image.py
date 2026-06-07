@@ -6,19 +6,19 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List
 from astrbot.api import logger
 from ..config import SharingType, TimePeriod
+from .image_providers import ImageProviderManager
 
 class ImageService:
     def __init__(self, context, config, llm_func):
         self.context = context
         self.config = config
         self.call_llm = llm_func
-        self._aiimg_plugin = None
-        self._aiimg_plugin_not_found = False
         self._last_image_description = None
         
         # 获取配置引用
         self.img_conf = self.config.get("image_conf", {})
         self.llm_conf = self.config.get("llm_conf", {})
+        self.provider_manager = ImageProviderManager(context, self.img_conf)
 
     async def _call_llm(self, *args, target_umo: str = None, **kwargs):
         if target_umo:
@@ -44,14 +44,7 @@ class ImageService:
 
     def _ensure_plugin(self):
         """确保Gitee插件已加载"""
-        if not self._aiimg_plugin and not self._aiimg_plugin_not_found:
-            for p in self.context.get_all_stars():
-                if p.name == "astrbot_plugin_gitee_aiimg":
-                    self._aiimg_plugin = getattr(p, "star_cls", None)
-                    break
-            
-            if not self._aiimg_plugin: 
-                self._aiimg_plugin_not_found = True
+        return self.provider_manager.get_gitee_plugin()
 
     # ==================== 1. 核心逻辑：Agent 提取 ====================
 
@@ -257,8 +250,8 @@ class ImageService:
         logger.info(f"[DailySharing] 最终配图 Prompt: {prompt[:100]}...")
         self._last_image_description = prompt
         
-        # 5. 调用插件生成
-        return await self._call_aiimg(prompt, use_ref_selfie=is_selfie_mode)
+        # 5. 调用所选生图 provider 生成
+        return await self._call_image_provider(prompt, use_ref_selfie=is_selfie_mode)
 
     async def _assemble_final_prompt(self, content: str, sharing_type: SharingType, involves_self: bool, visuals: Dict, target_umo: str = None) -> str:
         prompts = []
@@ -425,11 +418,11 @@ class ImageService:
         """图片转视频"""
         if not self.img_conf.get("enable_ai_video", False): return None
         
-        self._ensure_plugin()
-        if not self._aiimg_plugin: return None
+        aiimg_plugin = self._ensure_plugin()
+        if not aiimg_plugin: return None
         
         # 强制依赖新版 registry 架构
-        if not hasattr(self._aiimg_plugin, "registry"): 
+        if not hasattr(aiimg_plugin, "registry"): 
             logger.warning("[DailySharing] 检测到 GiteeAIImage 插件不支持视频后端注册表，跳过视频生成")
             return None
         
@@ -448,8 +441,8 @@ class ImageService:
             logger.info(f"[DailySharing] 最终视频 Prompt: {video_prompt[:180]}...")
             
             # 获取配置的视频提供商链
-            if hasattr(self._aiimg_plugin, "_get_video_chain"):
-                chain = self._aiimg_plugin._get_video_chain()
+            if hasattr(aiimg_plugin, "_get_video_chain"):
+                chain = aiimg_plugin._get_video_chain()
             else:
                 logger.warning("[DailySharing] 无法获取视频服务配置链")
                 return None
@@ -462,7 +455,7 @@ class ImageService:
             provider_id = chain[0]
             try:
                 # 从注册表中获取后端服务并调用
-                backend = self._aiimg_plugin.registry.get_video_backend(provider_id)
+                backend = aiimg_plugin.registry.get_video_backend(provider_id)
                 return await backend.generate_video_url(prompt=video_prompt, image_bytes=image_bytes)
             except Exception as e:
                 logger.error(f"[DailySharing] 获取视频后端或生成失败: {e}")
@@ -480,7 +473,7 @@ class ImageService:
 
     async def _get_gitee_reference_images(self) -> List[bytes]:
         """从 Gitee 插件中提取参考图"""
-        gitee = self._aiimg_plugin
+        gitee = self.provider_manager.get_gitee_plugin()
         if not gitee: return []
         
         try:
@@ -502,16 +495,26 @@ class ImageService:
         
         return []
 
-    async def _call_aiimg(self, prompt: str, use_ref_selfie: bool = False) -> Optional[str]:
+    async def _call_image_provider(self, prompt: str, use_ref_selfie: bool = False) -> Optional[str]:
+        """调用配置的生图 provider。"""
+        provider = self.provider_manager.select_provider()
+        if provider == "generic_plugin":
+            if use_ref_selfie:
+                logger.info("[DailySharing] 当前为通用生图 provider，形象参考图仅在 Gitee provider 下生效")
+            return await self.provider_manager.generate_with_generic_plugin(prompt)
+
+        return await self._call_gitee_aiimg(prompt, use_ref_selfie=use_ref_selfie)
+
+    async def _call_gitee_aiimg(self, prompt: str, use_ref_selfie: bool = False) -> Optional[str]:
         """调用底层Gitee插件"""
-        self._ensure_plugin()
-        if not self._aiimg_plugin:
+        aiimg_plugin = self._ensure_plugin()
+        if not aiimg_plugin:
             logger.error("[DailySharing] 未找到 astrbot_plugin_gitee_aiimg 插件")
             return None
 
         try:
             # ================= 形象参考图逻辑 =================
-            if use_ref_selfie and hasattr(self._aiimg_plugin, "edit"):
+            if use_ref_selfie and hasattr(aiimg_plugin, "edit"):
                 logger.info("[DailySharing] 正在使用 Gitee 形象参考图生成...")
                 
                 # 1. 获取参考图
@@ -529,7 +532,7 @@ class ImageService:
                     )
                     
                     # 3. 调用 Edit 接口
-                    path_obj = await self._aiimg_plugin.edit.edit(
+                    path_obj = await aiimg_plugin.edit.edit(
                         prompt=final_prompt,
                         images=ref_images,
                         backend=None,
@@ -540,9 +543,9 @@ class ImageService:
                     logger.warning("[DailySharing] 虽开启形象模式，但未找到参考图，降级为文生图")
 
             # ================= 普通文生图逻辑 =================
-            if hasattr(self._aiimg_plugin, "draw"):
-                target_size = self._aiimg_plugin.config.get("size", "1024x1024")
-                path_obj = await self._aiimg_plugin.draw.generate(prompt=prompt, size=target_size)
+            if hasattr(aiimg_plugin, "draw"):
+                target_size = aiimg_plugin.config.get("size", "1024x1024")
+                path_obj = await aiimg_plugin.draw.generate(prompt=prompt, size=target_size)
                 return str(path_obj)
             else:
                  # 这种情况下通常意味着获取到的是 Class 而非 Instance，或者插件异常
