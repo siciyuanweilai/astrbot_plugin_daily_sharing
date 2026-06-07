@@ -1,6 +1,7 @@
 import inspect
 import json
 import os
+from collections.abc import Iterable
 from typing import Any, Optional
 
 from astrbot.api import logger
@@ -30,7 +31,6 @@ class ImageProviderManager:
     IMAGE_METHOD_KEYWORDS = (
         "generate_image",
         "draw_image",
-        "text_to_image",
         "txt2img",
         "t2i",
         "create_image",
@@ -40,6 +40,15 @@ class ImageProviderManager:
         "paint",
     )
     GENERIC_METHOD_NAMES = {"generate", "draw", "paint"}
+    TEXT_RENDER_METHOD_KEYWORDS = (
+        "text_to_image",
+        "text2image",
+        "markdown_to_image",
+        "html_to_image",
+        "render_text",
+        "render_markdown",
+        "render_html",
+    )
     PROMPT_ARG_NAMES = ("prompt", "text", "query", "description", "positive_prompt")
     COMMON_CHILD_ATTRS = (
         "draw",
@@ -240,6 +249,8 @@ class ImageProviderManager:
 
                 for attr in attr_names:
                     attr_lower = attr.lower()
+                    if any(keyword in attr_lower for keyword in self.TEXT_RENDER_METHOD_KEYWORDS):
+                        continue
                     if not any(keyword in attr_lower for keyword in self.IMAGE_METHOD_KEYWORDS):
                         continue
                     method_looks_specific = attr_lower not in self.GENERIC_METHOD_NAMES
@@ -299,6 +310,13 @@ class ImageProviderManager:
         if result is None:
             return None
 
+        if isinstance(result, tuple):
+            for item in result:
+                image_ref = self._extract_result(item)
+                if image_ref:
+                    return image_ref
+            return None
+
         result_field = str(self.image_conf.get("generic_image_result_field", "") or "").strip()
         if result_field:
             current = result
@@ -318,14 +336,33 @@ class ImageProviderManager:
         if isinstance(result, (str, os.PathLike)):
             return str(result)
         if isinstance(result, dict):
-            for key in ("path", "file", "file_path", "image_path", "url", "image_url", "result"):
+            for key in (
+                "path",
+                "file",
+                "file_path",
+                "image_path",
+                "url",
+                "image_url",
+                "local_path",
+                "output",
+                "outputs",
+                "result",
+                "data",
+            ):
                 value = result.get(key)
-                if value:
-                    return str(value)
-        for attr in ("path", "file", "file_path", "image_path", "url", "image_url"):
+                image_ref = self._extract_result(value)
+                if image_ref:
+                    return image_ref
+        if isinstance(result, Iterable) and not isinstance(result, (str, bytes, bytearray, dict)):
+            for item in result:
+                image_ref = self._extract_result(item)
+                if image_ref:
+                    return image_ref
+        for attr in ("path", "file", "file_path", "image_path", "url", "image_url", "local_path", "output"):
             value = getattr(result, attr, None)
-            if value:
-                return str(value)
+            image_ref = self._extract_result(value)
+            if image_ref:
+                return image_ref
         return None
 
     async def generate_with_generic_plugin(self, prompt: str) -> Optional[str]:

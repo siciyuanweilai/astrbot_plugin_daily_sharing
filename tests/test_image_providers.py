@@ -211,6 +211,30 @@ class ImageProviderTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, "C:/tmp/auto-scan.png")
 
+    async def test_auto_scan_ignores_text_renderers(self):
+        mod = _load_provider_module()
+
+        class TextRenderer:
+            async def text_to_image(self, text):
+                return {"path": "rendered-text-card.png"}
+
+        manager = mod.ImageProviderManager(
+            _Context([_Star("astrbot_plugin_aiimg_enhanced", TextRenderer())]),
+            {"image_provider": "auto_scan"},
+        )
+
+        result = await manager.generate_with_auto_scan("prompt")
+
+        self.assertIsNone(result)
+
+    def test_extract_result_accepts_nested_tuple_and_path(self):
+        mod = _load_provider_module()
+        manager = mod.ImageProviderManager(_Context([]), {})
+
+        result = manager._extract_result((None, {"data": {"path": Path("C:/tmp/generated.png")}}))
+
+        self.assertEqual(Path(result), Path("C:/tmp/generated.png"))
+
 
 if __name__ == "__main__":
     unittest.main()
