@@ -55,6 +55,57 @@ def _load_db_module():
 
 
 class DashboardDbMetricsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_existing_sent_history_table_gets_new_metadata_columns(self):
+        mod = _load_db_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            conn = sqlite3.connect(data_dir / "data.db")
+            conn.execute(
+                """
+                CREATE TABLE sent_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    target_id TEXT,
+                    sharing_type TEXT,
+                    content TEXT,
+                    success INTEGER,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO sent_history (
+                    target_id, sharing_type, content, success, created_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("group-legacy", "mood", "legacy row", 1, "2026-06-10 19:00:00"),
+            )
+            conn.commit()
+            conn.close()
+
+            db = mod.DatabaseManager(data_dir)
+
+            recent = await db.get_recent_history(limit=5)
+            dynamics = await db.get_recent_dynamics(limit=5)
+            await db.add_sent_history(
+                "group-legacy",
+                "news",
+                "new failed row",
+                False,
+                error_reason="send failed",
+                media_type="image",
+                media_path="/tmp/share.png",
+            )
+            failures = await db.get_recent_failures(limit=5)
+
+            self.assertEqual(recent[0]["content"], "legacy row")
+            self.assertEqual(recent[0]["error_reason"], "")
+            self.assertEqual(recent[0]["media_type"], "")
+            self.assertEqual(dynamics[0]["content"], "legacy row")
+            self.assertEqual(failures[0]["error_reason"], "send failed")
+            self.assertEqual(failures[0]["media_path"], "/tmp/share.png")
+
     async def test_history_metadata_failures_media_and_stats(self):
         mod = _load_db_module()
         with tempfile.TemporaryDirectory() as tmp:

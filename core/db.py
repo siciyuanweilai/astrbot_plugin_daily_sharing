@@ -44,7 +44,8 @@ class DatabaseManager(
             )
             """
         )
-        self._ensure_column(cursor, "sent_history", "source_type", "TEXT")
+        for column in ("error_reason", "media_type", "media_url", "media_path", "source_type"):
+            self._ensure_column(cursor, "sent_history", column, "TEXT")
 
         cursor.execute(
             """
