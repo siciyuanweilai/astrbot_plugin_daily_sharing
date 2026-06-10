@@ -4,6 +4,7 @@
   border: 0;
   background: transparent;
   box-shadow: none;
+  backdrop-filter: none;
 }
 
 .settings-form {
@@ -17,6 +18,7 @@
   max-width: none;
   margin: 0;
   padding-bottom: 20px;
+  background: transparent;
 }
 
 .settings-section {
@@ -40,7 +42,9 @@
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(255, 250, 253, 0.88)),
     var(--section-soft);
-  box-shadow: 0 10px 28px rgba(207, 109, 151, 0.09);
+  box-shadow:
+    0 8px 18px rgba(207, 109, 151, 0.055),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
 }
 
 .settings-section::before {
@@ -89,7 +93,7 @@
 .settings-section.active {
   border-color: var(--section-ring);
   box-shadow:
-    0 14px 34px rgba(207, 109, 151, 0.12),
+    0 10px 22px rgba(207, 109, 151, 0.075),
     0 0 0 1px rgba(255, 255, 255, 0.72) inset;
 }
 
