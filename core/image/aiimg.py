@@ -28,17 +28,30 @@ class ImageAiimgMixin:
         
         return []
 
-    async def _call_image_provider(self, prompt: str, use_ref_selfie: bool = False) -> Optional[str]:
+    async def _call_image_provider(
+        self,
+        prompt: str,
+        use_ref_selfie: bool = False,
+        target_umo: str = None,
+    ) -> Optional[str]:
         """调用配置的生图 provider。"""
         provider = self.provider_manager.select_provider()
         if provider == "generic_plugin":
             if use_ref_selfie:
                 logger.info("[每日分享] 当前为通用生图 provider，尝试使用通用改图/参考图方法")
-            return await self.provider_manager.generate_with_generic_plugin(prompt, use_ref_selfie=use_ref_selfie)
+            return await self.provider_manager.generate_with_generic_plugin(
+                prompt,
+                use_ref_selfie=use_ref_selfie,
+                target_umo=target_umo or "",
+            )
         if provider == "auto_scan":
             if use_ref_selfie:
                 logger.info("[每日分享] 当前为自动扫描生图 provider，优先尝试改图/自拍方法")
-            return await self.provider_manager.generate_with_auto_scan(prompt, use_ref_selfie=use_ref_selfie)
+            return await self.provider_manager.generate_with_auto_scan(
+                prompt,
+                use_ref_selfie=use_ref_selfie,
+                target_umo=target_umo or "",
+            )
 
         return await self._call_aiimg(prompt, use_ref_selfie=use_ref_selfie)
 

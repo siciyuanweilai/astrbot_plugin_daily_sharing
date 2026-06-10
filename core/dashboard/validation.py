@@ -171,10 +171,10 @@ class DashboardConfigValidationMixin:
             if not normalized:
                 continue
             if ":" not in normalized:
-                raise RuntimeError("用户称呼映射格式应为 UID/Session ID:昵称")
+                continue
             key, alias = [part.strip() for part in normalized.split(":", 1)]
             if not key or not alias:
-                raise RuntimeError("用户称呼映射格式应为 UID/Session ID:昵称")
+                continue
             result.append(f"{key}:{alias}")
         return result
 

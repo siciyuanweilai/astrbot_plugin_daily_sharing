@@ -44,10 +44,35 @@ class ImageProviderManager:
         "i2i",
         "generate_selfie",
         "selfie",
+        "take_selfie",
+        "selfie_image",
+        "generate_portrait",
+        "portrait",
+        "persona_image",
+        "persona",
         "generate_with_ref",
         "generate_with_reference",
         "draw_with_ref",
+        "reference_image",
+        "with_reference",
         "edit",
+    )
+    IMAGE_SELFIE_PRIORITY_KEYWORDS = (
+        "selfie",
+        "persona",
+        "portrait",
+        "reference",
+        "with_ref",
+        "with_reference",
+    )
+    IMAGE_EDIT_CHILD_ATTRS = (
+        "selfie",
+        "selfies",
+        "portrait",
+        "persona",
+        "personas",
+        "ref",
+        "refs",
     )
     VIDEO_PLUGIN_KEYWORDS = (
         "video",
@@ -109,7 +134,8 @@ class ImageProviderManager:
     VIDEO_PROMPT_ARG_NAMES = ("prompt", "video_prompt", "description", "text")
     TTS_TEXT_ARG_NAMES = ("text", "content", "prompt", "sentence")
     TTS_EMOTION_ARG_NAMES = ("emotion", "target_emotion", "style", "mood")
-    TTS_SESSION_ARG_NAMES = ("session", "session_id", "target_umo", "umo")
+    SESSION_ARG_NAMES = ("session", "session_id", "target_umo", "umo")
+    TTS_SESSION_ARG_NAMES = SESSION_ARG_NAMES
     COMMON_CHILD_ATTRS = (
         "draw",
         "edit",
@@ -372,6 +398,8 @@ class ImageProviderManager:
         generic_method_names: set[str],
         *,
         require_prompt: bool = True,
+        extra_child_attrs: tuple[str, ...] = (),
+        allow_selfie_child_generate: bool = False,
     ):
         seen = set()
         for star in self._iter_stars():
@@ -384,7 +412,7 @@ class ImageProviderManager:
             plugin_looks_media = any(keyword in plugin_text for keyword in plugin_keywords)
 
             roots = [("", plugin)]
-            for attr in self.COMMON_CHILD_ATTRS:
+            for attr in self.COMMON_CHILD_ATTRS + extra_child_attrs:
                 try:
                     child = getattr(plugin, attr, None)
                 except Exception:
@@ -405,7 +433,14 @@ class ImageProviderManager:
                     attr_lower = attr.lower()
                     if any(keyword in attr_lower for keyword in self.TEXT_RENDER_METHOD_KEYWORDS):
                         continue
-                    if not any(keyword in attr_lower for keyword in method_keywords):
+                    method_matches = any(keyword in attr_lower for keyword in method_keywords)
+                    selfie_root_matches = (
+                        allow_selfie_child_generate
+                        and
+                        any(keyword in prefix_text for keyword in self.IMAGE_SELFIE_PRIORITY_KEYWORDS)
+                        and attr_lower in {"generate", "draw", "create", "make", "process"}
+                    )
+                    if not (method_matches or selfie_root_matches):
                         continue
                     method_looks_specific = attr_lower not in generic_method_names
                     if not (method_looks_specific or plugin_looks_media or root_looks_media):
@@ -436,6 +471,8 @@ class ImageProviderManager:
                         score += 10
                     if method_looks_specific:
                         score += 5
+                    if any(keyword in attr_lower or keyword in prefix_text for keyword in self.IMAGE_SELFIE_PRIORITY_KEYWORDS):
+                        score += 15
 
                     yield {
                         "score": score,
@@ -457,6 +494,8 @@ class ImageProviderManager:
             self.IMAGE_EDIT_METHOD_KEYWORDS,
             self.IMAGE_PLUGIN_KEYWORDS,
             {"edit", "selfie"},
+            extra_child_attrs=self.IMAGE_EDIT_CHILD_ATTRS,
+            allow_selfie_child_generate=True,
         )
 
     def _iter_video_candidate_methods(self):
@@ -710,7 +749,62 @@ class ImageProviderManager:
         logger.error(f"[DailySharing] Auto scan found {label} candidates, but all calls failed")
         return None
 
-    async def generate_with_generic_plugin(self, prompt: str, use_ref_selfie: bool = False) -> Optional[str]:
+    async def _try_auto_image_edit_candidates(
+        self,
+        candidates: list[dict],
+        *,
+        prompt: str,
+        target_umo: str = "",
+    ) -> Optional[str]:
+        if not candidates:
+            logger.warning("[DailySharing] Auto scan found no usable image selfie/reference method")
+            return None
+
+        extra_args = self._read_json_args("generic_image_edit_extra_args", "image selfie/reference extra args")
+        for candidate in candidates:
+            plugin_name = self._star_display_name(candidate["star"])
+            method_path = candidate["method_path"]
+            plugin = getattr(candidate["star"], "star_cls", None)
+            refs = await self._get_plugin_reference_images(plugin)
+            kwargs = self._build_supported_kwargs(
+                candidate["method"],
+                extra_args,
+                [
+                    (self.PROMPT_ARG_NAMES, prompt),
+                    (self.IMAGE_ARG_NAMES, refs or None),
+                    (self.IMAGE_PATH_ARG_NAMES, refs[0] if refs else None),
+                    (self.SESSION_ARG_NAMES, target_umo or None),
+                ],
+            )
+            if kwargs is None:
+                logger.debug(f"[DailySharing] Auto scan image selfie/reference required args missing: {plugin_name}.{method_path}")
+                continue
+            try:
+                logger.info(f"[DailySharing] Auto scan trying image selfie/reference: {plugin_name}.{method_path}")
+                result = await self._maybe_await(candidate["method"](**kwargs))
+                media_ref = self._extract_result(
+                    result,
+                    result_field=str(self.image_conf.get("generic_image_result_field", "") or "").strip(),
+                    result_keys=self.RESULT_FIELDS,
+                )
+                if media_ref:
+                    logger.info(f"[DailySharing] Auto scan image selfie/reference succeeded: {plugin_name}.{method_path}")
+                    return media_ref
+                logger.debug(f"[DailySharing] Auto scan image selfie/reference returned no media: {plugin_name}.{method_path}")
+            except TypeError as exc:
+                logger.debug(f"[DailySharing] Auto scan image selfie/reference argument mismatch: {plugin_name}.{method_path}: {exc}")
+            except Exception as exc:
+                logger.warning(f"[DailySharing] Auto scan image selfie/reference failed: {plugin_name}.{method_path}: {exc}")
+
+        logger.error("[DailySharing] Auto scan found image selfie/reference candidates, but all calls failed")
+        return None
+
+    async def generate_with_generic_plugin(
+        self,
+        prompt: str,
+        use_ref_selfie: bool = False,
+        target_umo: str = "",
+    ) -> Optional[str]:
         if use_ref_selfie and self.image_conf.get("generic_image_edit_method_path"):
             refs = []
             plugin_name = str(self.image_conf.get("generic_image_plugin_name", "") or "").strip()
@@ -729,12 +823,17 @@ class ImageProviderManager:
                     ((prompt_arg,), prompt),
                     (self.PROMPT_ARG_NAMES, prompt),
                     (self.IMAGE_ARG_NAMES, refs or None),
+                    (self.IMAGE_PATH_ARG_NAMES, refs[0] if refs else None),
+                    (self.SESSION_ARG_NAMES, target_umo or None),
                 ],
                 extra_args_key="generic_image_edit_extra_args",
                 result_field_key="generic_image_result_field",
                 result_keys=self.RESULT_FIELDS,
                 label="generic image edit",
             )
+        if use_ref_selfie:
+            logger.warning("[DailySharing] Generic image provider is in selfie/reference mode but no edit method is configured")
+            return None
 
         plugin_name = str(self.image_conf.get("generic_image_plugin_name", "") or "").strip()
         method_path = str(self.image_conf.get("generic_image_method_path", "") or "").strip()
@@ -776,25 +875,18 @@ class ImageProviderManager:
             logger.error(f"[DailySharing] Generic image provider failed: {exc}")
             return None
 
-    async def generate_with_auto_scan(self, prompt: str, use_ref_selfie: bool = False) -> Optional[str]:
+    async def generate_with_auto_scan(
+        self,
+        prompt: str,
+        use_ref_selfie: bool = False,
+        target_umo: str = "",
+    ) -> Optional[str]:
         if use_ref_selfie:
-            edit_candidates = self.discover_image_edit_methods()
-            for candidate in edit_candidates:
-                plugin = getattr(candidate["star"], "star_cls", None)
-                refs = await self._get_plugin_reference_images(plugin)
-                media_ref = await self._try_auto_candidates(
-                    [candidate],
-                    values=[
-                        (self.PROMPT_ARG_NAMES, prompt),
-                        (self.IMAGE_ARG_NAMES, refs or None),
-                    ],
-                    extra_args_key="generic_image_edit_extra_args",
-                    result_field_key="generic_image_result_field",
-                    result_keys=self.RESULT_FIELDS,
-                    label="image edit generation",
-                )
-                if media_ref:
-                    return media_ref
+            return await self._try_auto_image_edit_candidates(
+                self.discover_image_edit_methods(),
+                prompt=prompt,
+                target_umo=target_umo,
+            )
 
         candidates = self.discover_image_methods()
         if not candidates:

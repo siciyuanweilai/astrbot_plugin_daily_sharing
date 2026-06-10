@@ -106,7 +106,11 @@ class ImageService(ImageVisualMixin, ImageVideoMixin, ImageAiimgMixin):
         self._last_image_description = prompt
         
         # 5. 调用所选 provider 生成
-        return await self._call_image_provider(prompt, use_ref_selfie=is_selfie_mode)
+        return await self._call_image_provider(
+            prompt,
+            use_ref_selfie=is_selfie_mode,
+            target_umo=target_umo,
+        )
 
     def get_last_description(self) -> Optional[str]:
         return self._last_image_description

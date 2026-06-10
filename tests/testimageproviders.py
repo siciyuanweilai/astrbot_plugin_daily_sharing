@@ -176,6 +176,123 @@ class ImageProviderManagerTests(unittest.TestCase):
         self.assertEqual(result, "/tmp/auto-selfie.png")
         self.assertEqual(calls, [("edit_image", "selfie prompt")])
 
+    def test_auto_scan_selfie_mode_passes_session_to_selfie_tool(self):
+        providers = _load_providers_module()
+        calls = []
+
+        class Plugin:
+            def generate_selfie(self, prompt, session):
+                calls.append(("generate_selfie", prompt, session))
+                return "/tmp/session-selfie.png"
+
+            def draw_image(self, prompt):
+                calls.append(("draw_image", prompt))
+                return "/tmp/auto-draw.png"
+
+        manager = providers.ImageProviderManager(
+            _Context([_Star("plugin_persona_image_tools", Plugin())]),
+            {"image_provider": "auto_scan"},
+        )
+
+        result = asyncio.run(
+            manager.generate_with_auto_scan(
+                "selfie prompt",
+                use_ref_selfie=True,
+                target_umo="FriendMessage:123",
+            )
+        )
+
+        self.assertEqual(result, "/tmp/session-selfie.png")
+        self.assertEqual(calls, [("generate_selfie", "selfie prompt", "FriendMessage:123")])
+
+    def test_auto_scan_finds_generate_method_under_selfie_child(self):
+        providers = _load_providers_module()
+        calls = []
+
+        class SelfieService:
+            def generate(self, prompt, target_umo):
+                calls.append(("selfie.generate", prompt, target_umo))
+                return "/tmp/child-selfie.png"
+
+        class DrawService:
+            def generate(self, prompt):
+                calls.append(("draw.generate", prompt))
+                return "/tmp/draw.png"
+
+        class Plugin:
+            selfie = SelfieService()
+            draw = DrawService()
+
+        manager = providers.ImageProviderManager(
+            _Context([_Star("plugin_image_tools", Plugin())]),
+            {"image_provider": "auto_scan"},
+        )
+
+        result = asyncio.run(
+            manager.generate_with_auto_scan(
+                "selfie prompt",
+                use_ref_selfie=True,
+                target_umo="FriendMessage:456",
+            )
+        )
+
+        self.assertEqual(result, "/tmp/child-selfie.png")
+        self.assertEqual(calls, [("selfie.generate", "selfie prompt", "FriendMessage:456")])
+
+    def test_auto_scan_normal_mode_ignores_selfie_child_generate(self):
+        providers = _load_providers_module()
+        calls = []
+
+        class SelfieService:
+            def generate(self, prompt):
+                calls.append(("selfie.generate", prompt))
+                return "/tmp/selfie.png"
+
+        class DrawService:
+            def generate(self, prompt):
+                calls.append(("draw.generate", prompt))
+                return "/tmp/draw.png"
+
+        class Plugin:
+            selfie = SelfieService()
+            draw = DrawService()
+
+        manager = providers.ImageProviderManager(
+            _Context([_Star("plugin_image_tools", Plugin())]),
+            {"image_provider": "auto_scan"},
+        )
+
+        result = asyncio.run(manager.generate_with_auto_scan("normal prompt"))
+
+        self.assertEqual(result, "/tmp/draw.png")
+        self.assertEqual(calls, [("draw.generate", "normal prompt")])
+
+    def test_generic_selfie_mode_without_edit_method_does_not_fallback_to_draw(self):
+        providers = _load_providers_module()
+        calls = []
+
+        class DrawService:
+            def generate(self, prompt):
+                calls.append(("draw.generate", prompt))
+                return "/tmp/draw.png"
+
+        class Plugin:
+            draw = DrawService()
+
+        manager = providers.ImageProviderManager(
+            _Context([_Star("custom_image_plugin", Plugin())]),
+            {
+                "image_provider": "generic_plugin",
+                "generic_image_plugin_name": "custom_image",
+                "generic_image_method_path": "draw.generate",
+            },
+        )
+
+        result = asyncio.run(manager.generate_with_generic_plugin("selfie prompt", use_ref_selfie=True))
+
+        self.assertIsNone(result)
+        self.assertEqual(calls, [])
+
     def test_auto_scan_video_uses_prompt_and_image_path(self):
         providers = _load_providers_module()
         calls = []
