@@ -153,6 +153,39 @@ class ImageProviderManagerTests(unittest.TestCase):
         self.assertEqual(result, "/tmp/selfie.png")
         self.assertEqual(calls, [("selfie prompt", [b"bytes:/tmp/ref.png"])])
 
+    def test_image_edit_uses_active_persona_reference_images(self):
+        providers = _load_providers_module()
+        calls = []
+
+        class EditService:
+            async def edit(self, prompt, images):
+                calls.append((prompt, images))
+                return {"image_path": "/tmp/persona-selfie.png"}
+
+        class PersonaManager:
+            def get_active_ref_paths(self):
+                return ["/tmp/persona-ref.png"]
+
+        class Plugin:
+            edit = EditService()
+            persona_mgr = PersonaManager()
+
+            def _get_config_selfie_reference_paths(self):
+                return ["/tmp/webui-ref.png"]
+
+            async def _read_paths_bytes(self, paths):
+                return [f"bytes:{path}".encode() for path in paths]
+
+        manager = providers.ImageProviderManager(
+            _Context([_Star("astrbot_plugin_aiimg_enhanced", Plugin())]),
+            {"image_provider": "auto_scan"},
+        )
+
+        result = asyncio.run(manager.generate_with_auto_scan("selfie prompt", use_ref_selfie=True))
+
+        self.assertEqual(result, "/tmp/persona-selfie.png")
+        self.assertEqual(calls, [("selfie prompt", [b"bytes:/tmp/persona-ref.png"])])
+
     def test_auto_scan_prefers_edit_method_for_selfie_mode(self):
         providers = _load_providers_module()
         calls = []

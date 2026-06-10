@@ -632,6 +632,15 @@ class ImageProviderManager:
             return []
         ref_keys = self._split_config_list("generic_image_ref_keys", ("bot_selfie", "selfie", "default"))
         try:
+            persona_mgr = getattr(plugin, "persona_mgr", None)
+            active_ref_getter = getattr(persona_mgr, "get_active_ref_paths", None)
+            if callable(active_ref_getter):
+                ref_paths = await self._maybe_await(active_ref_getter())
+                if ref_paths and hasattr(plugin, "_read_paths_bytes"):
+                    return await self._maybe_await(plugin._read_paths_bytes(ref_paths))
+                if ref_paths:
+                    return list(ref_paths)
+
             if hasattr(plugin, "_get_config_selfie_reference_paths") and hasattr(plugin, "_read_paths_bytes"):
                 ref_paths = plugin._get_config_selfie_reference_paths()
                 if ref_paths:
