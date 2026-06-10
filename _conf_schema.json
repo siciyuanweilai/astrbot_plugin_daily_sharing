@@ -41,7 +41,7 @@
       "type": "string"
     },
     "default": [],
-    "hint": "可选配置，用于覆盖或补充用户称呼。QQ 私聊会优先通过接口获取备注、昵称；个人微信 weixin_oc 无法从平台接口稳定获取用户昵称，但私聊称呼会优先使用人格设定中的用户称呼。仅当生活日程/记忆里常出现另一个别名时，才需要在这里补充识别名。每行格式：UID/Session ID:昵称。例如：o2xxxx@im.wechat:用户称呼。也可在当前会话发送 /分享 昵称 用户称呼 自动写入。"
+    "hint": "可选配置，用于覆盖或补充用户称呼。QQ 私聊会优先通过接口获取备注、昵称；个人微信 weixin_oc 无法从平台接口稳定获取用户昵称，但私聊称呼会优先使用人格设定中的用户称呼。仅当生活日程/记忆里常出现另一个别名时，才需要在这里补充识别名。每行一个映射，格式：UID/Session ID:昵称；不要用逗号分隔多条。例如：o2xxxx@im.wechat:用户称呼。也可在当前会话发送 /分享 昵称 用户称呼 自动写入。"
   },
   "content_library": {
     "description": "📚 内容库自定义",
@@ -51,7 +51,7 @@
       "knowledge_cats": {
         "title": "知识分类库",
         "description": "定义知识分享的大类和子话题",
-        "hint": "格式：[分类名]: [标签1, 标签2]。例如：生活技巧: 收纳, 烹饪",        
+        "hint": "每行一个大类，格式：[分类名]: [标签1, 标签2]。冒号前是大类，冒号后用逗号分隔子类标签；不要用逗号分隔多个大类。例如：生活技巧: 收纳, 烹饪",        
         "type": "list",
         "items": {
           "type": "text"
@@ -79,7 +79,7 @@
       "rec_cats": {
         "title": "推荐分类库",
         "description": "定义推荐分享的大类和子话题",
-        "hint": "格式：[分类名]: [标签1, 标签2]。例如：书籍: 科幻, 悬疑",
+        "hint": "每行一个大类，格式：[分类名]: [标签1, 标签2]。冒号前是大类，冒号后用逗号分隔子类标签；不要用逗号分隔多个大类。例如：书籍: 科幻, 悬疑",
         "type": "list",
         "items": {
           "type": "text"
@@ -185,7 +185,7 @@
           "type": "string"
         },
         "default": ["08:00-10:00", "19:00-21:00"],
-        "hint": "仅在 random_period 模式下生效。格式：HH:MM-HH:MM。每天会在这些时间段内随机选取一个时间点分享。"
+        "hint": "仅在 random_period 模式下生效。格式：HH:MM-HH:MM。可一行一个，也可用中文或英文逗号分隔。每天会在这些时间段内随机选取一个时间点分享。"
       },
       "sharing_cron": {
         "description": "定时分享时间",
@@ -214,7 +214,18 @@
             "max": 365,
             "step": 1
         },        
-        "hint": "用于【知识】和【推荐】类型。记住最近N天内分享过的主题，避免重复分享相同的内容。同时早于此天数的日志也会被自动清理。"
+        "hint": "用于【知识】和【推荐】类型。记住最近N天内分享过的主题，避免重复分享相同的内容。早于此天数的话题去重记录会被自动清理。"
+      },
+      "dashboard_dynamic_days": {
+        "description": "仪表盘动态显示天数",
+        "type": "int",
+        "default": 60,
+        "slider": {
+            "min": 0,
+            "max": 365,
+            "step": 1
+        },
+        "hint": "仅影响仪表盘顶部动态、媒体统计和动态列表的显示范围。设为 0 表示显示全部。"
       },
       "sharing_type": {
         "description": "全局默认分享类型",
@@ -230,7 +241,7 @@
           "type": "string"
         },
         "default": ["mood"],
-        "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环执行。"        
+        "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环分享。"        
       },      
       "morning_sequence": {
         "description": "【序列】早晨时段 (06:00-09:00)",
@@ -239,7 +250,7 @@
           "type": "string"
         },
         "default": ["greeting"],
-        "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环执行。"
+        "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环分享。"
       },
       "forenoon_sequence": {
         "description": "【序列】上午时段 (09:00-12:00)",
@@ -248,16 +259,25 @@
           "type": "string"
         },
         "default": ["news", "knowledge"],
-        "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环执行。"
+        "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环分享。"
+      },      
+      "noon_sequence": {
+        "description": "【序列】中午时段 (12:00-14:00)",
+        "type": "list",
+        "items": {
+          "type": "string"
+        },
+        "default": ["news", "mood"],
+        "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环分享。"
       },      
       "afternoon_sequence": {
-        "description": "【序列】下午时段 (12:00-16:00)",
+        "description": "【序列】下午时段 (14:00-16:00)",
         "type": "list",
         "items": {
           "type": "string"
         },
         "default": ["news", "knowledge"],
-        "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环执行。"
+        "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环分享。"
       },
       "evening_sequence": {
         "description": "【序列】傍晚时段 (16:00-19:00)",
@@ -266,7 +286,7 @@
           "type": "string"
         },
         "default": ["recommendation", "news"],
-        "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环执行。"        
+        "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环分享。"        
       },
       "night_sequence": {
         "description": "【序列】夜晚时段 (19:00-22:00)",
@@ -275,7 +295,7 @@
           "type": "string"
         },
         "default": ["recommendation", "mood"],
-        "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环执行。"        
+        "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环分享。"        
       },
       "late_night_sequence": {
         "description": "【序列】深夜时段 (22:00-24:00)",
@@ -284,7 +304,7 @@
           "type": "string"
         },
         "default": ["mood", "greeting"],
-        "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环执行。"        
+        "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环分享。"        
       }
     }
   },
@@ -425,7 +445,8 @@
           "options": ["zhihu", "weibo", "bili", "xiaohongshu", "douyin", "toutiao", "baidu", "tencent", "quark", "36kr", "51cto", "acfun", "ifanr", "netease", "sina", "thepaper", "yicai", "cls"],
           "hint": "新闻热搜源模式为'config'或'time_based'时生效。从此列表中随机选择新闻热搜源，增加内容多样性。推荐配置2-5个常用新闻热搜源。"
         },
-        "default": ["zhihu", "weibo", "bili"]
+        "default": ["zhihu", "weibo", "bili"],
+        "hint": "新闻热搜源模式为 config 或 time_based 时生效。可一行一个，也可用中文或英文逗号分隔；保存后页面可能整理为一行一个。推荐配置 2-5 个常用新闻热搜源。"
       },
       "news_api_source": {
         "description": "固定新闻热搜源",
@@ -463,11 +484,11 @@
         "hint": "获取新闻热搜的超时时间"
       },
       "enable_tavily_search": {
-        "description": "启用 Web 检索分享内容",
+        "description": "启用联网检索分享内容",
         "type": "bool",
         "default": true,
-        "hint": "开启后，新闻分享优先使用新闻源 API 返回的摘要/正文，缺少背景时才调用搜索引擎补充；知识和推荐分享仍会调用搜索引擎检索背景（在 AstrBot 普通配置-AI配置-网页搜索配置 Tavily或Brave）。关闭后不会补充 Web 检索。"
-      }    
+        "hint": "开启后，新闻分享优先使用新闻源 API 返回的摘要/正文，缺少背景时才调用搜索引擎补充；知识和推荐分享仍会调用搜索引擎检索背景（在 AstrBot 普通配置-AI配置-网页搜索配置 Tavily或Brave）。关闭后不会补充联网检索。"
+      }          
     }
   },
   "image_conf": {
@@ -486,6 +507,17 @@
         "type": "bool",
         "default": true,
         "hint": "开启后，如果新闻热搜类型未生成配图，则发送新闻热搜长图。"
+      },
+      "news_image_cleanup_max_count": {
+        "description": "新闻源图片最多保留张数",
+        "type": "int",
+        "default": 200,
+        "slider": {
+          "min": 0,
+          "max": 1000,
+          "step": 10
+        },
+        "hint": "仅清理 Temp 下由新闻源下载的图片，默认最多保留最新 200 张；设为 0 可关闭自动清理。"
       },
       "use_gitee_selfie_ref": {
         "description": "启用形象参考图",
@@ -506,7 +538,7 @@
           "type": "string"
         },
         "default": ["greeting", "mood", "knowledge", "recommendation"],
-        "hint": "仅当分享类型在列表中时，才会生成图片。"
+        "hint": "仅当分享类型在列表中时，才会生成图片。可一行一个，也可用中文或英文逗号分隔；保存后页面可能整理为一行一个。"
       },
       "enable_ai_video": {
         "description": "启用生成视频",
@@ -521,7 +553,7 @@
           "type": "string"
         },
         "default": ["greeting", "mood"],
-        "hint": "仅当分享类型在列表中时，才会生成视频。"
+        "hint": "仅当分享类型在列表中时，才会生成视频。可一行一个，也可用中文或英文逗号分隔；保存后页面可能整理为一行一个。"
       },
       "separate_text_and_image": {
         "description": "图文分开发送",
@@ -539,7 +571,7 @@
         "description": "个人微信发送前压缩图片",
         "type": "bool",
         "default": true,
-        "hint": "开启后，发送到 weixin_oc 个人微信前会自动生成高质量图片副本：优先保留最大分辨率和高画质，仅在文件过大时降低 JPEG 质量，降低大图上传微信 CDN 超时概率。QQ、QQ空间不受影响。"
+        "hint": "开启后，发送到个人微信前会自动生成高质量图片副本：优先保留最大分辨率和高画质，仅在文件过大时降低 JPEG 质量，降低大图上传微信 CDN 超时概率。QQ、QQ空间不受影响。"
       },
       "weixin_image_max_side": {
         "description": "个人微信图片最大分辨率",
@@ -550,7 +582,7 @@
           "max": 8192,
           "step": 128
         },
-        "hint": "仅对 weixin_oc 生效。默认保留 4K 最大分辨率；图片超过该值时才缩小。想完全不缩分辨率可设为更大值。"
+        "hint": "仅对个人微信生效。默认保留 4K 最大分辨率；图片超过该值时才缩小。想完全不缩分辨率可设为更大值。"
       },
       "weixin_image_max_size_kb": {
         "description": "个人微信图片目标大小(KB)",
@@ -561,7 +593,7 @@
           "max": 40960,
           "step": 512
         },
-        "hint": "仅对 weixin_oc 生效。默认目标约 10MB，优先使用 95/93/90 等高质量 JPEG；超过该大小时逐级降低质量。"
+        "hint": "仅对个人微信生效。默认目标约 10MB，优先使用 95/93/90 等高质量 JPEG；超过该大小时逐级降低质量。"
       },
       "weixin_api_timeout_seconds": {
         "description": "个人微信发送超时(秒)",
@@ -572,7 +604,7 @@
             "max": 180,
             "step": 1
         },    
-        "hint": "仅对 weixin_oc 生效。发送前会把个人微信适配器的上传超时调到该值。大图建议 60-120 秒。"
+        "hint": "仅对个人微信生效。发送前会把个人微信适配器的上传超时调到该值。大图建议 60-120 秒。"
       },
       "weixin_temp_cleanup_max_count": {
         "description": "个人微信压缩图最多保留张数",
@@ -583,7 +615,7 @@
             "max": 100,
             "step": 1
         },
-        "hint": "仅清理 Temp/weixin_send_*.jpg。默认最多保留最新 10 张，超过后删除最旧的；设为 0 可关闭自动清理。"
+        "hint": "仅清理 Temp 下由个人微信压缩的图片。默认最多保留最新 10 张，超过后删除最旧的；设为 0 可关闭自动清理。"
       },
       "record_image_description": {
         "description": "记录配图描述到历史",
@@ -629,7 +661,7 @@
           "type": "string"
         },
         "default": ["greeting", "mood"],
-        "hint": "仅当分享类型在列表中时，才会生成语音。"
+        "hint": "仅当分享类型在列表中时，才会生成语音。可一行一个，也可用中文或英文逗号分隔；保存后页面可能整理为一行一个。"
       },
       "prefer_audio_only": {
         "description": "仅发送语音",
@@ -664,7 +696,7 @@
           "type": "string"
         },
         "default": ["08:00-10:00", "19:00-21:00"],
-        "hint": "仅在 random_period 模式下生效。格式：HH:MM-HH:MM。每天会在这些时间段内随机选取一个时间点触发分享。"
+        "hint": "仅在 random_period 模式下生效。格式：HH:MM-HH:MM。可一行一个，也可用中文或英文逗号分隔。每天会在这些时间段内随机选取一个时间点触发分享。"
       },
       "qzone_cron": {
         "description": "说说定时分享时间",
@@ -691,7 +723,7 @@
           "type": "string"
         },
         "default": ["greeting", "mood"],
-        "hint": "仅当说说分享类型在列表中时，才会生成图片"
+        "hint": "仅当说说分享类型在列表中时，才会生成图片。可一行一个，也可用中文或英文逗号分隔；保存后页面可能整理为一行一个。"
       },
       "qzone_sharing_type": {
         "description": "说说分享模式",
@@ -701,53 +733,60 @@
         "hint": "auto=按照下方配置的【时段序列】轮换 | 选具体类型则永远只发该类型"
       },
       "qzone_dawn_sequence": {
-        "description": "【序列】凌晨 (00:00-06:00)",
+        "description": "【序列】凌晨时段 (00:00-06:00)",
         "type": "list",
         "items": {"type": "string"},
         "default": ["mood"],
-        "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环执行。"
+        "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环分享。"
       },
       "qzone_morning_sequence": {
-        "description": "【序列】早晨 (06:00-09:00)",
+        "description": "【序列】早晨时段 (06:00-09:00)",
         "type": "list",
         "items": {"type": "string"},
         "default": ["greeting", "mood"],
-        "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环执行。"
+        "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环分享。"
       },
       "qzone_forenoon_sequence": {
-        "description": "【序列】上午 (09:00-12:00)",
+        "description": "【序列】上午时段 (09:00-12:00)",
         "type": "list",
         "items": {"type": "string"},
         "default": ["mood"],
-        "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环执行。"
+        "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环分享。"
+      },
+      "qzone_noon_sequence": {
+        "description": "【序列】中午时段 (12:00-14:00)",
+        "type": "list",
+        "items": {"type": "string"},
+        "default": ["mood"],
+        "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环分享。"
       },
       "qzone_afternoon_sequence": {
-        "description": "【序列】下午 (12:00-16:00)",
+        "description": "【序列】下午时段 (14:00-16:00)",
         "type": "list",
         "items": {"type": "string"},
         "default": ["mood"],
-        "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环执行。"
+        "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环分享。"
       },
       "qzone_evening_sequence": {
-        "description": "【序列】傍晚 (16:00-19:00)",
+        "description": "【序列】傍晚时段 (16:00-19:00)",
         "type": "list",
         "items": {"type": "string"},
         "default": ["mood"],
-        "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环执行。"
+        "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环分享。"
       },
       "qzone_night_sequence": {
-        "description": "【序列】夜晚 (19:00-22:00)",
+        "description": "【序列】夜晚时段 (19:00-22:00)",
         "type": "list",
         "items": {"type": "string"},
         "default": ["mood"],
-        "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环执行。"
+        "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环分享。"
       },
       "qzone_late_night_sequence": {
-        "description": "【序列】深夜 (22:00-24:00)",
+        "description": "【序列】深夜时段 (22:00-24:00)",
         "type": "list",
         "items": {"type": "string"},
         "default": ["mood","greeting"],
-        "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环执行。"
+        "hint": "请填入英文：greeting(问候), news(新闻), mood(心情), knowledge(知识), recommendation(推荐)。按顺序循环分享。"
       }
     }
   },
