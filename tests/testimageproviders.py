@@ -120,6 +120,28 @@ class ImageProviderManagerTests(unittest.TestCase):
         self.assertEqual(result, "/tmp/manual.png")
         self.assertEqual(calls, [("manual prompt", "1024x1024")])
 
+    def test_probe_image_generation_reports_matched_candidate(self):
+        providers = _load_providers_module()
+
+        class DrawService:
+            def generate(self, prompt):
+                return {"data": {"image_path": "/tmp/probe.png"}}
+
+        class Plugin:
+            draw = DrawService()
+
+        manager = providers.ImageProviderManager(
+            _Context([_Star("custom_image_plugin", Plugin())]),
+            {"image_provider": "auto_scan"},
+        )
+
+        result = asyncio.run(manager.probe_image_generation("probe prompt"))
+
+        self.assertEqual(result["plugin_name"], "custom_image_plugin")
+        self.assertEqual(result["method_path"], "draw.generate")
+        self.assertEqual(result["prompt_arg"], "prompt")
+        self.assertEqual(result["media_ref"], "/tmp/probe.png")
+
     def test_generic_image_edit_uses_plugin_reference_images(self):
         providers = _load_providers_module()
         calls = []
@@ -371,6 +393,25 @@ class ImageProviderManagerTests(unittest.TestCase):
 
         self.assertEqual(result, "/tmp/voice.mp3")
         self.assertEqual(calls, [("hello", "happy")])
+
+    def test_probe_tts_generation_reports_matched_candidate(self):
+        providers = _load_providers_module()
+
+        class Plugin:
+            def text_to_speech(self, text, emotion):
+                return {"audio_path": f"/tmp/{emotion}-{text}.mp3"}
+
+        manager = providers.ImageProviderManager(
+            _Context([_Star("plugin_voice_tools", Plugin())]),
+            {"tts_provider": "auto_scan"},
+        )
+
+        result = asyncio.run(manager.probe_tts_generation("hello", emotion="happy"))
+
+        self.assertEqual(result["plugin_name"], "plugin_voice_tools")
+        self.assertEqual(result["method_path"], "text_to_speech")
+        self.assertEqual(result["prompt_arg"], "text")
+        self.assertEqual(result["media_ref"], "/tmp/happy-hello.mp3")
 
     def test_auto_provider_falls_back_to_scan_without_gitee(self):
         providers = _load_providers_module()

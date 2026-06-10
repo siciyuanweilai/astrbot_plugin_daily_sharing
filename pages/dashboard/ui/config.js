@@ -3,6 +3,7 @@ import { text } from "./format.js?v=20260609-format";
 const CONFIG_AUTO_SAVE_FAST_DELAY_MS = 360;
 const CONFIG_AUTO_SAVE_TEXT_DELAY_MS = 900;
 const CONFIG_AUTO_SAVE_RETRY_DELAY_MS = 600;
+const PROVIDER_PROBE_TIMEOUT_MS = 300000;
 
 export function createSettingsConfig({
   state,
@@ -40,6 +41,88 @@ export function createSettingsConfig({
   function setInputChecked(input, value) {
     if (!input) return;
     input.checked = Boolean(value);
+  }
+
+  function setProviderProbeButtonsDisabled(value) {
+    for (const button of [
+      el.probeImageProviderButton,
+      el.probeSelfieProviderButton,
+      el.probeTtsProviderButton,
+    ]) {
+      if (button) button.disabled = Boolean(value);
+    }
+  }
+
+  function setProviderProbeResult(message = "") {
+    if (!el.providerProbeResult) return;
+    el.providerProbeResult.textContent = message;
+  }
+
+  function providerProbePayload(kind) {
+    if (kind === "selfie") {
+      return {
+        kind,
+        apply: true,
+        prompt: "a natural daily selfie photo in a cozy room, no text, no watermark",
+      };
+    }
+    if (kind === "tts") {
+      return {
+        kind,
+        apply: true,
+        text: "每日分享语音测试",
+        emotion: "neutral",
+      };
+    }
+    return {
+      kind: "image",
+      apply: true,
+      prompt: "a clean daily life photo of a cup on a desk, no text, no watermark",
+    };
+  }
+
+  function providerProbeLabel(kind) {
+    if (kind === "selfie") return "自拍";
+    if (kind === "tts") return "语音";
+    return "生图";
+  }
+
+  function formatProviderProbeResult(data = {}) {
+    const result = data.result || {};
+    const plugin = text(result.plugin_name).trim() || "未知插件";
+    const method = text(result.method_path).trim() || "未知方法";
+    const mediaRef = text(result.media_ref).trim();
+    const suffix = mediaRef ? `，返回 ${mediaRef}` : "";
+    return `${providerProbeLabel(data.kind)}命中：${plugin}.${method}${suffix}`;
+  }
+
+  async function runProviderProbe(kind) {
+    if (!bridge) return;
+    window.clearTimeout(state.configAutoSaveTimer);
+    state.configAutoSaveTimer = 0;
+    setProviderProbeButtonsDisabled(true);
+    setProviderProbeResult(`${providerProbeLabel(kind)}测试中...`);
+    setNotice(`${providerProbeLabel(kind)}测试中，可能需要等待生成完成。`, "info", 7000);
+    try {
+      const data = await apiPost(
+        "page/provider/probe",
+        providerProbePayload(kind),
+        PROVIDER_PROBE_TIMEOUT_MS,
+      );
+      if (data.config) {
+        applyConfigData(data.config);
+      }
+      const message = formatProviderProbeResult(data);
+      setProviderProbeResult(message);
+      setNotice(`${message}，配置已保存。`, "success", 7000);
+      await loadStatus({ quiet: true });
+    } catch (error) {
+      const message = error.message || `${providerProbeLabel(kind)}测试失败`;
+      setProviderProbeResult(message);
+      setNotice(message, "error", 9000);
+    } finally {
+      setProviderProbeButtonsDisabled(false);
+    }
   }
 
   function configSection(name) {
@@ -545,7 +628,20 @@ export function createSettingsConfig({
     return isTargetEditorElement(event?.target);
   }
 
+  function bindProviderProbeEvents() {
+    el.probeImageProviderButton?.addEventListener("click", () => {
+      void runProviderProbe("image");
+    });
+    el.probeSelfieProviderButton?.addEventListener("click", () => {
+      void runProviderProbe("selfie");
+    });
+    el.probeTtsProviderButton?.addEventListener("click", () => {
+      void runProviderProbe("tts");
+    });
+  }
+
   return {
+    bindProviderProbeEvents,
     handleConfigChanged,
     loadConfig,
     saveConfig,

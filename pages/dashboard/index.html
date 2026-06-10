@@ -572,6 +572,14 @@
                 <span>改图额外参数</span>
                 <textarea id="cfgGenericImageEditExtraArgs" rows="2" placeholder='{"backend":"default"}'></textarea>
               </label>
+              <div class="provider-probe-panel setting-field-wide" aria-live="polite">
+                <div class="provider-probe-actions">
+                  <button id="probeImageProviderButton" class="button-secondary" type="button">测试生图</button>
+                  <button id="probeSelfieProviderButton" class="button-secondary" type="button">测试自拍</button>
+                  <button id="probeTtsProviderButton" class="button-secondary" type="button">测试语音</button>
+                </div>
+                <output id="providerProbeResult" class="provider-probe-result"></output>
+              </div>
               <label class="setting-switch">
                 <input id="cfgHotImage" type="checkbox" />
                 <span>新闻长图</span>

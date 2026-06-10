@@ -758,6 +758,143 @@ class ImageProviderManager:
         logger.error(f"[DailySharing] Auto scan found {label} candidates, but all calls failed")
         return None
 
+    def _candidate_probe_config(
+        self,
+        candidate: dict,
+        media_ref: str,
+        *,
+        provider_type: str,
+        prompt_arg: str = "",
+        extra: dict = None,
+    ) -> dict:
+        plugin_name = self._star_display_name(candidate["star"])
+        method_path = candidate["method_path"]
+        config = {
+            "plugin_name": plugin_name,
+            "method_path": method_path,
+            "prompt_arg": prompt_arg or candidate.get("prompt_arg") or "prompt",
+            "media_ref": str(media_ref or ""),
+            "provider_type": provider_type,
+        }
+        if extra:
+            config.update(extra)
+        return config
+
+    async def probe_image_generation(self, prompt: str) -> Optional[dict]:
+        prompt = str(prompt or "").strip() or "a simple daily life photo, no text, no watermark"
+        extra_args = self._read_extra_args()
+        for candidate in self.discover_image_methods():
+            plugin_name = self._star_display_name(candidate["star"])
+            method_path = candidate["method_path"]
+            prompt_arg = candidate["prompt_arg"] or "prompt"
+            kwargs = self._build_supported_kwargs(
+                candidate["method"],
+                extra_args,
+                [((prompt_arg,), prompt), (self.PROMPT_ARG_NAMES, prompt)],
+            )
+            if kwargs is None:
+                continue
+            try:
+                logger.info(f"[DailySharing] Provider probe trying image: {plugin_name}.{method_path}")
+                result = await self._maybe_await(candidate["method"](**kwargs))
+                media_ref = self._extract_result(result)
+                if media_ref:
+                    return self._candidate_probe_config(
+                        candidate,
+                        media_ref,
+                        provider_type="image",
+                        prompt_arg=prompt_arg,
+                    )
+            except Exception as exc:
+                logger.debug(f"[DailySharing] Provider probe image failed: {plugin_name}.{method_path}: {exc}")
+        return None
+
+    async def probe_image_selfie(self, prompt: str, target_umo: str = "") -> Optional[dict]:
+        prompt = str(prompt or "").strip() or "a natural daily selfie photo, no text, no watermark"
+        extra_args = self._read_json_args("generic_image_edit_extra_args", "image selfie/reference extra args")
+        for candidate in self.discover_image_edit_methods():
+            plugin_name = self._star_display_name(candidate["star"])
+            method_path = candidate["method_path"]
+            plugin = getattr(candidate["star"], "star_cls", None)
+            refs = await self._get_plugin_reference_images(plugin)
+            kwargs = self._build_supported_kwargs(
+                candidate["method"],
+                extra_args,
+                [
+                    (self.PROMPT_ARG_NAMES, prompt),
+                    (self.IMAGE_ARG_NAMES, refs or None),
+                    (self.IMAGE_PATH_ARG_NAMES, refs[0] if refs else None),
+                    (self.SESSION_ARG_NAMES, target_umo or None),
+                ],
+            )
+            if kwargs is None:
+                continue
+            try:
+                logger.info(f"[DailySharing] Provider probe trying image selfie/reference: {plugin_name}.{method_path}")
+                result = await self._maybe_await(candidate["method"](**kwargs))
+                media_ref = self._extract_result(
+                    result,
+                    result_field=str(self.image_conf.get("generic_image_result_field", "") or "").strip(),
+                    result_keys=self.RESULT_FIELDS,
+                )
+                if media_ref:
+                    prompt_arg = self._select_supported_arg(candidate["method"], self.PROMPT_ARG_NAMES) or "prompt"
+                    return self._candidate_probe_config(
+                        candidate,
+                        media_ref,
+                        provider_type="selfie",
+                        prompt_arg=prompt_arg,
+                        extra={"reference_count": len(refs or [])},
+                    )
+            except Exception as exc:
+                logger.debug(f"[DailySharing] Provider probe image selfie/reference failed: {plugin_name}.{method_path}: {exc}")
+        return None
+
+    async def probe_tts_generation(
+        self,
+        text: str,
+        *,
+        emotion: str = "neutral",
+        target_umo: str = "",
+        session_state=None,
+    ) -> Optional[dict]:
+        text = str(text or "").strip() or "每日分享语音测试"
+        extra_args = self._read_json_args("generic_tts_extra_args", "TTS generation extra args")
+        for candidate in self.discover_tts_methods():
+            plugin_name = self._star_display_name(candidate["star"])
+            method_path = candidate["method_path"]
+            kwargs = self._build_supported_kwargs(
+                candidate["method"],
+                extra_args,
+                [
+                    (self.TTS_TEXT_ARG_NAMES, text),
+                    (self.TTS_EMOTION_ARG_NAMES, emotion or None),
+                    (self.TTS_SESSION_ARG_NAMES, target_umo or None),
+                    (("session_state", "state"), session_state),
+                ],
+            )
+            if kwargs is None:
+                continue
+            try:
+                logger.info(f"[DailySharing] Provider probe trying TTS: {plugin_name}.{method_path}")
+                result = await self._maybe_await(candidate["method"](**kwargs))
+                media_ref = self._extract_result(
+                    result,
+                    result_field=str(self.image_conf.get("generic_tts_result_field", "") or "").strip(),
+                    result_keys=self.AUDIO_RESULT_FIELDS,
+                )
+                if media_ref:
+                    text_arg = self._select_supported_arg(candidate["method"], self.TTS_TEXT_ARG_NAMES) or "text"
+                    return self._candidate_probe_config(
+                        candidate,
+                        media_ref,
+                        provider_type="tts",
+                        prompt_arg=text_arg,
+                    )
+            except Exception as exc:
+                logger.debug(f"[DailySharing] Provider probe TTS failed: {plugin_name}.{method_path}: {exc}")
+        return None
+
     async def _try_auto_image_edit_candidates(
         self,
         candidates: list[dict],
