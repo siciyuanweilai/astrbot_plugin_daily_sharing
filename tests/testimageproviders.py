@@ -120,6 +120,108 @@ class ImageProviderManagerTests(unittest.TestCase):
         self.assertEqual(result, "/tmp/manual.png")
         self.assertEqual(calls, [("manual prompt", "1024x1024")])
 
+    def test_generic_image_edit_uses_plugin_reference_images(self):
+        providers = _load_providers_module()
+        calls = []
+
+        class EditService:
+            async def edit(self, prompt, images):
+                calls.append((prompt, images))
+                return {"image_path": "/tmp/selfie.png"}
+
+        class Plugin:
+            edit = EditService()
+
+            def _get_config_selfie_reference_paths(self):
+                return ["/tmp/ref.png"]
+
+            async def _read_paths_bytes(self, paths):
+                return [f"bytes:{path}".encode() for path in paths]
+
+        manager = providers.ImageProviderManager(
+            _Context([_Star("custom_image_plugin", Plugin())]),
+            {
+                "image_provider": "generic_plugin",
+                "generic_image_plugin_name": "custom_image",
+                "generic_image_method_path": "draw.generate",
+                "generic_image_edit_method_path": "edit.edit",
+            },
+        )
+
+        result = asyncio.run(manager.generate_with_generic_plugin("selfie prompt", use_ref_selfie=True))
+
+        self.assertEqual(result, "/tmp/selfie.png")
+        self.assertEqual(calls, [("selfie prompt", [b"bytes:/tmp/ref.png"])])
+
+    def test_auto_scan_prefers_edit_method_for_selfie_mode(self):
+        providers = _load_providers_module()
+        calls = []
+
+        class Plugin:
+            def edit_image(self, prompt):
+                calls.append(("edit_image", prompt))
+                return "/tmp/auto-selfie.png"
+
+            def draw_image(self, prompt):
+                calls.append(("draw_image", prompt))
+                return "/tmp/auto-draw.png"
+
+        manager = providers.ImageProviderManager(
+            _Context([_Star("plugin_image_tools", Plugin())]),
+            {"image_provider": "auto_scan"},
+        )
+
+        result = asyncio.run(manager.generate_with_auto_scan("selfie prompt", use_ref_selfie=True))
+
+        self.assertEqual(result, "/tmp/auto-selfie.png")
+        self.assertEqual(calls, [("edit_image", "selfie prompt")])
+
+    def test_auto_scan_video_uses_prompt_and_image_path(self):
+        providers = _load_providers_module()
+        calls = []
+
+        class Plugin:
+            def image_to_video(self, prompt, image_path):
+                calls.append((prompt, image_path))
+                return {"data": {"video_url": "https://example.com/video.mp4"}}
+
+        manager = providers.ImageProviderManager(
+            _Context([_Star("plugin_video_tools", Plugin())]),
+            {"video_provider": "auto_scan"},
+        )
+
+        result = asyncio.run(
+            manager.generate_video_with_auto_scan("video prompt", "D:/tmp/image.png", b"image-bytes")
+        )
+
+        self.assertEqual(result, "https://example.com/video.mp4")
+        self.assertEqual(calls, [("video prompt", "D:/tmp/image.png")])
+
+    def test_generic_tts_passes_text_and_emotion(self):
+        providers = _load_providers_module()
+        calls = []
+
+        class Plugin:
+            def text_to_speech(self, text, emotion):
+                calls.append((text, emotion))
+                return types.SimpleNamespace(audio_path="/tmp/voice.mp3")
+
+        manager = providers.ImageProviderManager(
+            _Context([_Star("plugin_voice_tools", Plugin())]),
+            {
+                "tts_provider": "generic_plugin",
+                "generic_tts_plugin_name": "voice_tools",
+                "generic_tts_method_path": "text_to_speech",
+            },
+        )
+
+        result = asyncio.run(
+            manager.generate_tts_with_generic_plugin("hello", emotion="happy", target_umo="session-1")
+        )
+
+        self.assertEqual(result, "/tmp/voice.mp3")
+        self.assertEqual(calls, [("hello", "happy")])
+
     def test_auto_provider_falls_back_to_scan_without_gitee(self):
         providers = _load_providers_module()
 
@@ -144,6 +246,15 @@ class ImageProviderManagerTests(unittest.TestCase):
         )
         self.assertIn("generic_image_method_path", image_items)
         self.assertIn("generic_image_result_field", image_items)
+        self.assertIn("generic_image_edit_method_path", image_items)
+        self.assertIn("video_provider", image_items)
+
+        tts_items = schema["tts_conf"]["items"]
+        self.assertEqual(
+            tts_items["tts_provider"]["options"],
+            ["emotion_router", "generic_plugin", "auto_scan", "auto"],
+        )
+        self.assertIn("generic_tts_method_path", tts_items)
 
 
 if __name__ == "__main__":

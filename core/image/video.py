@@ -78,14 +78,6 @@ class ImageVideoMixin:
         """图片转视频"""
         if not self.img_conf.get("enable_ai_video", False): return None
         
-        self._ensure_plugin()
-        if not self._aiimg_plugin: return None
-        
-        # 强制依赖新版后端注册表架构
-        if not hasattr(self._aiimg_plugin, "registry"): 
-            logger.warning("[每日分享] 检测到 GiteeAIImage 插件不支持视频后端注册表，跳过视频生成")
-            return None
-        
         try:
             if not os.path.exists(image_path): return None
             with open(image_path, "rb") as f: image_bytes = f.read()
@@ -99,6 +91,28 @@ class ImageVideoMixin:
             logger.info(f"[每日分享] 视频动态提取：动态: {motion_prompt[:180]}...")
             logger.info(f"[每日分享] 配音提示提取：声音: {sound_prompt[:180]}...")
             logger.info(f"[每日分享] 最终视频提示词: {video_prompt[:180]}...")
+
+            provider = self.provider_manager.select_video_provider()
+            if provider == "generic_plugin":
+                return await self.provider_manager.generate_video_with_generic_plugin(
+                    video_prompt,
+                    image_path,
+                    image_bytes,
+                )
+            if provider == "auto_scan":
+                return await self.provider_manager.generate_video_with_auto_scan(
+                    video_prompt,
+                    image_path,
+                    image_bytes,
+                )
+
+            self._ensure_plugin()
+            if not self._aiimg_plugin: return None
+
+            # 强制依赖新版后端注册表架构
+            if not hasattr(self._aiimg_plugin, "registry"):
+                logger.warning("[每日分享] 检测到 GiteeAIImage 插件不支持视频后端注册表，跳过视频生成")
+                return None
             
             # 获取配置的视频提供商链
             if hasattr(self._aiimg_plugin, "_get_video_chain"):

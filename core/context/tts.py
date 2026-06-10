@@ -98,12 +98,6 @@ class ContextTtsMixin:
             logger.info("[每日分享] 当前平台为个人微信，目前不支持发送语音，跳过语音发送。")
             return None
 
-        # 2. 获取插件
-        tts_plugin = self._get_tts_plugin_inst()
-        if not tts_plugin:
-            logger.warning("[每日分享] 未找到语音合成插件 (astrbot_plugin_tts_emotion_router)，无法生成语音。")
-            return None
-
         # 优先提取情感标签
         target_emotion = "neutral"
         
@@ -124,9 +118,17 @@ class ContextTtsMixin:
         
         # 5. 调用生成
         try:
+            provider = self.tts_provider_manager.select_tts_provider()
             session_state = None
+
+            tts_plugin = None
+            if provider == "emotion_router":
+                tts_plugin = self._get_tts_plugin_inst()
+                if not tts_plugin:
+                    logger.warning("[每日分享] 未找到语音合成插件 (astrbot_plugin_tts_emotion_router)，无法生成语音。")
+                    return None
             
-            if hasattr(tts_plugin, "_get_session_state"):
+            if tts_plugin and hasattr(tts_plugin, "_get_session_state"):
                 session_state = tts_plugin._get_session_state(target_umo)
                 
                 # 注入情感
@@ -136,6 +138,22 @@ class ContextTtsMixin:
                         logger.debug(f"[每日分享] 语音合成注入情绪: {target_emotion}")
 
             logger.info(f"[每日分享] 正在请求语音合成: {final_text[:20]}... (情绪: {target_emotion})")
+
+            if provider == "generic_plugin":
+                return await self.tts_provider_manager.generate_tts_with_generic_plugin(
+                    final_text,
+                    emotion=target_emotion,
+                    target_umo=target_umo,
+                    session_state=session_state,
+                )
+
+            if provider == "auto_scan":
+                return await self.tts_provider_manager.generate_tts_with_auto_scan(
+                    final_text,
+                    emotion=target_emotion,
+                    target_umo=target_umo,
+                    session_state=session_state,
+                )
             
             # 调用语音合成处理器的处理方法
             result = await tts_plugin.tts_processor.process(final_text, session_state)

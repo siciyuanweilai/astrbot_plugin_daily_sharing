@@ -179,6 +179,37 @@ class DashboardConfigApplyMixin:
             image["news_image_cleanup_max_count"] = self._page_int_value(
                 media_body.get("news_image_cleanup_max_count"), 200, min_value=0, max_value=1000
             )
+        if "image_provider" in media_body:
+            image["image_provider"] = self._page_choice_value(
+                media_body.get("image_provider"),
+                {"gitee_aiimg", "generic_plugin", "auto_scan", "auto"},
+                "gitee_aiimg",
+                "生图 provider",
+            )
+        for key in (
+            "generic_image_plugin_name",
+            "generic_image_method_path",
+            "generic_image_prompt_arg",
+            "generic_image_extra_args",
+            "generic_image_result_field",
+            "generic_image_edit_method_path",
+            "generic_image_edit_prompt_arg",
+            "generic_image_edit_extra_args",
+            "generic_image_ref_keys",
+            "generic_video_plugin_name",
+            "generic_video_method_path",
+            "generic_video_extra_args",
+            "generic_video_result_field",
+        ):
+            if key in media_body:
+                image[key] = self._page_clean_text(media_body.get(key), max_len=4000)
+        if "video_provider" in media_body:
+            image["video_provider"] = self._page_choice_value(
+                media_body.get("video_provider"),
+                {"gitee_aiimg", "generic_plugin", "auto_scan", "auto"},
+                "gitee_aiimg",
+                "视频 provider",
+            )
         if "image_enabled_types" in media_body:
             image["image_enabled_types"] = self._page_type_list_value(
                 media_body.get("image_enabled_types"), "配图类型"
@@ -196,6 +227,22 @@ class DashboardConfigApplyMixin:
                 media_body.get("appearance_prompt"), max_len=2000
             )
         self._page_apply_bool_fields(tts, media_body, ("enable_tts", "prefer_audio_only"))
+        if "tts_provider" in media_body:
+            tts["tts_provider"] = self._page_choice_value(
+                media_body.get("tts_provider"),
+                {"emotion_router", "generic_plugin", "auto_scan", "auto"},
+                "emotion_router",
+                "语音 provider",
+            )
+        for key in (
+            "generic_tts_plugin_name",
+            "generic_tts_method_path",
+            "generic_tts_text_arg",
+            "generic_tts_extra_args",
+            "generic_tts_result_field",
+        ):
+            if key in media_body:
+                tts[key] = self._page_clean_text(media_body.get(key), max_len=4000)
         if "tts_enabled_types" in media_body:
             tts["tts_enabled_types"] = self._page_type_list_value(
                 media_body.get("tts_enabled_types"), "语音类型"

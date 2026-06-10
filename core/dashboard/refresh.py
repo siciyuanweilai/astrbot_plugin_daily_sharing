@@ -23,6 +23,8 @@ class DashboardConfigRefreshMixin:
         self.ctx_service.image_conf = self.image_conf
         self.ctx_service.tts_conf = self.tts_conf
         self.ctx_service.llm_conf = self.llm_conf
+        if hasattr(self.ctx_service, "tts_provider_manager"):
+            self.ctx_service.tts_provider_manager.image_conf = self.tts_conf
 
         self.news_service.config = self.config
         self.news_service.conf = self.news_conf
@@ -30,6 +32,8 @@ class DashboardConfigRefreshMixin:
         self.image_service.config = self.config
         self.image_service.img_conf = self.image_conf
         self.image_service.llm_conf = self.llm_conf
+        if hasattr(self.image_service, "provider_manager"):
+            self.image_service.provider_manager.image_conf = self.image_conf
 
         self.content_service.config = self.config
         self.content_service.content_lib_conf = self.config.setdefault("content_library", {})

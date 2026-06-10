@@ -204,17 +204,38 @@ export function createSettingsConfig({
     setInputValue(el.cfgRecCats, arrayToLines(content.rec_cats));
 
     setInputChecked(el.cfgAiImage, media.enable_ai_image);
+    setInputValue(el.cfgImageProvider, media.image_provider || "gitee_aiimg");
+    setInputValue(el.cfgGenericImagePlugin, media.generic_image_plugin_name || "");
+    setInputValue(el.cfgGenericImageMethod, media.generic_image_method_path || "");
+    setInputValue(el.cfgGenericImagePromptArg, media.generic_image_prompt_arg || "prompt");
+    setInputValue(el.cfgGenericImageExtraArgs, media.generic_image_extra_args || "");
+    setInputValue(el.cfgGenericImageResultField, media.generic_image_result_field || "");
+    setInputValue(el.cfgGenericImageEditMethod, media.generic_image_edit_method_path || "");
+    setInputValue(el.cfgGenericImageEditPromptArg, media.generic_image_edit_prompt_arg || "prompt");
+    setInputValue(el.cfgGenericImageEditExtraArgs, media.generic_image_edit_extra_args || "");
+    setInputValue(el.cfgGenericImageRefKeys, media.generic_image_ref_keys || "bot_selfie,selfie,default");
     setInputChecked(el.cfgHotImage, media.attach_hot_news_image);
     setInputValue(el.cfgNewsImageCleanupMax, media.news_image_cleanup_max_count ?? 200);
     setInputChecked(el.cfgGiteeSelfieRef, media.use_gitee_selfie_ref);
     setInputChecked(el.cfgPriorityText, media.priority_text_over_schedule);
     setInputChecked(el.cfgAiVideo, media.enable_ai_video);
+    setInputValue(el.cfgVideoProvider, media.video_provider || "gitee_aiimg");
+    setInputValue(el.cfgGenericVideoPlugin, media.generic_video_plugin_name || "");
+    setInputValue(el.cfgGenericVideoMethod, media.generic_video_method_path || "");
+    setInputValue(el.cfgGenericVideoExtraArgs, media.generic_video_extra_args || "");
+    setInputValue(el.cfgGenericVideoResultField, media.generic_video_result_field || "");
     setInputChecked(el.cfgSeparateMedia, media.separate_text_and_image);
     setInputValue(el.cfgSeparateDelay, media.separate_send_delay || "1.0-2.0");
     setInputChecked(el.cfgRecordImageDesc, media.record_image_description);
     setInputChecked(el.cfgAlwaysSelf, media.image_always_include_self);
     setInputChecked(el.cfgNeverSelf, media.image_never_include_self);
     setInputChecked(el.cfgTtsEnabled, media.enable_tts);
+    setInputValue(el.cfgTtsProvider, media.tts_provider || "emotion_router");
+    setInputValue(el.cfgGenericTtsPlugin, media.generic_tts_plugin_name || "");
+    setInputValue(el.cfgGenericTtsMethod, media.generic_tts_method_path || "");
+    setInputValue(el.cfgGenericTtsTextArg, media.generic_tts_text_arg || "text");
+    setInputValue(el.cfgGenericTtsExtraArgs, media.generic_tts_extra_args || "");
+    setInputValue(el.cfgGenericTtsResultField, media.generic_tts_result_field || "");
     setInputChecked(el.cfgAudioOnly, media.prefer_audio_only);
     setInputValue(el.cfgImageTypes, arrayToLines(media.image_enabled_types));
     setInputValue(el.cfgVideoTypes, arrayToLines(media.video_enabled_types));
@@ -332,11 +353,26 @@ export function createSettingsConfig({
         },
         media: {
           enable_ai_image: Boolean(el.cfgAiImage?.checked),
+          image_provider: el.cfgImageProvider?.value || "gitee_aiimg",
+          generic_image_plugin_name: text(el.cfgGenericImagePlugin?.value).trim(),
+          generic_image_method_path: text(el.cfgGenericImageMethod?.value).trim(),
+          generic_image_prompt_arg: text(el.cfgGenericImagePromptArg?.value).trim() || "prompt",
+          generic_image_extra_args: text(el.cfgGenericImageExtraArgs?.value).trim(),
+          generic_image_result_field: text(el.cfgGenericImageResultField?.value).trim(),
+          generic_image_edit_method_path: text(el.cfgGenericImageEditMethod?.value).trim(),
+          generic_image_edit_prompt_arg: text(el.cfgGenericImageEditPromptArg?.value).trim() || "prompt",
+          generic_image_edit_extra_args: text(el.cfgGenericImageEditExtraArgs?.value).trim(),
+          generic_image_ref_keys: text(el.cfgGenericImageRefKeys?.value).trim() || "bot_selfie,selfie,default",
           attach_hot_news_image: Boolean(el.cfgHotImage?.checked),
           news_image_cleanup_max_count: numberValue(el.cfgNewsImageCleanupMax, 200),
           use_gitee_selfie_ref: Boolean(el.cfgGiteeSelfieRef?.checked),
           priority_text_over_schedule: Boolean(el.cfgPriorityText?.checked),
           enable_ai_video: Boolean(el.cfgAiVideo?.checked),
+          video_provider: el.cfgVideoProvider?.value || "gitee_aiimg",
+          generic_video_plugin_name: text(el.cfgGenericVideoPlugin?.value).trim(),
+          generic_video_method_path: text(el.cfgGenericVideoMethod?.value).trim(),
+          generic_video_extra_args: text(el.cfgGenericVideoExtraArgs?.value).trim(),
+          generic_video_result_field: text(el.cfgGenericVideoResultField?.value).trim(),
           separate_text_and_image: Boolean(el.cfgSeparateMedia?.checked),
           separate_send_delay: text(el.cfgSeparateDelay?.value).trim() || "1.0-2.0",
           record_image_description: Boolean(el.cfgRecordImageDesc?.checked),
@@ -344,6 +380,12 @@ export function createSettingsConfig({
           image_always_include_self: Boolean(el.cfgAlwaysSelf?.checked),
           image_never_include_self: Boolean(el.cfgNeverSelf?.checked),
           enable_tts: Boolean(el.cfgTtsEnabled?.checked),
+          tts_provider: el.cfgTtsProvider?.value || "emotion_router",
+          generic_tts_plugin_name: text(el.cfgGenericTtsPlugin?.value).trim(),
+          generic_tts_method_path: text(el.cfgGenericTtsMethod?.value).trim(),
+          generic_tts_text_arg: text(el.cfgGenericTtsTextArg?.value).trim() || "text",
+          generic_tts_extra_args: text(el.cfgGenericTtsExtraArgs?.value).trim(),
+          generic_tts_result_field: text(el.cfgGenericTtsResultField?.value).trim(),
           prefer_audio_only: Boolean(el.cfgAudioOnly?.checked),
           image_enabled_types: linesToArray(el.cfgImageTypes?.value),
           video_enabled_types: linesToArray(el.cfgVideoTypes?.value),

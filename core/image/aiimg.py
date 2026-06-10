@@ -33,12 +33,12 @@ class ImageAiimgMixin:
         provider = self.provider_manager.select_provider()
         if provider == "generic_plugin":
             if use_ref_selfie:
-                logger.info("[每日分享] 当前为通用生图 provider，形象参考图仅在 Gitee provider 下生效")
-            return await self.provider_manager.generate_with_generic_plugin(prompt)
+                logger.info("[每日分享] 当前为通用生图 provider，尝试使用通用改图/参考图方法")
+            return await self.provider_manager.generate_with_generic_plugin(prompt, use_ref_selfie=use_ref_selfie)
         if provider == "auto_scan":
             if use_ref_selfie:
-                logger.info("[每日分享] 当前为自动扫描生图 provider，形象参考图仅在 Gitee provider 下生效")
-            return await self.provider_manager.generate_with_auto_scan(prompt)
+                logger.info("[每日分享] 当前为自动扫描生图 provider，优先尝试改图/自拍方法")
+            return await self.provider_manager.generate_with_auto_scan(prompt, use_ref_selfie=use_ref_selfie)
 
         return await self._call_aiimg(prompt, use_ref_selfie=use_ref_selfie)
 
