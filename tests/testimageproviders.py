@@ -66,6 +66,36 @@ class _Context:
         return self._stars
 
 
+class _ToolManager:
+    def __init__(self, tools):
+        self.func_list = tools
+
+    def get_func(self, name):
+        for tool in reversed(self.func_list):
+            if tool.name == name:
+                return tool
+        return None
+
+
+class _ToolContext(_Context):
+    def __init__(self, stars, tools):
+        super().__init__(stars)
+        self._tool_manager = _ToolManager(tools)
+
+    def get_llm_tool_manager(self):
+        return self._tool_manager
+
+
+class _LlmTool:
+    active = True
+
+    def __init__(self, name, parameters, handler):
+        self.name = name
+        self.parameters = parameters
+        self.description = name
+        self.handler = handler
+
+
 class ImageProviderManagerTests(unittest.TestCase):
     def test_auto_scan_skips_text_renderers_after_draw_succeeds(self):
         providers = _load_providers_module()
@@ -321,6 +351,92 @@ class ImageProviderManagerTests(unittest.TestCase):
 
         self.assertEqual(result, "/tmp/draw.png")
         self.assertEqual(calls, [("draw.generate", "normal prompt")])
+
+    def test_auto_scan_uses_recorded_llm_image_tool_first(self):
+        providers = _load_providers_module()
+        calls = []
+
+        async def recorded_tool(event, prompt, mode):
+            calls.append(("recorded", prompt, mode, event.unified_msg_origin))
+            return {"image_path": "/tmp/recorded.png"}
+
+        class Plugin:
+            def draw_image(self, prompt):
+                calls.append(("fallback", prompt))
+                return "/tmp/fallback.png"
+
+        manager = providers.ImageProviderManager(
+            _ToolContext(
+                [_Star("plugin_draw_image", Plugin())],
+                [
+                    _LlmTool(
+                        "draw_calibrated",
+                        {
+                            "type": "object",
+                            "properties": {
+                                "prompt": {"type": "string"},
+                                "mode": {"type": "string"},
+                            },
+                            "required": ["prompt"],
+                        },
+                        recorded_tool,
+                    )
+                ],
+            ),
+            {
+                "image_provider": "auto_scan",
+                "llm_image_tool_name": "draw_calibrated",
+                "llm_image_tool_args": {"prompt": "probe prompt", "mode": "probe"},
+            },
+        )
+
+        result = asyncio.run(manager.generate_with_auto_scan("real prompt", target_umo="aiocqhttp:FriendMessage:123"))
+
+        self.assertEqual(result, "/tmp/recorded.png")
+        self.assertEqual(calls, [("recorded", "real prompt", "text", "aiocqhttp:FriendMessage:123")])
+
+    def test_auto_scan_tts_uses_recorded_llm_tool_first(self):
+        providers = _load_providers_module()
+        calls = []
+
+        def recorded_tool(event, text, emotion):
+            calls.append((text, emotion, event.unified_msg_origin))
+            return {"audio_path": "/tmp/recorded.mp3"}
+
+        manager = providers.ImageProviderManager(
+            _ToolContext(
+                [],
+                [
+                    _LlmTool(
+                        "voice_calibrated",
+                        {
+                            "type": "object",
+                            "properties": {
+                                "text": {"type": "string"},
+                                "emotion": {"type": "string"},
+                            },
+                        },
+                        recorded_tool,
+                    )
+                ],
+            ),
+            {
+                "tts_provider": "auto_scan",
+                "llm_tts_tool_name": "voice_calibrated",
+                "llm_tts_tool_args": {"text": "probe text", "emotion": "neutral"},
+            },
+        )
+
+        result = asyncio.run(
+            manager.generate_tts_with_auto_scan(
+                "正式语音",
+                emotion="happy",
+                target_umo="aiocqhttp:FriendMessage:456",
+            )
+        )
+
+        self.assertEqual(result, "/tmp/recorded.mp3")
+        self.assertEqual(calls, [("正式语音", "happy", "aiocqhttp:FriendMessage:456")])
 
     def test_generic_selfie_mode_without_edit_method_does_not_fallback_to_draw(self):
         providers = _load_providers_module()

@@ -1,7 +1,9 @@
 import inspect
 import json
 import os
+import uuid
 from collections.abc import Iterable
+from types import SimpleNamespace
 from typing import Any, Optional
 
 from astrbot.api import logger
@@ -136,6 +138,7 @@ class ImageProviderManager:
     TTS_EMOTION_ARG_NAMES = ("emotion", "target_emotion", "style", "mood")
     SESSION_ARG_NAMES = ("session", "session_id", "target_umo", "umo")
     TTS_SESSION_ARG_NAMES = SESSION_ARG_NAMES
+    MODE_ARG_NAMES = ("mode", "task_type", "task", "type")
     COMMON_CHILD_ATTRS = (
         "draw",
         "edit",
@@ -661,6 +664,297 @@ class ImageProviderManager:
             logger.debug(f"[DailySharing] Failed to read plugin reference images: {exc}")
         return []
 
+    def _find_llm_tool(self, tool_name: str):
+        tool_name = str(tool_name or "").strip()
+        if not tool_name:
+            return None
+        getter = getattr(self.context, "get_llm_tool_manager", None)
+        tool_mgr = getter() if callable(getter) else None
+        if tool_mgr and hasattr(tool_mgr, "get_func"):
+            tool = tool_mgr.get_func(tool_name)
+            if tool:
+                return tool
+        for tool in list(getattr(tool_mgr, "func_list", []) or []):
+            if str(getattr(tool, "name", "") or "") == tool_name:
+                return tool
+        return None
+
+    def _read_recorded_tool_args(self, config_key: str) -> dict:
+        raw = self.image_conf.get(config_key, {})
+        if isinstance(raw, dict):
+            return raw.copy()
+        raw_s = str(raw or "").strip()
+        if not raw_s:
+            return {}
+        try:
+            parsed = json.loads(raw_s)
+            return parsed.copy() if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+
+    def _tool_param_names(self, tool) -> tuple[set[str], set[str], bool]:
+        parameters = getattr(tool, "parameters", None)
+        if isinstance(parameters, dict):
+            properties = parameters.get("properties")
+            if isinstance(properties, dict):
+                required = parameters.get("required") or []
+                return set(properties.keys()), {str(name) for name in required}, False
+        return set(), set(), True
+
+    def _select_tool_arg(self, tool, arg_names: tuple[str, ...]) -> Optional[str]:
+        params, _required, accepts_any = self._tool_param_names(tool)
+        for arg_name in arg_names:
+            if accepts_any or arg_name in params:
+                return arg_name
+        return None
+
+    def _build_recorded_tool_kwargs(
+        self,
+        tool,
+        saved_args: dict,
+        values: list[tuple[tuple[str, ...], Any]],
+    ) -> Optional[dict]:
+        params, required, accepts_any = self._tool_param_names(tool)
+        kwargs = dict(saved_args or {})
+        for arg_names, _value in values:
+            for arg_name in arg_names:
+                kwargs.pop(arg_name, None)
+
+        for arg_names, value in values:
+            if value is None:
+                continue
+            arg_name = self._select_tool_arg(tool, arg_names)
+            if arg_name:
+                kwargs[arg_name] = value
+
+        if not accepts_any:
+            kwargs = {key: value for key, value in kwargs.items() if key in params}
+
+        missing = [name for name in required if name not in kwargs]
+        if missing:
+            logger.warning(
+                f"[DailySharing] Recorded LLM tool {getattr(tool, 'name', '<unknown>')} "
+                f"is missing required args: {', '.join(missing)}"
+            )
+            return None
+        return kwargs
+
+    def _make_silent_llm_tool_event(self, target_umo: str, message_text: str):
+        target_umo = str(target_umo or "").strip() or "daily_sharing:FriendMessage:llm_tool"
+        message_text = str(message_text or "")
+        try:
+            from astrbot.core.message.components import Plain
+            from astrbot.core.message.message_event_result import MessageChain
+            from astrbot.core.platform.astr_message_event import AstrMessageEvent
+            from astrbot.core.platform.astrbot_message import AstrBotMessage, MessageMember
+            from astrbot.core.platform.message_type import MessageType
+            from astrbot.core.platform.platform_metadata import PlatformMetadata
+
+            parts = target_umo.split(":", 2)
+            platform_id = parts[0] if len(parts) == 3 else "daily_sharing"
+            message_type_raw = parts[1] if len(parts) == 3 else "FriendMessage"
+            session_id = parts[2] if len(parts) == 3 else "llm_tool"
+            try:
+                message_type = MessageType(message_type_raw)
+            except Exception:
+                message_type = MessageType.FRIEND_MESSAGE
+
+            message = AstrBotMessage()
+            message.type = message_type
+            message.self_id = "daily_sharing"
+            message.session_id = session_id
+            message.message_id = f"daily-sharing-tool-{uuid.uuid4().hex}"
+            message.sender = MessageMember(session_id, "DailySharing")
+            message.message = [Plain(message_text)]
+            message.message_str = message_text
+            message.raw_message = {"daily_sharing_llm_tool": True}
+
+            platform = PlatformMetadata(
+                name=platform_id,
+                description="DailySharing LLM tool call",
+                id=platform_id,
+            )
+
+            class SilentToolEvent(AstrMessageEvent):
+                def __init__(self):
+                    super().__init__(message_text, message, platform, session_id)
+                    self.sent_messages = []
+
+                async def send(self, message_chain: MessageChain) -> None:
+                    self.sent_messages.append(message_chain)
+
+            event = SilentToolEvent()
+            event.unified_msg_origin = target_umo
+            event.should_call_llm(False)
+            return event
+        except Exception:
+            event = SimpleNamespace(
+                unified_msg_origin=target_umo,
+                sent_messages=[],
+                get_result=lambda: None,
+                clear_result=lambda: None,
+                get_sender_id=lambda: "",
+                is_admin=lambda: False,
+            )
+
+            async def send(message_chain):
+                event.sent_messages.append(message_chain)
+
+            event.send = send
+            return event
+
+    async def _execute_recorded_llm_tool(self, tool, kwargs: dict, target_umo: str, message_text: str):
+        event = self._make_silent_llm_tool_event(target_umo, message_text)
+        agent_context = SimpleNamespace(context=self.context, event=event, extra={})
+        run_context = SimpleNamespace(
+            context=agent_context,
+            messages=[],
+            tool_call_timeout=int(self.image_conf.get("llm_tool_call_timeout", 300) or 300),
+        )
+
+        result = None
+        is_override_call = False
+        for ty in type(tool).mro():
+            call_method = ty.__dict__.get("call")
+            if call_method is None:
+                continue
+            if ty.__name__ == "FunctionTool" and str(ty.__module__).endswith(".agent.tool"):
+                continue
+            is_override_call = True
+            break
+        if getattr(tool, "handler", None):
+            result = tool.handler(event, **kwargs)
+        elif is_override_call:
+            result = tool.call(run_context, **kwargs)
+        elif hasattr(tool, "run"):
+            result = tool.run(event, **kwargs)
+        else:
+            raise RuntimeError("recorded LLM tool has no callable handler")
+
+        if inspect.isasyncgen(result):
+            last = None
+            async for item in result:
+                last = item
+            return last
+        if inspect.isawaitable(result):
+            return await result
+        return result
+
+    def _extract_llm_tool_media_result(
+        self,
+        result: Any,
+        *,
+        result_field: str,
+        result_keys: tuple[str, ...],
+    ) -> Optional[str]:
+        content = getattr(result, "content", None)
+        if isinstance(content, list):
+            for item in content:
+                text = getattr(item, "text", None)
+                media_ref = self._extract_media_ref_from_text(str(text or ""))
+                if media_ref:
+                    return media_ref
+            return None
+
+        media_ref = self._extract_result(
+            result,
+            result_field=result_field,
+            result_keys=result_keys,
+        )
+        if media_ref:
+            return media_ref
+        return None
+
+    def _extract_media_ref_from_text(self, text: str) -> Optional[str]:
+        import re
+
+        text = str(text or "").strip()
+        if not text:
+            return None
+
+        media_exts = (
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".webp",
+            ".gif",
+            ".bmp",
+            ".mp3",
+            ".wav",
+            ".m4a",
+            ".ogg",
+            ".flac",
+            ".mp4",
+            ".mov",
+            ".webm",
+        )
+
+        def valid_ref(value: str) -> Optional[str]:
+            value = str(value or "").strip().strip("'\"`，,。；;)")
+            lower = value.lower()
+            if lower.startswith(("http://", "https://", "file://")):
+                return value
+            if lower.endswith(media_exts) or os.path.exists(value):
+                return value
+            return None
+
+        direct = valid_ref(text)
+        if direct:
+            return direct
+
+        for match in re.finditer(r"(https?://[^\s'\"`，,。；;)]+|[A-Za-z]:[\\/][^\s'\"`，,。；;)]+|/[^\s'\"`，,。；;)]+)", text):
+            media_ref = valid_ref(match.group(0))
+            if media_ref:
+                return media_ref
+        return None
+
+    async def _call_recorded_llm_tool(
+        self,
+        *,
+        tool_name_key: str,
+        tool_args_key: str,
+        values: list[tuple[tuple[str, ...], Any]],
+        result_field_key: str,
+        result_keys: tuple[str, ...],
+        label: str,
+        target_umo: str = "",
+        message_text: str = "",
+    ) -> Optional[str]:
+        tool_name = str(self.image_conf.get(tool_name_key, "") or "").strip()
+        if not tool_name:
+            return None
+        tool = self._find_llm_tool(tool_name)
+        if not tool:
+            logger.warning(f"[DailySharing] Recorded LLM {label} tool not found: {tool_name}")
+            return None
+        kwargs = self._build_recorded_tool_kwargs(
+            tool,
+            self._read_recorded_tool_args(tool_args_key),
+            values,
+        )
+        if kwargs is None:
+            return None
+        try:
+            logger.info(f"[DailySharing] Trying recorded LLM {label} tool: {tool_name}")
+            result = await self._execute_recorded_llm_tool(
+                tool,
+                kwargs,
+                target_umo,
+                message_text,
+            )
+            media_ref = self._extract_llm_tool_media_result(
+                result,
+                result_field=str(self.image_conf.get(result_field_key, "") or "").strip(),
+                result_keys=result_keys,
+            )
+            if media_ref:
+                logger.info(f"[DailySharing] Recorded LLM {label} tool succeeded: {tool_name}")
+                return media_ref
+            logger.warning(f"[DailySharing] Recorded LLM {label} tool returned no recognizable media: {tool_name}")
+        except Exception as exc:
+            logger.warning(f"[DailySharing] Recorded LLM {label} tool failed: {tool_name}: {exc}")
+        return None
+
     async def _call_configured_method(
         self,
         plugin_name_key: str,
@@ -1028,11 +1322,52 @@ class ImageProviderManager:
         target_umo: str = "",
     ) -> Optional[str]:
         if use_ref_selfie:
+            refs = []
+            tool_name = str(self.image_conf.get("llm_selfie_tool_name", "") or "").strip()
+            if tool_name:
+                tool = self._find_llm_tool(tool_name)
+                plugin = getattr(getattr(tool, "handler", None), "__self__", None) if tool else None
+                refs = await self._get_plugin_reference_images(plugin)
+                media_ref = await self._call_recorded_llm_tool(
+                    tool_name_key="llm_selfie_tool_name",
+                    tool_args_key="llm_selfie_tool_args",
+                    values=[
+                        (self.PROMPT_ARG_NAMES, prompt),
+                        (self.IMAGE_ARG_NAMES, refs or None),
+                        (self.IMAGE_PATH_ARG_NAMES, refs[0] if refs else None),
+                        (self.SESSION_ARG_NAMES, target_umo or None),
+                        (self.MODE_ARG_NAMES, "selfie_ref"),
+                    ],
+                    result_field_key="generic_image_result_field",
+                    result_keys=self.RESULT_FIELDS,
+                    label="image selfie/reference",
+                    target_umo=target_umo,
+                    message_text=prompt,
+                )
+                if media_ref:
+                    return media_ref
             return await self._try_auto_image_edit_candidates(
                 self.discover_image_edit_methods(),
                 prompt=prompt,
                 target_umo=target_umo,
             )
+
+        media_ref = await self._call_recorded_llm_tool(
+            tool_name_key="llm_image_tool_name",
+            tool_args_key="llm_image_tool_args",
+            values=[
+                (self.PROMPT_ARG_NAMES, prompt),
+                (self.SESSION_ARG_NAMES, target_umo or None),
+                (self.MODE_ARG_NAMES, "text"),
+            ],
+            result_field_key="generic_image_result_field",
+            result_keys=self.RESULT_FIELDS,
+            label="image generation",
+            target_umo=target_umo,
+            message_text=prompt,
+        )
+        if media_ref:
+            return media_ref
 
         candidates = self.discover_image_methods()
         if not candidates:
@@ -1125,6 +1460,23 @@ class ImageProviderManager:
         target_umo: str = "",
         session_state=None,
     ) -> Optional[str]:
+        media_ref = await self._call_recorded_llm_tool(
+            tool_name_key="llm_tts_tool_name",
+            tool_args_key="llm_tts_tool_args",
+            values=[
+                (self.TTS_TEXT_ARG_NAMES, text),
+                (self.TTS_EMOTION_ARG_NAMES, emotion or None),
+                (self.TTS_SESSION_ARG_NAMES, target_umo or None),
+                (("session_state", "state"), session_state),
+            ],
+            result_field_key="generic_tts_result_field",
+            result_keys=self.AUDIO_RESULT_FIELDS,
+            label="TTS generation",
+            target_umo=target_umo,
+            message_text=text,
+        )
+        if media_ref:
+            return media_ref
         return await self._try_auto_candidates(
             self.discover_tts_methods(),
             values=[

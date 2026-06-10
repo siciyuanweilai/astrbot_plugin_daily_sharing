@@ -89,11 +89,10 @@ export function createSettingsConfig({
 
   function formatProviderProbeResult(data = {}) {
     const result = data.result || {};
-    const plugin = text(result.plugin_name).trim() || "未知插件";
-    const method = text(result.method_path).trim() || "未知方法";
-    const mediaRef = text(result.media_ref).trim();
-    const suffix = mediaRef ? `，返回 ${mediaRef}` : "";
-    return `${providerProbeLabel(data.kind)}命中：${plugin}.${method}${suffix}`;
+    const tool = text(result.tool_name).trim() || "未知工具";
+    const argKeys = Object.keys(result.tool_args || {});
+    const suffix = argKeys.length ? `，参数 ${argKeys.join(", ")}` : "";
+    return `${providerProbeLabel(data.kind)}命中 LLM 工具：${tool}${suffix}`;
   }
 
   async function runProviderProbe(kind) {
@@ -101,8 +100,8 @@ export function createSettingsConfig({
     window.clearTimeout(state.configAutoSaveTimer);
     state.configAutoSaveTimer = 0;
     setProviderProbeButtonsDisabled(true);
-    setProviderProbeResult(`${providerProbeLabel(kind)}测试中...`);
-    setNotice(`${providerProbeLabel(kind)}测试中，可能需要等待生成完成。`, "info", 7000);
+    setProviderProbeResult(`${providerProbeLabel(kind)}校准中...`);
+    setNotice(`${providerProbeLabel(kind)}校准中，可能需要等待工具调用完成。`, "info", 7000);
     try {
       const data = await apiPost(
         "page/provider/probe",
@@ -117,7 +116,7 @@ export function createSettingsConfig({
       setNotice(`${message}，配置已保存。`, "success", 7000);
       await loadStatus({ quiet: true });
     } catch (error) {
-      const message = error.message || `${providerProbeLabel(kind)}测试失败`;
+      const message = error.message || `${providerProbeLabel(kind)}校准失败`;
       setProviderProbeResult(message);
       setNotice(message, "error", 9000);
     } finally {
