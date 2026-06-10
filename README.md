@@ -222,7 +222,7 @@ default:FriendMessage:o2cq508wSbYFvbrV5tnC29LoU3NU@im.wechat
 - **动态与媒体**：展示今日分享、文案数量、图片数量、视频数量等统计；动态记录、图片、视频和文案支持页面内查看。
 - **媒体预览**：图片和视频支持点击打开、再次点击关闭；视频控制条包含播放/暂停、进度条和静音，移动端可先唤出控制条再拖动进度。
 - **日历轮播**：定时任务会按日期分组自动轮播，移动端保持固定高度，避免任务少时面板收缩。
-- **设置入口**：设置页与仪表盘在同一个 仪表盘 内切换，页面会记住当前视图；刷新时会显示“少女祈祷中...”加载动画。
+- **设置入口**：设置页与仪表盘在同一个仪表盘内切换，页面会记住当前视图；刷新时会显示“少女祈祷中...”加载动画。
 - **页面偏好**：樱花飘落开关会保存到 `Dashboard_preferences.json`，关闭后刷新或重新打开仪表盘仍保持关闭。
 
 页面操作会调用插件内置的 `page/status`、`page/config`、`page/preferences`、`page/history`、`page/media`、`page/toggle`、`page/run`、`page/retry`、`page/targets` Web API；当前前端以状态轮询刷新为主，分享中会加快轮询频率。如果页面提示没有检测到 AstrBot Pages bridge，请从 AstrBot WebUI 的插件页面入口打开。
@@ -231,7 +231,7 @@ default:FriendMessage:o2cq508wSbYFvbrV5tnC29LoU3NU@im.wechat
 
 ## ⚙️ 进阶配置指南 (Config)
 
-可以在 AstrBot WebUI 的 **插件配置** 面板中调整，也可以直接进入 仪表盘 的 **设置页**。现版设置页会按照 `_conf_schema.json` 的分组渲染完整配置，并支持自动保存。
+可以在 AstrBot WebUI 的 **插件配置** 面板中调整，也可以直接进入仪表盘的 **设置页**。现版设置页会按照 `_conf_schema.json` 的分组渲染完整配置，并支持自动保存。
 
 | 配置分组 | 说明 |
 | :--- | :--- |
