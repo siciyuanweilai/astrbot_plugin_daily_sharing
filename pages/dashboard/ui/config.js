@@ -3,7 +3,7 @@ import { text } from "./format.js?v=20260609-format";
 const CONFIG_AUTO_SAVE_FAST_DELAY_MS = 360;
 const CONFIG_AUTO_SAVE_TEXT_DELAY_MS = 900;
 const CONFIG_AUTO_SAVE_RETRY_DELAY_MS = 600;
-const PROVIDER_PROBE_TIMEOUT_MS = 900000;
+const PROVIDER_PROBE_TIMEOUT_MS = 300000;
 
 export function createSettingsConfig({
   state,

@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 import uuid
 from typing import Any
 
@@ -196,6 +198,7 @@ class DashboardProviderProbeMixin:
         event = self._page_probe_event(target_umo, prompt)
         tools = self._page_probe_toolset(kind)
         calls = []
+        first_tool_started = asyncio.Event()
 
         class ProbeHooks(BaseAgentRunHooks):
             async def on_tool_start(self, run_context, tool, tool_args):
@@ -206,6 +209,7 @@ class DashboardProviderProbeMixin:
                         "result": "",
                     }
                 )
+                first_tool_started.set()
 
             async def on_tool_end(self, run_context, tool, tool_args, tool_result):
                 item = calls[-1] if calls else {
@@ -220,21 +224,77 @@ class DashboardProviderProbeMixin:
         self_outer = self
         response = None
         probe_error = ""
-        try:
-            response = await self.context.tool_loop_agent(
+        selection_timeout = int(body.get("selection_timeout") or 90)
+        result_grace_seconds = int(body.get("result_grace_seconds") or 3)
+        agent_task = asyncio.create_task(
+            self.context.tool_loop_agent(
                 event=event,
                 chat_provider_id=provider_id,
                 prompt=prompt,
                 system_prompt=system_prompt,
                 tools=tools,
                 max_steps=3,
-                tool_call_timeout=int(body.get("tool_call_timeout") or 900),
+                tool_call_timeout=int(body.get("tool_call_timeout") or 300),
                 agent_hooks=ProbeHooks(),
             )
+        )
+        try:
+            start_task = asyncio.create_task(first_tool_started.wait())
+            done, _pending = await asyncio.wait(
+                {start_task, agent_task},
+                timeout=selection_timeout,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if not done:
+                agent_task.cancel()
+                start_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await agent_task
+                with contextlib.suppress(asyncio.CancelledError):
+                    await start_task
+                raise RuntimeError("LLM 未在限定时间内调用媒体工具，无法记录工具")
+            if agent_task in done and not calls:
+                with contextlib.suppress(BaseException):
+                    response = agent_task.result()
+                if not calls:
+                    raise RuntimeError("LLM 没有调用任何媒体工具，无法记录工具")
+            start_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await start_task
+            try:
+                response = await asyncio.wait_for(
+                    asyncio.shield(agent_task),
+                    timeout=result_grace_seconds,
+                )
+            except asyncio.TimeoutError:
+                probe_error = "已捕获工具调用，未等待媒体生成完成"
+                agent_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await agent_task
+        except asyncio.TimeoutError:
+            if calls:
+                probe_error = "已捕获工具调用，等待工具结果超时"
+            else:
+                agent_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await agent_task
+                raise RuntimeError("LLM 未在限定时间内调用媒体工具，无法记录工具")
         except Exception as exc:
+            if not agent_task.done():
+                agent_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await agent_task
             probe_error = str(exc) or type(exc).__name__
             if not calls:
                 raise
+        finally:
+            if calls and not agent_task.done():
+                agent_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await agent_task
+        if agent_task.done() and not agent_task.cancelled() and not response:
+            with contextlib.suppress(Exception):
+                response = agent_task.result()
         if not calls:
             raise RuntimeError("LLM 没有调用任何媒体工具，无法记录工具")
 
