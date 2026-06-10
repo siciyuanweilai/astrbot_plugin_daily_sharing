@@ -1,0 +1,418 @@
+@media (max-width: 1100px) {
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .primary-column,
+  .side-column {
+    grid-column: 1 / -1;
+  }
+
+  .settings-panel {
+    display: block;
+    padding: 0;
+  }
+
+  .settings-form {
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+    gap: 14px;
+  }
+
+  .settings-section,
+  .settings-section[data-settings-section="basic"],
+  .settings-section[data-settings-section="briefing"],
+  .settings-section[data-settings-section="qzone"],
+  .settings-section[data-settings-section="content"],
+  .settings-section[data-settings-section="weixin"],
+  .settings-section[data-settings-section="tts"],
+  .settings-section[data-settings-section="news"],
+  .settings-section[data-settings-section="llm"] {
+    grid-column: span 4;
+  }
+
+  .settings-section[data-settings-section="target"],
+  .settings-section[data-settings-section="context"],
+  .settings-section[data-settings-section="sequence"],
+  .settings-section[data-settings-section="qzoneSequence"],
+  .settings-section[data-settings-section="media"] {
+    grid-column: span 8;
+  }
+
+  .setting-field,
+  .setting-switch {
+    grid-column: span 4;
+  }
+
+  .setting-field-wide {
+    grid-column: span 6;
+  }
+
+  .settings-section[data-settings-section="target"] .setting-field-wide,
+  .settings-section[data-settings-section="content"] .setting-field-wide,
+  .settings-section[data-settings-section="news"] .setting-field-wide,
+  .settings-section[data-settings-section="media"] .setting-field-wide,
+  .settings-section[data-settings-section="tts"] .setting-field-wide {
+    grid-column: span 12;
+  }
+
+  .side-column {
+    grid-template-rows: auto;
+  }
+
+  .calendar-panel {
+    height: auto;
+  }
+
+  .calendar-items {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 860px) {
+  .settings-form {
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+  }
+
+  .settings-section,
+  .settings-section[data-settings-section="target"],
+  .settings-section[data-settings-section="basic"],
+  .settings-section[data-settings-section="sequence"],
+  .settings-section[data-settings-section="context"],
+  .settings-section[data-settings-section="briefing"],
+  .settings-section[data-settings-section="qzone"],
+  .settings-section[data-settings-section="qzoneSequence"],
+  .settings-section[data-settings-section="content"],
+  .settings-section[data-settings-section="media"],
+  .settings-section[data-settings-section="weixin"],
+  .settings-section[data-settings-section="tts"],
+  .settings-section[data-settings-section="news"],
+  .settings-section[data-settings-section="llm"] {
+    grid-column: 1 / -1;
+  }
+
+  .media-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .setting-field,
+  .setting-switch,
+  .setting-field-wide {
+    grid-column: span 6;
+  }
+
+  .settings-section[data-settings-section="target"] .setting-field-wide,
+  .settings-section[data-settings-section="content"] .setting-field-wide,
+  .settings-section[data-settings-section="news"] .setting-field-wide,
+  .settings-section[data-settings-section="media"] .setting-field-wide,
+  .settings-section[data-settings-section="tts"] .setting-field-wide {
+    grid-column: span 12;
+  }
+}
+
+@media (max-width: 720px) {
+  .shell {
+    padding: 16px;
+  }
+
+  .topbar {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    min-height: 88px;
+    padding: 18px;
+  }
+
+  .dashboard-view .topbar {
+    padding-right: 84px;
+  }
+
+  .settings-topbar {
+    padding-right: 84px;
+  }
+
+  .hanging-controls {
+    --hanging-line-height: 140px;
+    top: 0;
+    right: 12px;
+    width: 68px;
+  }
+
+  .sakura-toggle {
+    width: 54px;
+    height: 43px;
+    margin-top: 56px;
+    padding: 0;
+    font-size: 11px;
+  }
+
+  .settings-toggle {
+    margin-top: 35px;
+  }
+
+  .sakura-toggle-pull {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+  }
+
+  .sakura-toggle-flower {
+    font-size: 18px;
+  }
+
+  .workspace,
+  .control-grid,
+  .side-column {
+    grid-template-columns: 1fr;
+  }
+
+  .config-list {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .share-progress-head {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    row-gap: 5px;
+  }
+
+  .share-progress-title {
+    flex: 1 1 100%;
+  }
+
+  .share-progress-steps {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+
+  .share-progress-step {
+    min-height: 21px;
+    padding-inline: 3px;
+    font-size: 10.5px;
+  }
+
+  .action-panel {
+    grid-template-rows: auto;
+  }
+
+  .recent-actions {
+    min-height: 0;
+  }
+
+  .recent-action {
+    min-height: 38px;
+    padding: 6px 8px;
+  }
+
+  .recent-action-status {
+    min-width: 40px;
+    padding-inline: 6px;
+    font-size: 11px;
+  }
+
+  .recent-action-body strong {
+    font-size: 12px;
+  }
+
+  .recent-action-body span {
+    font-size: 11px;
+  }
+
+  .target-carousel-head {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .target-carousel-name-row {
+    align-items: flex-start;
+  }
+
+  .target-carousel-name {
+    font-size: 16px;
+  }
+
+  .target-carousel-stats span {
+    padding: 3px 7px;
+    font-size: 11px;
+  }
+
+  .media-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .media-lightbox-controls {
+    bottom: 10px;
+    left: 8px;
+    right: 8px;
+    width: auto;
+    grid-template-columns: auto 36px minmax(54px, 1fr) auto 36px;
+    gap: 6px;
+    padding: 8px 8px 8px 10px;
+  }
+
+  .media-lightbox-time {
+    min-width: 34px;
+    font-size: 11px;
+  }
+
+  .media-lightbox-progress,
+  .media-lightbox-progress input {
+    height: 46px;
+  }
+
+  .media-lightbox-progress {
+    touch-action: none;
+  }
+
+  .media-lightbox-progress input {
+    touch-action: none;
+  }
+
+  .media-lightbox-progress input::-webkit-slider-runnable-track {
+    height: 12px;
+  }
+
+  .media-lightbox-progress input::-moz-range-track,
+  .media-lightbox-progress input::-moz-range-progress {
+    height: 12px;
+  }
+
+  .media-lightbox-progress input::-webkit-slider-thumb {
+    width: 26px;
+    height: 26px;
+    margin-top: -8px;
+  }
+
+  .media-lightbox-progress input::-moz-range-thumb {
+    width: 26px;
+    height: 26px;
+  }
+
+  .media-lightbox.video-mode .media-lightbox-play-button,
+  .media-lightbox-mute-button {
+    width: 36px;
+    height: 36px;
+  }
+
+  .media-filterbar {
+    align-items: stretch;
+  }
+
+  .media-stats {
+    width: 100%;
+    flex: 1 1 100%;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .media-stat-chip {
+    min-width: 0;
+    min-height: 43px;
+    padding: 6px 4px;
+    gap: 3px;
+  }
+
+  .media-stat-chip span {
+    font-size: 10.5px;
+  }
+
+  .media-stat-chip strong {
+    font-size: 13px;
+  }
+
+  .media-filter-controls {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .media-kind-filter {
+    width: 100%;
+    grid-auto-flow: initial;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .media-kind-filter .segment {
+    min-width: 0;
+  }
+
+  .media-type-filter {
+    width: 100%;
+  }
+
+  .sweet-select.is-compact,
+  .sweet-select.is-media-type {
+    width: 100%;
+  }
+
+  .settings-panel {
+    padding-right: 0;
+  }
+
+  .settings-section {
+    gap: 12px;
+    min-height: 0;
+    padding: 15px 13px;
+    scroll-margin-top: 126px;
+  }
+
+  .setting-field,
+  .setting-switch,
+  .setting-field-wide {
+    grid-column: span 12;
+  }
+
+  .settings-section[data-settings-section="content"] .setting-switch > span {
+    white-space: normal;
+  }
+
+  .settings-view .topbar-actions {
+    width: 100%;
+    justify-content: flex-start;
+    padding-right: 0;
+  }
+
+  .settings-view .topbar-actions .text-button {
+    flex: 1 1 96px;
+  }
+
+  .target-schema-guide,
+  .target-fields,
+  .target-item {
+    grid-template-columns: 1fr;
+  }
+
+  .config-insights {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .target-actions {
+    justify-content: flex-start;
+  }
+
+  .settings-target-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .settings-target-head .target-actions,
+  .settings-target-head .segments {
+    width: 100%;
+  }
+
+  .settings-target-head .segments {
+    grid-auto-flow: initial;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .settings-target-head .text-button,
+  .settings-target-head .sweet-select.is-compact {
+    flex: 1 1 calc(50% - 4px);
+  }
+
+  .compact-select {
+    width: 100%;
+  }
+}

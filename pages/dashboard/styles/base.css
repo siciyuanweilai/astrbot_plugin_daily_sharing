@@ -1,0 +1,203 @@
+:root {
+  color-scheme: light;
+  --bg: #fff7fb;
+  --page-bg:
+    linear-gradient(135deg, rgba(255, 232, 243, 0.82), rgba(239, 249, 255, 0.72) 48%, rgba(255, 246, 228, 0.76)),
+    var(--bg);
+  --surface: rgba(255, 255, 255, 0.94);
+  --surface-soft: #fff0f6;
+  --surface-warm: #fff8ed;
+  --text: #3b2b34;
+  --muted: #806b78;
+  --line: #f1d5e2;
+  --accent: #e76ea8;
+  --accent-strong: #b83d78;
+  --accent-soft: #ffe5f1;
+  --blue: #5c8edc;
+  --blue-soft: #eaf4ff;
+  --mint: #56af98;
+  --mint-soft: #e8f8f2;
+  --amber: #c46b3f;
+  --amber-soft: #fff0dc;
+  --danger: #c94b64;
+  --danger-soft: #ffe5ea;
+  --shadow: 0 14px 34px rgba(207, 109, 151, 0.13);
+  --cursor-default: auto;
+  --cursor-action: pointer;
+  --cursor-zoom: zoom-in;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  width: 100%;
+  min-height: 100%;
+  background: var(--page-bg);
+  overflow-x: hidden;
+}
+
+body {
+  position: relative;
+  isolation: isolate;
+  width: 100%;
+  margin: 0;
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: var(--page-bg);
+  color: var(--text);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+body::before {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  content: "";
+  pointer-events: none;
+  background: var(--page-bg);
+}
+
+@media (pointer: fine) {
+  :root {
+    --cursor-default:
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28'%3E%3Cpath fill='%23ff8fbc' stroke='%23b83d78' stroke-width='1.2' d='M9.3 3.2c2.7 1 4.3 3.1 4.1 5.2 1.5-1.6 4.4-1.8 6.7-.3-1 2.7-3.1 4.3-5.2 4.1 1.6 1.5 1.8 4.4.3 6.7-2.7-1-4.3-3.1-4.1-5.2-1.5 1.6-4.4 1.8-6.7.3 1-2.7 3.1-4.3 5.2-4.1-1.6-1.5-1.8-4.4-.3-6.7Z'/%3E%3Ccircle cx='12.2' cy='11.1' r='2.5' fill='%23fff7fb' stroke='%23f06da6' stroke-width='1'/%3E%3Cpath d='M14.5 14.3 24 24' stroke='%23b83d78' stroke-width='2.2' stroke-linecap='round'/%3E%3C/svg%3E") 8 8,
+      auto;
+    --cursor-action:
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='30' height='30' viewBox='0 0 30 30'%3E%3Cpath fill='%23ff7eb3' stroke='%23b83d78' stroke-width='1.15' d='M15 2.8c2 2.1 2.5 4.8 1.2 6.5 2.1-.9 4.8.2 6.2 2.7-2.1 2-4.8 2.5-6.5 1.2.9 2.1-.2 4.8-2.7 6.2-2-2.1-2.5-4.8-1.2-6.5-2.1.9-4.8-.2-6.2-2.7 2.1-2 4.8-2.5 6.5-1.2-.9-2.1.2-4.8 2.7-6.2Z'/%3E%3Ccircle cx='15' cy='11.1' r='2.7' fill='%23fff9fd'/%3E%3Cpath d='M16.8 16.3 25 25' stroke='%23b83d78' stroke-width='2.3' stroke-linecap='round'/%3E%3C/svg%3E") 10 10,
+      pointer;
+    --cursor-zoom: var(--cursor-action);
+  }
+
+  body {
+    cursor: var(--cursor-default);
+  }
+
+  button,
+  a,
+  select,
+  input,
+  textarea,
+  [role="button"],
+  [role="switch"],
+  .sweet-select-trigger,
+  .sweet-select-option,
+  .sweet-combo-option,
+  .segment,
+  .media-preview-button,
+  .content-preview-button {
+    cursor: var(--cursor-action);
+  }
+
+  button:disabled,
+  input:disabled,
+  select:disabled,
+  textarea:disabled {
+    cursor: not-allowed;
+  }
+}
+
+button:disabled,
+input:disabled,
+select:disabled,
+textarea:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.cursor-trail-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  pointer-events: none;
+  overflow: hidden;
+  contain: strict;
+}
+
+.cursor-dream {
+  position: fixed;
+  left: var(--cursor-x);
+  top: var(--cursor-y);
+  width: var(--cursor-size);
+  height: var(--cursor-size);
+  opacity: 0;
+  transform: translate3d(-50%, -50%, 0) rotate(var(--cursor-rotate));
+  animation: cursorDreamPetal var(--cursor-duration) ease-out forwards;
+  will-change: transform, opacity;
+}
+
+.cursor-dream::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 72% 18% 72% 24%;
+  background:
+    radial-gradient(circle at 76% 22%, rgba(255, 255, 255, 0.88) 0 18%, transparent 19%),
+    linear-gradient(135deg, rgba(255, 226, 239, 0.96), rgba(244, 118, 174, 0.78));
+  box-shadow: 0 6px 14px rgba(214, 91, 148, 0.2);
+}
+
+.cursor-dream.sparkle {
+  width: var(--cursor-size);
+  height: var(--cursor-size);
+  animation-name: cursorDreamSparkle;
+}
+
+.cursor-dream.sparkle::before {
+  inset: 25%;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle, rgba(255, 255, 255, 0.98) 0 20%, rgba(255, 198, 224, 0.92) 22% 48%, transparent 50%),
+    conic-gradient(from 45deg, transparent 0 12%, rgba(255, 158, 201, 0.82) 13% 18%, transparent 19% 37%, rgba(255, 222, 154, 0.82) 38% 43%, transparent 44% 62%, rgba(255, 158, 201, 0.82) 63% 68%, transparent 69% 87%, rgba(255, 222, 154, 0.82) 88% 93%, transparent 94%);
+  box-shadow: 0 0 14px rgba(255, 165, 207, 0.48);
+}
+
+@keyframes cursorDreamPetal {
+  0% {
+    opacity: 0;
+    transform: translate3d(-50%, -50%, 0) scale(0.72) rotate(var(--cursor-rotate));
+  }
+  18% {
+    opacity: var(--cursor-opacity);
+  }
+  100% {
+    opacity: 0;
+    transform:
+      translate3d(calc(-50% + var(--cursor-drift-x)), calc(-50% + var(--cursor-drift-y)), 0)
+      scale(var(--cursor-scale))
+      rotate(calc(var(--cursor-rotate) + var(--cursor-spin)));
+  }
+}
+
+@keyframes cursorDreamSparkle {
+  0% {
+    opacity: 0;
+    transform: translate3d(-50%, -50%, 0) scale(0.45) rotate(0deg);
+  }
+  24% {
+    opacity: var(--cursor-opacity);
+  }
+  100% {
+    opacity: 0;
+    transform:
+      translate3d(calc(-50% + var(--cursor-drift-x)), calc(-50% + var(--cursor-drift-y)), 0)
+      scale(1.45)
+      rotate(110deg);
+  }
+}
+
+html.media-lightbox-open,
+html.text-lightbox-open {
+  overflow-x: hidden;
+  overflow-y: scroll;
+}
+
+body.media-lightbox-open,
+body.text-lightbox-open {
+  overflow-x: hidden;
+}
+
