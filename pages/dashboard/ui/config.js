@@ -3,7 +3,7 @@ import { text } from "./format.js?v=20260609-format";
 const CONFIG_AUTO_SAVE_FAST_DELAY_MS = 360;
 const CONFIG_AUTO_SAVE_TEXT_DELAY_MS = 900;
 const CONFIG_AUTO_SAVE_RETRY_DELAY_MS = 600;
-const PROVIDER_PROBE_TIMEOUT_MS = 300000;
+const PROVIDER_PROBE_TIMEOUT_MS = 900000;
 
 export function createSettingsConfig({
   state,
@@ -92,7 +92,8 @@ export function createSettingsConfig({
     const tool = text(result.tool_name).trim() || "未知工具";
     const argKeys = Object.keys(result.tool_args || {});
     const suffix = argKeys.length ? `，参数 ${argKeys.join(", ")}` : "";
-    return `${providerProbeLabel(data.kind)}命中 LLM 工具：${tool}${suffix}`;
+    const errorNote = result.probe_error ? "，最终回复异常但已记录" : "";
+    return `${providerProbeLabel(data.kind)}命中 LLM 工具：${tool}${suffix}${errorNote}`;
   }
 
   async function runProviderProbe(kind) {

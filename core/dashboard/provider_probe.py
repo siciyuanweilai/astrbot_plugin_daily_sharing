@@ -218,16 +218,23 @@ class DashboardProviderProbeMixin:
                     calls.append(item)
 
         self_outer = self
-        response = await self.context.tool_loop_agent(
-            event=event,
-            chat_provider_id=provider_id,
-            prompt=prompt,
-            system_prompt=system_prompt,
-            tools=tools,
-            max_steps=3,
-            tool_call_timeout=int(body.get("tool_call_timeout") or 300),
-            agent_hooks=ProbeHooks(),
-        )
+        response = None
+        probe_error = ""
+        try:
+            response = await self.context.tool_loop_agent(
+                event=event,
+                chat_provider_id=provider_id,
+                prompt=prompt,
+                system_prompt=system_prompt,
+                tools=tools,
+                max_steps=3,
+                tool_call_timeout=int(body.get("tool_call_timeout") or 900),
+                agent_hooks=ProbeHooks(),
+            )
+        except Exception as exc:
+            probe_error = str(exc) or type(exc).__name__
+            if not calls:
+                raise
         if not calls:
             raise RuntimeError("LLM 没有调用任何媒体工具，无法记录工具")
 
@@ -238,6 +245,7 @@ class DashboardProviderProbeMixin:
             "tool_args": tool_call["tool_args"],
             "tool_result": tool_call.get("result", ""),
             "final_text": str(getattr(response, "completion_text", "") or ""),
+            "probe_error": probe_error,
             "target_umo": target_umo,
             "provider_id": provider_id,
             "sent_count": len(getattr(event, "sent_messages", []) or []),
