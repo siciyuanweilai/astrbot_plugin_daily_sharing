@@ -44,10 +44,10 @@ class ImageAiimgMixin:
                 use_ref_selfie=use_ref_selfie,
                 target_umo=target_umo or "",
             )
-        if provider == "auto_scan":
+        if provider == "calibrated_tool":
             if use_ref_selfie:
-                logger.info("[每日分享] 当前为自动扫描生图 provider，优先尝试改图/自拍方法")
-            return await self.provider_manager.generate_with_auto_scan(
+                logger.info("[每日分享] 当前为校准工具生图 provider，优先调用已校准自拍/参考图工具")
+            return await self.provider_manager.generate_with_calibrated_tool(
                 prompt,
                 use_ref_selfie=use_ref_selfie,
                 target_umo=target_umo or "",

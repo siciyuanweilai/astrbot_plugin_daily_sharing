@@ -147,8 +147,8 @@ class ContextTtsMixin:
                     session_state=session_state,
                 )
 
-            if provider == "auto_scan":
-                return await self.tts_provider_manager.generate_tts_with_auto_scan(
+            if provider == "calibrated_tool":
+                return await self.tts_provider_manager.generate_tts_with_calibrated_tool(
                     final_text,
                     emotion=target_emotion,
                     target_umo=target_umo,

@@ -1322,52 +1322,11 @@ class ImageProviderManager:
         target_umo: str = "",
     ) -> Optional[str]:
         if use_ref_selfie:
-            refs = []
-            tool_name = str(self.image_conf.get("llm_selfie_tool_name", "") or "").strip()
-            if tool_name:
-                tool = self._find_llm_tool(tool_name)
-                plugin = getattr(getattr(tool, "handler", None), "__self__", None) if tool else None
-                refs = await self._get_plugin_reference_images(plugin)
-                media_ref = await self._call_recorded_llm_tool(
-                    tool_name_key="llm_selfie_tool_name",
-                    tool_args_key="llm_selfie_tool_args",
-                    values=[
-                        (self.PROMPT_ARG_NAMES, prompt),
-                        (self.IMAGE_ARG_NAMES, refs or None),
-                        (self.IMAGE_PATH_ARG_NAMES, refs[0] if refs else None),
-                        (self.SESSION_ARG_NAMES, target_umo or None),
-                        (self.MODE_ARG_NAMES, "selfie_ref"),
-                    ],
-                    result_field_key="generic_image_result_field",
-                    result_keys=self.RESULT_FIELDS,
-                    label="image selfie/reference",
-                    target_umo=target_umo,
-                    message_text=prompt,
-                )
-                if media_ref:
-                    return media_ref
             return await self._try_auto_image_edit_candidates(
                 self.discover_image_edit_methods(),
                 prompt=prompt,
                 target_umo=target_umo,
             )
-
-        media_ref = await self._call_recorded_llm_tool(
-            tool_name_key="llm_image_tool_name",
-            tool_args_key="llm_image_tool_args",
-            values=[
-                (self.PROMPT_ARG_NAMES, prompt),
-                (self.SESSION_ARG_NAMES, target_umo or None),
-                (self.MODE_ARG_NAMES, "text"),
-            ],
-            result_field_key="generic_image_result_field",
-            result_keys=self.RESULT_FIELDS,
-            label="image generation",
-            target_umo=target_umo,
-            message_text=prompt,
-        )
-        if media_ref:
-            return media_ref
 
         candidates = self.discover_image_methods()
         if not candidates:
@@ -1397,6 +1356,52 @@ class ImageProviderManager:
         logger.error("[DailySharing] Auto scan found candidates, but all calls failed")
         return None
 
+    async def generate_with_calibrated_tool(
+        self,
+        prompt: str,
+        use_ref_selfie: bool = False,
+        target_umo: str = "",
+    ) -> Optional[str]:
+        if use_ref_selfie:
+            tool_name = str(self.image_conf.get("llm_selfie_tool_name", "") or "").strip()
+            if not tool_name:
+                logger.warning("[DailySharing] Calibrated image provider is missing selfie/reference tool")
+                return None
+            tool = self._find_llm_tool(tool_name)
+            plugin = getattr(getattr(tool, "handler", None), "__self__", None) if tool else None
+            refs = await self._get_plugin_reference_images(plugin)
+            return await self._call_recorded_llm_tool(
+                tool_name_key="llm_selfie_tool_name",
+                tool_args_key="llm_selfie_tool_args",
+                values=[
+                    (self.PROMPT_ARG_NAMES, prompt),
+                    (self.IMAGE_ARG_NAMES, refs or None),
+                    (self.IMAGE_PATH_ARG_NAMES, refs[0] if refs else None),
+                    (self.SESSION_ARG_NAMES, target_umo or None),
+                    (self.MODE_ARG_NAMES, "selfie_ref"),
+                ],
+                result_field_key="generic_image_result_field",
+                result_keys=self.RESULT_FIELDS,
+                label="calibrated image selfie/reference",
+                target_umo=target_umo,
+                message_text=prompt,
+            )
+
+        return await self._call_recorded_llm_tool(
+            tool_name_key="llm_image_tool_name",
+            tool_args_key="llm_image_tool_args",
+            values=[
+                (self.PROMPT_ARG_NAMES, prompt),
+                (self.SESSION_ARG_NAMES, target_umo or None),
+                (self.MODE_ARG_NAMES, "text"),
+            ],
+            result_field_key="generic_image_result_field",
+            result_keys=self.RESULT_FIELDS,
+            label="calibrated image generation",
+            target_umo=target_umo,
+            message_text=prompt,
+        )
+
     async def generate_video_with_generic_plugin(self, prompt: str, image_path: str, image_bytes: bytes = None) -> Optional[str]:
         return await self._call_configured_method(
             "generic_video_plugin_name",
@@ -1425,6 +1430,23 @@ class ImageProviderManager:
             result_field_key="generic_video_result_field",
             result_keys=self.VIDEO_RESULT_FIELDS,
             label="video generation",
+        )
+
+    async def generate_video_with_calibrated_tool(self, prompt: str, image_path: str, image_bytes: bytes = None, target_umo: str = "") -> Optional[str]:
+        return await self._call_recorded_llm_tool(
+            tool_name_key="llm_video_tool_name",
+            tool_args_key="llm_video_tool_args",
+            values=[
+                (self.VIDEO_PROMPT_ARG_NAMES, prompt),
+                (self.VIDEO_IMAGE_PATH_ARG_NAMES, image_path),
+                (self.VIDEO_IMAGE_BYTES_ARG_NAMES, image_bytes),
+                (self.SESSION_ARG_NAMES, target_umo or None),
+            ],
+            result_field_key="generic_video_result_field",
+            result_keys=self.VIDEO_RESULT_FIELDS,
+            label="calibrated video generation",
+            target_umo=target_umo,
+            message_text=prompt,
         )
 
     async def generate_tts_with_generic_plugin(
@@ -1460,23 +1482,6 @@ class ImageProviderManager:
         target_umo: str = "",
         session_state=None,
     ) -> Optional[str]:
-        media_ref = await self._call_recorded_llm_tool(
-            tool_name_key="llm_tts_tool_name",
-            tool_args_key="llm_tts_tool_args",
-            values=[
-                (self.TTS_TEXT_ARG_NAMES, text),
-                (self.TTS_EMOTION_ARG_NAMES, emotion or None),
-                (self.TTS_SESSION_ARG_NAMES, target_umo or None),
-                (("session_state", "state"), session_state),
-            ],
-            result_field_key="generic_tts_result_field",
-            result_keys=self.AUDIO_RESULT_FIELDS,
-            label="TTS generation",
-            target_umo=target_umo,
-            message_text=text,
-        )
-        if media_ref:
-            return media_ref
         return await self._try_auto_candidates(
             self.discover_tts_methods(),
             values=[
@@ -1491,46 +1496,50 @@ class ImageProviderManager:
             label="TTS generation",
         )
 
+    async def generate_tts_with_calibrated_tool(
+        self,
+        text: str,
+        *,
+        emotion: str = "",
+        target_umo: str = "",
+        session_state=None,
+    ) -> Optional[str]:
+        return await self._call_recorded_llm_tool(
+            tool_name_key="llm_tts_tool_name",
+            tool_args_key="llm_tts_tool_args",
+            values=[
+                (self.TTS_TEXT_ARG_NAMES, text),
+                (self.TTS_EMOTION_ARG_NAMES, emotion or None),
+                (self.TTS_SESSION_ARG_NAMES, target_umo or None),
+                (("session_state", "state"), session_state),
+            ],
+            result_field_key="generic_tts_result_field",
+            result_keys=self.AUDIO_RESULT_FIELDS,
+            label="calibrated TTS generation",
+            target_umo=target_umo,
+            message_text=text,
+        )
+
     def select_video_provider(self) -> str:
         provider = str(self.image_conf.get("video_provider", "gitee_aiimg") or "gitee_aiimg").strip().lower()
-        if provider == "auto":
-            self._ensure_gitee_plugin()
-            if self._gitee_plugin:
-                return "gitee_aiimg"
-            if self.image_conf.get("generic_video_plugin_name") and self.image_conf.get("generic_video_method_path"):
-                return "generic_plugin"
-            return "auto_scan"
         if provider in {"generic", "plugin", "custom"}:
             return "generic_plugin"
-        if provider in {"scan", "auto_scan", "tool_scan"}:
-            return "auto_scan"
+        if provider in {"calibrated", "calibrated_tool", "llm_tool", "scan", "auto_scan", "tool_scan", "auto"}:
+            return "calibrated_tool"
         return provider
 
     def select_tts_provider(self) -> str:
         provider = str(self.image_conf.get("tts_provider", "emotion_router") or "emotion_router").strip().lower()
-        if provider == "auto":
-            if self._find_star("tts_emotion"):
-                return "emotion_router"
-            if self.image_conf.get("generic_tts_plugin_name") and self.image_conf.get("generic_tts_method_path"):
-                return "generic_plugin"
-            return "auto_scan"
         if provider in {"generic", "plugin", "custom"}:
             return "generic_plugin"
-        if provider in {"scan", "auto_scan", "tool_scan"}:
-            return "auto_scan"
+        if provider in {"calibrated", "calibrated_tool", "llm_tool", "scan", "auto_scan", "tool_scan", "auto"}:
+            return "calibrated_tool"
         return provider
 
     def select_provider(self) -> str:
         provider = str(self.image_conf.get("image_provider", "gitee_aiimg") or "gitee_aiimg").strip().lower()
-        if provider == "auto":
-            self._ensure_gitee_plugin()
-            if self._gitee_plugin:
-                return "gitee_aiimg"
-            if self.image_conf.get("generic_image_plugin_name") and self.image_conf.get("generic_image_method_path"):
-                return "generic_plugin"
-            return "auto_scan"
         if provider in {"generic", "plugin", "custom"}:
             return "generic_plugin"
-        if provider in {"scan", "auto_scan", "tool_scan"}:
-            return "auto_scan"
+        if provider in {"calibrated", "calibrated_tool", "llm_tool", "scan", "auto_scan", "tool_scan", "auto"}:
+            return "calibrated_tool"
         return provider

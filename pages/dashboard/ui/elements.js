@@ -101,6 +101,7 @@ export function getDashboardElements() {
     cfgGenericImageRefKeys: document.getElementById("cfgGenericImageRefKeys"),
     probeImageProviderButton: document.getElementById("probeImageProviderButton"),
     probeSelfieProviderButton: document.getElementById("probeSelfieProviderButton"),
+    probeVideoProviderButton: document.getElementById("probeVideoProviderButton"),
     probeTtsProviderButton: document.getElementById("probeTtsProviderButton"),
     providerProbeResult: document.getElementById("providerProbeResult"),
     cfgHotImage: document.getElementById("cfgHotImage"),

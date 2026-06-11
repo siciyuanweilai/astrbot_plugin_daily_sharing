@@ -180,9 +180,12 @@ class DashboardConfigApplyMixin:
                 media_body.get("news_image_cleanup_max_count"), 200, min_value=0, max_value=1000
             )
         if "image_provider" in media_body:
+            image_provider = str(media_body.get("image_provider") or "").strip()
+            if image_provider in {"auto_scan", "auto", "scan", "tool_scan"}:
+                image_provider = "calibrated_tool"
             image["image_provider"] = self._page_choice_value(
-                media_body.get("image_provider"),
-                {"gitee_aiimg", "generic_plugin", "auto_scan", "auto"},
+                image_provider,
+                {"gitee_aiimg", "generic_plugin", "calibrated_tool"},
                 "gitee_aiimg",
                 "生图 provider",
             )
@@ -204,9 +207,12 @@ class DashboardConfigApplyMixin:
             if key in media_body:
                 image[key] = self._page_clean_text(media_body.get(key), max_len=4000)
         if "video_provider" in media_body:
+            video_provider = str(media_body.get("video_provider") or "").strip()
+            if video_provider in {"auto_scan", "auto", "scan", "tool_scan"}:
+                video_provider = "calibrated_tool"
             image["video_provider"] = self._page_choice_value(
-                media_body.get("video_provider"),
-                {"gitee_aiimg", "generic_plugin", "auto_scan", "auto"},
+                video_provider,
+                {"gitee_aiimg", "generic_plugin", "calibrated_tool"},
                 "gitee_aiimg",
                 "视频 provider",
             )
@@ -228,9 +234,12 @@ class DashboardConfigApplyMixin:
             )
         self._page_apply_bool_fields(tts, media_body, ("enable_tts", "prefer_audio_only"))
         if "tts_provider" in media_body:
+            tts_provider = str(media_body.get("tts_provider") or "").strip()
+            if tts_provider in {"auto_scan", "auto", "scan", "tool_scan"}:
+                tts_provider = "calibrated_tool"
             tts["tts_provider"] = self._page_choice_value(
-                media_body.get("tts_provider"),
-                {"emotion_router", "generic_plugin", "auto_scan", "auto"},
+                tts_provider,
+                {"emotion_router", "generic_plugin", "calibrated_tool"},
                 "emotion_router",
                 "语音 provider",
             )

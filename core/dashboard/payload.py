@@ -5,6 +5,12 @@ from .common import _PAGE_BASIC_SEQUENCE_DEFAULTS, _PAGE_QZONE_SEQUENCE_DEFAULTS
 class DashboardConfigPayloadMixin:
     """设置页配置数据组装。"""
 
+    def _page_provider_mode(self, value: str, default: str) -> str:
+        mode = str(value or default or "").strip()
+        if mode in {"auto_scan", "auto", "scan", "tool_scan"}:
+            return "calibrated_tool"
+        return mode or default
+
     def _page_config_payload(self) -> dict:
         basic = self.config.setdefault("basic_conf", {})
         extra = self.config.setdefault("extra_shares", {})
@@ -72,7 +78,7 @@ class DashboardConfigPayloadMixin:
                 },
                 "media": {
                     "enable_ai_image": bool(image.get("enable_ai_image", False)),
-                    "image_provider": image.get("image_provider", "gitee_aiimg"),
+                    "image_provider": self._page_provider_mode(image.get("image_provider", "gitee_aiimg"), "gitee_aiimg"),
                     "generic_image_plugin_name": str(image.get("generic_image_plugin_name", "") or ""),
                     "generic_image_method_path": str(image.get("generic_image_method_path", "") or ""),
                     "generic_image_prompt_arg": str(image.get("generic_image_prompt_arg", "prompt") or "prompt"),
@@ -87,7 +93,7 @@ class DashboardConfigPayloadMixin:
                     "use_gitee_selfie_ref": bool(image.get("use_gitee_selfie_ref", False)),
                     "priority_text_over_schedule": bool(image.get("priority_text_over_schedule", True)),
                     "enable_ai_video": bool(image.get("enable_ai_video", False)),
-                    "video_provider": image.get("video_provider", "gitee_aiimg"),
+                    "video_provider": self._page_provider_mode(image.get("video_provider", "gitee_aiimg"), "gitee_aiimg"),
                     "generic_video_plugin_name": str(image.get("generic_video_plugin_name", "") or ""),
                     "generic_video_method_path": str(image.get("generic_video_method_path", "") or ""),
                     "generic_video_extra_args": str(image.get("generic_video_extra_args", "") or ""),
@@ -101,7 +107,7 @@ class DashboardConfigPayloadMixin:
                     "image_always_include_self": bool(image.get("image_always_include_self", False)),
                     "image_never_include_self": bool(image.get("image_never_include_self", False)),
                     "enable_tts": bool(tts.get("enable_tts", False)),
-                    "tts_provider": tts.get("tts_provider", "emotion_router"),
+                    "tts_provider": self._page_provider_mode(tts.get("tts_provider", "emotion_router"), "emotion_router"),
                     "generic_tts_plugin_name": str(tts.get("generic_tts_plugin_name", "") or ""),
                     "generic_tts_method_path": str(tts.get("generic_tts_method_path", "") or ""),
                     "generic_tts_text_arg": str(tts.get("generic_tts_text_arg", "text") or "text"),

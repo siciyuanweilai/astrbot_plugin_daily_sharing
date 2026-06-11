@@ -47,6 +47,7 @@ export function createSettingsConfig({
     for (const button of [
       el.probeImageProviderButton,
       el.probeSelfieProviderButton,
+      el.probeVideoProviderButton,
       el.probeTtsProviderButton,
     ]) {
       if (button) button.disabled = Boolean(value);
@@ -74,6 +75,13 @@ export function createSettingsConfig({
         emotion: "neutral",
       };
     }
+    if (kind === "video") {
+      return {
+        kind,
+        apply: true,
+        prompt: "turn a daily life photo into a short natural video with subtle motion",
+      };
+    }
     return {
       kind: "image",
       apply: true,
@@ -83,8 +91,17 @@ export function createSettingsConfig({
 
   function providerProbeLabel(kind) {
     if (kind === "selfie") return "自拍";
+    if (kind === "video") return "视频";
     if (kind === "tts") return "语音";
     return "生图";
+  }
+
+  function normalizeProviderMode(value, fallback) {
+    const mode = text(value).trim();
+    if (["auto_scan", "auto", "scan", "tool_scan"].includes(mode)) {
+      return "calibrated_tool";
+    }
+    return mode || fallback;
   }
 
   function formatProviderProbeResult(data = {}) {
@@ -287,7 +304,7 @@ export function createSettingsConfig({
     setInputValue(el.cfgRecCats, arrayToLines(content.rec_cats));
 
     setInputChecked(el.cfgAiImage, media.enable_ai_image);
-    setInputValue(el.cfgImageProvider, media.image_provider || "gitee_aiimg");
+    setInputValue(el.cfgImageProvider, normalizeProviderMode(media.image_provider, "gitee_aiimg"));
     setInputValue(el.cfgGenericImagePlugin, media.generic_image_plugin_name || "");
     setInputValue(el.cfgGenericImageMethod, media.generic_image_method_path || "");
     setInputValue(el.cfgGenericImagePromptArg, media.generic_image_prompt_arg || "prompt");
@@ -302,7 +319,7 @@ export function createSettingsConfig({
     setInputChecked(el.cfgGiteeSelfieRef, media.use_gitee_selfie_ref);
     setInputChecked(el.cfgPriorityText, media.priority_text_over_schedule);
     setInputChecked(el.cfgAiVideo, media.enable_ai_video);
-    setInputValue(el.cfgVideoProvider, media.video_provider || "gitee_aiimg");
+    setInputValue(el.cfgVideoProvider, normalizeProviderMode(media.video_provider, "gitee_aiimg"));
     setInputValue(el.cfgGenericVideoPlugin, media.generic_video_plugin_name || "");
     setInputValue(el.cfgGenericVideoMethod, media.generic_video_method_path || "");
     setInputValue(el.cfgGenericVideoExtraArgs, media.generic_video_extra_args || "");
@@ -313,7 +330,7 @@ export function createSettingsConfig({
     setInputChecked(el.cfgAlwaysSelf, media.image_always_include_self);
     setInputChecked(el.cfgNeverSelf, media.image_never_include_self);
     setInputChecked(el.cfgTtsEnabled, media.enable_tts);
-    setInputValue(el.cfgTtsProvider, media.tts_provider || "emotion_router");
+    setInputValue(el.cfgTtsProvider, normalizeProviderMode(media.tts_provider, "emotion_router"));
     setInputValue(el.cfgGenericTtsPlugin, media.generic_tts_plugin_name || "");
     setInputValue(el.cfgGenericTtsMethod, media.generic_tts_method_path || "");
     setInputValue(el.cfgGenericTtsTextArg, media.generic_tts_text_arg || "text");
@@ -634,6 +651,9 @@ export function createSettingsConfig({
     });
     el.probeSelfieProviderButton?.addEventListener("click", () => {
       void runProviderProbe("selfie");
+    });
+    el.probeVideoProviderButton?.addEventListener("click", () => {
+      void runProviderProbe("video");
     });
     el.probeTtsProviderButton?.addEventListener("click", () => {
       void runProviderProbe("tts");

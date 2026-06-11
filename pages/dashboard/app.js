@@ -1,11 +1,11 @@
 import { createDashboardApi, withTimeout } from "./api/api.js?v=20260609-api";
 import { createDashboardEffects } from "./ui/effects.js?v=20260609-effects";
 import { createCalendarUi } from "./ui/calendar.js?v=20260609-calendar";
-import { getDashboardElements } from "./ui/elements.js?v=20260610-provider-probe";
+import { getDashboardElements } from "./ui/elements.js?v=20260611-provider-modes";
 import { createMediaUi } from "./ui/media.js?v=20260610-refactor";
 import { createStatusView } from "./ui/status.js?v=20260610-today-after-dynamic";
 import { createSettingsEnhancements } from "./ui/enhance.js?v=20260609-enhance";
-import { createSettingsConfig } from "./ui/config.js?v=20260610-provider-probe";
+import { createSettingsConfig } from "./ui/config.js?v=20260611-provider-modes";
 import { createSweetControls } from "./ui/controls.js?v=20260609-controls";
 import { createDashboardState } from "./ui/state.js?v=20260610-structure";
 import { createTargetsUi } from "./ui/targets.js?v=20260609-targets";

@@ -45,6 +45,17 @@ class DashboardProviderProbeMixin:
             "音频",
             "朗读",
         ),
+        "video": (
+            "aiimg",
+            "video",
+            "i2v",
+            "image_to_video",
+            "img2video",
+            "movie",
+            "motion",
+            "视频",
+            "动图",
+        ),
     }
 
     def _page_probe_target_umo(self, body: dict) -> str:
@@ -118,6 +129,13 @@ class DashboardProviderProbeMixin:
                 "工具完成后只简短说明工具已调用。",
                 text,
             )
+        if kind == "video":
+            prompt = str(body.get("prompt") or "").strip() or "把一张日常照片转成 3 秒自然生活视频，轻微镜头运动。"
+            return (
+                "你正在执行每日分享的工具探测。必须调用一个最适合图生视频或视频生成的工具；"
+                "如工具需要图片路径，可使用占位路径 /tmp/daily_sharing_probe.png。工具完成后只简短说明工具已调用。",
+                prompt,
+            )
         prompt = str(body.get("prompt") or "").strip() or "生成一张桌面上的咖啡杯日常照片，不要文字和水印。"
         return (
             "你正在执行每日分享的工具探测。必须调用一个最适合文生图或图片生成的工具；"
@@ -189,7 +207,7 @@ class DashboardProviderProbeMixin:
         from astrbot.core.agent.hooks import BaseAgentRunHooks
 
         kind = str(kind or "").strip().lower()
-        if kind not in {"image", "selfie", "tts"}:
+        if kind not in {"image", "selfie", "tts", "video"}:
             raise RuntimeError("不支持的 LLM 工具探测类型")
 
         target_umo = self._page_probe_target_umo(body)
@@ -314,18 +332,26 @@ class DashboardProviderProbeMixin:
     def _apply_page_probe_result(self, kind: str, result: dict) -> list[str]:
         if kind in {"image", "selfie"}:
             prefix = "llm_selfie" if kind == "selfie" else "llm_image"
+            self.image_conf["image_provider"] = "calibrated_tool"
             self.image_conf[f"{prefix}_tool_name"] = str(result.get("tool_name") or "")
             self.image_conf[f"{prefix}_tool_args"] = result.get("tool_args") or {}
             self.image_conf[f"{prefix}_tool_provider_id"] = str(result.get("provider_id") or "")
             if kind == "selfie":
                 self.image_conf["use_gitee_selfie_ref"] = True
-                return [f"{prefix}_tool_name", f"{prefix}_tool_args", f"{prefix}_tool_provider_id", "use_gitee_selfie_ref"]
-            return [f"{prefix}_tool_name", f"{prefix}_tool_args", f"{prefix}_tool_provider_id"]
+                return ["image_provider", f"{prefix}_tool_name", f"{prefix}_tool_args", f"{prefix}_tool_provider_id", "use_gitee_selfie_ref"]
+            return ["image_provider", f"{prefix}_tool_name", f"{prefix}_tool_args", f"{prefix}_tool_provider_id"]
         if kind == "tts":
+            self.tts_conf["tts_provider"] = "calibrated_tool"
             self.tts_conf["llm_tts_tool_name"] = str(result.get("tool_name") or "")
             self.tts_conf["llm_tts_tool_args"] = result.get("tool_args") or {}
             self.tts_conf["llm_tts_tool_provider_id"] = str(result.get("provider_id") or "")
-            return ["llm_tts_tool_name", "llm_tts_tool_args", "llm_tts_tool_provider_id"]
+            return ["tts_provider", "llm_tts_tool_name", "llm_tts_tool_args", "llm_tts_tool_provider_id"]
+        if kind == "video":
+            self.image_conf["video_provider"] = "calibrated_tool"
+            self.image_conf["llm_video_tool_name"] = str(result.get("tool_name") or "")
+            self.image_conf["llm_video_tool_args"] = result.get("tool_args") or {}
+            self.image_conf["llm_video_tool_provider_id"] = str(result.get("provider_id") or "")
+            return ["video_provider", "llm_video_tool_name", "llm_video_tool_args", "llm_video_tool_provider_id"]
         return []
 
     async def _page_probe_provider(self, kind: str, body: dict) -> dict:

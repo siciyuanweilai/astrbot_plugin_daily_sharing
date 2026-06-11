@@ -352,7 +352,7 @@ class ImageProviderManagerTests(unittest.TestCase):
         self.assertEqual(result, "/tmp/draw.png")
         self.assertEqual(calls, [("draw.generate", "normal prompt")])
 
-    def test_auto_scan_uses_recorded_llm_image_tool_first(self):
+    def test_calibrated_provider_uses_recorded_llm_image_tool(self):
         providers = _load_providers_module()
         calls = []
 
@@ -384,18 +384,18 @@ class ImageProviderManagerTests(unittest.TestCase):
                 ],
             ),
             {
-                "image_provider": "auto_scan",
+                "image_provider": "calibrated_tool",
                 "llm_image_tool_name": "draw_calibrated",
                 "llm_image_tool_args": {"prompt": "probe prompt", "mode": "probe"},
             },
         )
 
-        result = asyncio.run(manager.generate_with_auto_scan("real prompt", target_umo="aiocqhttp:FriendMessage:123"))
+        result = asyncio.run(manager.generate_with_calibrated_tool("real prompt", target_umo="aiocqhttp:FriendMessage:123"))
 
         self.assertEqual(result, "/tmp/recorded.png")
         self.assertEqual(calls, [("recorded", "real prompt", "text", "aiocqhttp:FriendMessage:123")])
 
-    def test_auto_scan_tts_uses_recorded_llm_tool_first(self):
+    def test_calibrated_tts_uses_recorded_llm_tool(self):
         providers = _load_providers_module()
         calls = []
 
@@ -421,14 +421,14 @@ class ImageProviderManagerTests(unittest.TestCase):
                 ],
             ),
             {
-                "tts_provider": "auto_scan",
+                "tts_provider": "calibrated_tool",
                 "llm_tts_tool_name": "voice_calibrated",
                 "llm_tts_tool_args": {"text": "probe text", "emotion": "neutral"},
             },
         )
 
         result = asyncio.run(
-            manager.generate_tts_with_auto_scan(
+            manager.generate_tts_with_calibrated_tool(
                 "正式语音",
                 emotion="happy",
                 target_umo="aiocqhttp:FriendMessage:456",
@@ -529,7 +529,7 @@ class ImageProviderManagerTests(unittest.TestCase):
         self.assertEqual(result["prompt_arg"], "text")
         self.assertEqual(result["media_ref"], "/tmp/happy-hello.mp3")
 
-    def test_auto_provider_falls_back_to_scan_without_gitee(self):
+    def test_legacy_auto_provider_maps_to_calibrated_tool(self):
         providers = _load_providers_module()
 
         class Plugin:
@@ -541,7 +541,7 @@ class ImageProviderManagerTests(unittest.TestCase):
             {"image_provider": "auto"},
         )
 
-        self.assertEqual(manager.select_provider(), "auto_scan")
+        self.assertEqual(manager.select_provider(), "calibrated_tool")
 
     def test_schema_exposes_generic_image_provider_options(self):
         schema = json.loads((ROOT / "_conf_schema.json").read_text(encoding="utf-8"))
@@ -549,7 +549,7 @@ class ImageProviderManagerTests(unittest.TestCase):
 
         self.assertEqual(
             image_items["image_provider"]["options"],
-            ["gitee_aiimg", "generic_plugin", "auto_scan", "auto"],
+            ["gitee_aiimg", "generic_plugin", "calibrated_tool"],
         )
         self.assertIn("generic_image_method_path", image_items)
         self.assertIn("generic_image_result_field", image_items)
@@ -559,7 +559,7 @@ class ImageProviderManagerTests(unittest.TestCase):
         tts_items = schema["tts_conf"]["items"]
         self.assertEqual(
             tts_items["tts_provider"]["options"],
-            ["emotion_router", "generic_plugin", "auto_scan", "auto"],
+            ["emotion_router", "generic_plugin", "calibrated_tool"],
         )
         self.assertIn("generic_tts_method_path", tts_items)
 

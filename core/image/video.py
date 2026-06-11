@@ -99,11 +99,12 @@ class ImageVideoMixin:
                     image_path,
                     image_bytes,
                 )
-            if provider == "auto_scan":
-                return await self.provider_manager.generate_video_with_auto_scan(
+            if provider == "calibrated_tool":
+                return await self.provider_manager.generate_video_with_calibrated_tool(
                     video_prompt,
                     image_path,
                     image_bytes,
+                    target_umo=target_umo or "",
                 )
 
             self._ensure_plugin()

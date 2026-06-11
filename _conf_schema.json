@@ -506,8 +506,8 @@
         "description": "生图 provider",
         "type": "string",
         "default": "gitee_aiimg",
-        "options": ["gitee_aiimg", "generic_plugin", "auto_scan", "auto"],
-        "hint": "gitee_aiimg=使用万象画卷/Gitee AIImg；generic_plugin=手动指定其它插件方法；auto_scan=自动扫描已加载插件中的生图方法；auto=优先 Gitee，其次手动通用配置，最后自动扫描。"
+        "options": ["gitee_aiimg", "generic_plugin", "calibrated_tool"],
+        "hint": "gitee_aiimg=使用万象画卷/Gitee AIImg；generic_plugin=手动指定其它插件方法；calibrated_tool=使用页面校准按钮记录的 LLM 工具。"
       },
       "generic_image_plugin_name": {
         "description": "通用生图插件名",
@@ -531,7 +531,7 @@
         "description": "通用生图额外参数",
         "type": "text",
         "default": "",
-        "hint": "JSON 对象格式，调用通用生图方法时一并传入。例如 {\"size\":\"1024x1024\"}。自动扫描 provider 也会复用这些额外参数。"
+        "hint": "JSON 对象格式，调用通用生图方法时一并传入。例如 {\"size\":\"1024x1024\"}。"
       },
       "generic_image_result_field": {
         "description": "图片结果字段路径",
@@ -555,7 +555,7 @@
         "description": "改图额外参数",
         "type": "text",
         "default": "",
-        "hint": "JSON 对象格式，调用通用改图/自拍方法时一并传入。自动扫描改图方法也会复用。"
+        "hint": "JSON 对象格式，调用通用改图/自拍方法时一并传入。"
       },
       "generic_image_ref_keys": {
         "description": "参考图存储键",
@@ -605,14 +605,14 @@
         "description": "启用生成视频",
         "type": "bool",
         "default": false,
-        "hint": "开启后，将尝试把配图转换为视频。默认使用 Gitee AIImg 视频链，也可配置通用视频 provider 或自动扫描。"
+        "hint": "开启后，将尝试把配图转换为视频。默认使用 Gitee AIImg 视频链，也可配置通用视频 provider 或校准工具。"
       },
       "video_provider": {
         "description": "视频 provider",
         "type": "string",
         "default": "gitee_aiimg",
-        "options": ["gitee_aiimg", "generic_plugin", "auto_scan", "auto"],
-        "hint": "gitee_aiimg=使用万象画卷/Gitee AIImg 视频链；generic_plugin=手动指定视频方法；auto_scan=自动扫描视频方法；auto=优先 Gitee，其次手动通用配置，最后自动扫描。"
+        "options": ["gitee_aiimg", "generic_plugin", "calibrated_tool"],
+        "hint": "gitee_aiimg=使用万象画卷/Gitee AIImg 视频链；generic_plugin=手动指定视频方法；calibrated_tool=使用已校准的视频 LLM 工具。"
       },
       "generic_video_plugin_name": {
         "description": "通用视频插件名",
@@ -744,14 +744,14 @@
         "description": "启用语音转换",
         "type": "bool",
         "default": false,
-        "hint": "开启后，尝试调用 TTS provider 生成语音。默认兼容 astrbot_plugin_tts_emotion_router，也可配置通用语音插件或自动扫描。"
+        "hint": "开启后，尝试调用 TTS provider 生成语音。默认兼容 astrbot_plugin_tts_emotion_router，也可配置通用语音插件或校准工具。"
       },
       "tts_provider": {
         "description": "语音 provider",
         "type": "string",
         "default": "emotion_router",
-        "options": ["emotion_router", "generic_plugin", "auto_scan", "auto"],
-        "hint": "emotion_router=使用 astrbot_plugin_tts_emotion_router；generic_plugin=手动指定语音方法；auto_scan=自动扫描语音方法；auto=优先 emotion_router，其次手动通用配置，最后自动扫描。"
+        "options": ["emotion_router", "generic_plugin", "calibrated_tool"],
+        "hint": "emotion_router=使用 astrbot_plugin_tts_emotion_router；generic_plugin=手动指定语音方法；calibrated_tool=使用页面校准按钮记录的 LLM 工具。"
       },
       "generic_tts_plugin_name": {
         "description": "通用语音插件名",
