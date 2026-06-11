@@ -1,3 +1,4 @@
+import json
 import uuid
 from typing import Any
 
@@ -293,11 +294,12 @@ class DashboardProviderProbeMixin:
         }
 
     def _apply_page_probe_result(self, kind: str, result: dict) -> list[str]:
+        tool_args = json.dumps(result.get("tool_args") or {}, ensure_ascii=False)
         if kind in {"image", "selfie"}:
             prefix = "llm_selfie" if kind == "selfie" else "llm_image"
             self.image_conf["image_provider"] = "calibrated_tool"
             self.image_conf[f"{prefix}_tool_name"] = str(result.get("tool_name") or "")
-            self.image_conf[f"{prefix}_tool_args"] = result.get("tool_args") or {}
+            self.image_conf[f"{prefix}_tool_args"] = tool_args
             self.image_conf[f"{prefix}_tool_provider_id"] = str(result.get("provider_id") or "")
             if kind == "selfie":
                 self.image_conf["use_gitee_selfie_ref"] = True
@@ -306,13 +308,13 @@ class DashboardProviderProbeMixin:
         if kind == "tts":
             self.tts_conf["tts_provider"] = "calibrated_tool"
             self.tts_conf["llm_tts_tool_name"] = str(result.get("tool_name") or "")
-            self.tts_conf["llm_tts_tool_args"] = result.get("tool_args") or {}
+            self.tts_conf["llm_tts_tool_args"] = tool_args
             self.tts_conf["llm_tts_tool_provider_id"] = str(result.get("provider_id") or "")
             return ["tts_provider", "llm_tts_tool_name", "llm_tts_tool_args", "llm_tts_tool_provider_id"]
         if kind == "video":
             self.image_conf["video_provider"] = "calibrated_tool"
             self.image_conf["llm_video_tool_name"] = str(result.get("tool_name") or "")
-            self.image_conf["llm_video_tool_args"] = result.get("tool_args") or {}
+            self.image_conf["llm_video_tool_args"] = tool_args
             self.image_conf["llm_video_tool_provider_id"] = str(result.get("provider_id") or "")
             return ["video_provider", "llm_video_tool_name", "llm_video_tool_args", "llm_video_tool_provider_id"]
         return []

@@ -54,6 +54,14 @@ class ConfigSchemaTests(unittest.TestCase):
         ):
             self.assertIn(key, tts_items)
 
+        for items, key in (
+            (image_items, "llm_image_tool_args"),
+            (image_items, "llm_selfie_tool_args"),
+            (image_items, "llm_video_tool_args"),
+            (tts_items, "llm_tts_tool_args"),
+        ):
+            self.assertEqual(items[key]["type"], "text")
+
     def test_runtime_does_not_read_legacy_weixin_image_size_key(self):
         runtime = (ROOT / "core" / "tasks" / "delivery.py").read_text(encoding="utf-8")
 

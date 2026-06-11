@@ -571,8 +571,8 @@
       },
       "llm_image_tool_args": {
         "description": "校准生图工具参数",
-        "type": "object",
-        "default": {},
+        "type": "text",
+        "default": "",
         "hint": "由 Pages 的“校准生图”按钮自动写入，记录工具探测时的参数模板。"
       },
       "llm_image_tool_provider_id": {
@@ -589,8 +589,8 @@
       },
       "llm_selfie_tool_args": {
         "description": "校准自拍/参考图工具参数",
-        "type": "object",
-        "default": {},
+        "type": "text",
+        "default": "",
         "hint": "由 Pages 的“校准自拍”按钮自动写入，记录工具探测时的参数模板。"
       },
       "llm_selfie_tool_provider_id": {
@@ -682,8 +682,8 @@
       },
       "llm_video_tool_args": {
         "description": "校准视频工具参数",
-        "type": "object",
-        "default": {},
+        "type": "text",
+        "default": "",
         "hint": "由 Pages 的“校准视频”按钮自动写入，记录工具探测时的参数模板。"
       },
       "llm_video_tool_provider_id": {
@@ -845,8 +845,8 @@
       },
       "llm_tts_tool_args": {
         "description": "校准语音工具参数",
-        "type": "object",
-        "default": {},
+        "type": "text",
+        "default": "",
         "hint": "由 Pages 的“校准语音”按钮自动写入，记录工具探测时的参数模板。"
       },
       "llm_tts_tool_provider_id": {
