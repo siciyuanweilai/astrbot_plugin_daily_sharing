@@ -563,6 +563,42 @@
         "default": "bot_selfie,selfie,default",
         "hint": "自动尝试从生图插件 refs 中读取参考图的 key，多个用逗号分隔。若目标插件的改图方法会自行读取其配置，可保持默认。"
       },
+      "llm_image_tool_name": {
+        "description": "校准生图工具名",
+        "type": "string",
+        "default": "",
+        "hint": "由 Pages 的“校准生图”按钮自动写入，用于在 calibrated_tool 模式下跨重启保留已命中的 LLM 生图工具。"
+      },
+      "llm_image_tool_args": {
+        "description": "校准生图工具参数",
+        "type": "object",
+        "default": {},
+        "hint": "由 Pages 的“校准生图”按钮自动写入，记录工具探测时的参数模板。"
+      },
+      "llm_image_tool_provider_id": {
+        "description": "校准生图模型 provider",
+        "type": "string",
+        "default": "",
+        "hint": "由 Pages 的“校准生图”按钮自动写入，记录执行校准时使用的模型 provider。"
+      },
+      "llm_selfie_tool_name": {
+        "description": "校准自拍/参考图工具名",
+        "type": "string",
+        "default": "",
+        "hint": "由 Pages 的“校准自拍”按钮自动写入，用于在启用形象参考图时跨重启保留已命中的自拍/参考图工具。"
+      },
+      "llm_selfie_tool_args": {
+        "description": "校准自拍/参考图工具参数",
+        "type": "object",
+        "default": {},
+        "hint": "由 Pages 的“校准自拍”按钮自动写入，记录工具探测时的参数模板。"
+      },
+      "llm_selfie_tool_provider_id": {
+        "description": "校准自拍/参考图模型 provider",
+        "type": "string",
+        "default": "",
+        "hint": "由 Pages 的“校准自拍”按钮自动写入，记录执行校准时使用的模型 provider。"
+      },
       "attach_hot_news_image": {
         "description": "新闻热搜附带长图",
         "type": "bool",
@@ -637,6 +673,24 @@
         "type": "string",
         "default": "",
         "hint": "可选。若视频方法返回 dict 或对象，可指定视频路径/URL 字段，例如 data.video_url 或 result.path。留空则自动识别。"
+      },
+      "llm_video_tool_name": {
+        "description": "校准视频工具名",
+        "type": "string",
+        "default": "",
+        "hint": "由 Pages 的“校准视频”按钮自动写入，用于在 calibrated_tool 视频模式下跨重启保留已命中的 LLM 视频工具。"
+      },
+      "llm_video_tool_args": {
+        "description": "校准视频工具参数",
+        "type": "object",
+        "default": {},
+        "hint": "由 Pages 的“校准视频”按钮自动写入，记录工具探测时的参数模板。"
+      },
+      "llm_video_tool_provider_id": {
+        "description": "校准视频模型 provider",
+        "type": "string",
+        "default": "",
+        "hint": "由 Pages 的“校准视频”按钮自动写入，记录执行校准时使用的模型 provider。"
       },
       "video_enabled_types": {
         "description": "允许视频的类型",
@@ -782,6 +836,24 @@
         "type": "string",
         "default": "",
         "hint": "可选。若语音方法返回 dict 或对象，可指定音频路径/URL 字段，例如 data.audio_path 或 result.url。留空则自动识别。"
+      },
+      "llm_tts_tool_name": {
+        "description": "校准语音工具名",
+        "type": "string",
+        "default": "",
+        "hint": "由 Pages 的“校准语音”按钮自动写入，用于在 calibrated_tool 语音模式下跨重启保留已命中的 LLM 语音工具。"
+      },
+      "llm_tts_tool_args": {
+        "description": "校准语音工具参数",
+        "type": "object",
+        "default": {},
+        "hint": "由 Pages 的“校准语音”按钮自动写入，记录工具探测时的参数模板。"
+      },
+      "llm_tts_tool_provider_id": {
+        "description": "校准语音模型 provider",
+        "type": "string",
+        "default": "",
+        "hint": "由 Pages 的“校准语音”按钮自动写入，记录执行校准时使用的模型 provider。"
       },
       "tts_enabled_types": {
         "description": "允许语音的类型",
