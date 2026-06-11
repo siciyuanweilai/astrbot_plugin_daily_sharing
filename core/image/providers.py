@@ -835,18 +835,56 @@ class ImageProviderManager:
             last = None
             async for item in result:
                 last = item
-            return last
+            return last, event
         if inspect.isawaitable(result):
-            return await result
-        return result
+            return await result, event
+        return result, event
 
-    def _extract_llm_tool_media_result(
+    async def _extract_media_ref_from_component(self, component: Any) -> Optional[str]:
+        for attr in ("path", "file", "url", "audio", "image"):
+            value = getattr(component, attr, None)
+            media_ref = self._extract_media_ref_from_text(str(value or ""))
+            if media_ref:
+                return media_ref
+        converter = getattr(component, "convert_to_file_path", None)
+        if callable(converter):
+            try:
+                path = await self._maybe_await(converter())
+                media_ref = self._extract_media_ref_from_text(str(path or ""))
+                if media_ref:
+                    return media_ref
+            except Exception:
+                return None
+        return None
+
+    async def _extract_media_ref_from_chain(self, chain_obj: Any) -> Optional[str]:
+        chain = getattr(chain_obj, "chain", None)
+        if not isinstance(chain, list):
+            return None
+        for component in chain:
+            media_ref = await self._extract_media_ref_from_component(component)
+            if media_ref:
+                return media_ref
+        return None
+
+    async def _extract_llm_tool_media_result(
         self,
         result: Any,
         *,
+        event: Any = None,
         result_field: str,
         result_keys: tuple[str, ...],
     ) -> Optional[str]:
+        if event is not None:
+            event_result = getattr(event, "get_result", lambda: None)()
+            media_ref = await self._extract_media_ref_from_chain(event_result)
+            if media_ref:
+                return media_ref
+            for sent_message in list(getattr(event, "sent_messages", []) or []):
+                media_ref = await self._extract_media_ref_from_chain(sent_message)
+                if media_ref:
+                    return media_ref
+
         content = getattr(result, "content", None)
         if isinstance(content, list):
             for item in content:
@@ -855,6 +893,9 @@ class ImageProviderManager:
                 if media_ref:
                     return media_ref
             return None
+
+        if isinstance(result, (str, os.PathLike)):
+            return self._extract_media_ref_from_text(str(result))
 
         media_ref = self._extract_result(
             result,
@@ -936,14 +977,15 @@ class ImageProviderManager:
             return None
         try:
             logger.info(f"[DailySharing] Trying recorded LLM {label} tool: {tool_name}")
-            result = await self._execute_recorded_llm_tool(
+            result, event = await self._execute_recorded_llm_tool(
                 tool,
                 kwargs,
                 target_umo,
                 message_text,
             )
-            media_ref = self._extract_llm_tool_media_result(
+            media_ref = await self._extract_llm_tool_media_result(
                 result,
+                event=event,
                 result_field=str(self.image_conf.get(result_field_key, "") or "").strip(),
                 result_keys=result_keys,
             )

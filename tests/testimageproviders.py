@@ -438,6 +438,78 @@ class ImageProviderManagerTests(unittest.TestCase):
         self.assertEqual(result, "/tmp/recorded.mp3")
         self.assertEqual(calls, [("正式语音", "happy", "aiocqhttp:FriendMessage:456")])
 
+    def test_calibrated_tts_rejects_plain_text_result(self):
+        providers = _load_providers_module()
+
+        def recorded_tool(event, text):
+            return text
+
+        manager = providers.ImageProviderManager(
+            _ToolContext(
+                [],
+                [
+                    _LlmTool(
+                        "voice_text_only",
+                        {
+                            "type": "object",
+                            "properties": {
+                                "text": {"type": "string"},
+                            },
+                        },
+                        recorded_tool,
+                    )
+                ],
+            ),
+            {
+                "tts_provider": "calibrated_tool",
+                "llm_tts_tool_name": "voice_text_only",
+                "llm_tts_tool_args": {"text": "probe text"},
+            },
+        )
+
+        result = asyncio.run(manager.generate_tts_with_calibrated_tool("正式语音"))
+
+        self.assertIsNone(result)
+
+    def test_calibrated_image_reads_media_sent_by_tool_event(self):
+        providers = _load_providers_module()
+
+        class ImageComponent:
+            path = "/tmp/event-image.png"
+            file = ""
+            url = ""
+
+        def recorded_tool(event, prompt):
+            event.sent_messages.append(types.SimpleNamespace(chain=[ImageComponent()]))
+            return None
+
+        manager = providers.ImageProviderManager(
+            _ToolContext(
+                [],
+                [
+                    _LlmTool(
+                        "draw_event_image",
+                        {
+                            "type": "object",
+                            "properties": {
+                                "prompt": {"type": "string"},
+                            },
+                        },
+                        recorded_tool,
+                    )
+                ],
+            ),
+            {
+                "image_provider": "calibrated_tool",
+                "llm_image_tool_name": "draw_event_image",
+                "llm_image_tool_args": {"prompt": "probe prompt"},
+            },
+        )
+
+        result = asyncio.run(manager.generate_with_calibrated_tool("real prompt"))
+
+        self.assertEqual(result, "/tmp/event-image.png")
+
     def test_generic_selfie_mode_without_edit_method_does_not_fallback_to_draw(self):
         providers = _load_providers_module()
         calls = []
