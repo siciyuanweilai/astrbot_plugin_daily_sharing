@@ -6,6 +6,7 @@ from astrbot.api import logger
 from ..config import SharingType, TimePeriod
 from .aiimg import ImageAiimgMixin
 from .prompt import ImageVisualMixin
+from .providers import ImageProviderManager
 from .video import ImageVideoMixin
 
 
@@ -21,6 +22,7 @@ class ImageService(ImageVisualMixin, ImageVideoMixin, ImageAiimgMixin):
         # 获取配置引用
         self.img_conf = self.config.get("image_conf", {})
         self.llm_conf = self.config.get("llm_conf", {})
+        self.provider_manager = ImageProviderManager(context, self.img_conf)
 
     async def _call_llm(self, *args, target_umo: str = None, **kwargs):
         if target_umo:
@@ -47,18 +49,14 @@ class ImageService(ImageVisualMixin, ImageVideoMixin, ImageAiimgMixin):
 
     def _ensure_plugin(self):
         """确保 Gitee 插件已加载"""
-        if not self._aiimg_plugin and not self._aiimg_plugin_not_found:
-            for p in self.context.get_all_stars():
-                if p.name == "astrbot_plugin_gitee_aiimg":
-                    self._aiimg_plugin = getattr(p, "star_cls", None)
-                    break
-            
-            if not self._aiimg_plugin: 
-                self._aiimg_plugin_not_found = True
+        self._aiimg_plugin = self.provider_manager.get_gitee_plugin()
+        self._aiimg_plugin_not_found = not bool(self._aiimg_plugin)
+        return self._aiimg_plugin
 
     async def generate_image(self, content: str, sharing_type: SharingType, life_context: str = None, target_umo: str = None) -> Optional[str]:
         """生成图片的入口函数"""
         self.reset_last_description()
+        self.reset_last_external_delivery("image")
         if not self.img_conf.get("enable_ai_image", False): return None
 
         # 1. 智能判断：是否画人
@@ -108,11 +106,21 @@ class ImageService(ImageVisualMixin, ImageVideoMixin, ImageAiimgMixin):
         logger.info(f"[每日分享] 最终配图提示词: {prompt[:100]}...")
         self._last_image_description = prompt
         
-        # 5. 调用插件生成
-        return await self._call_aiimg(prompt, use_ref_selfie=is_selfie_mode)
+        # 5. 调用所选 provider 生成
+        return await self._call_image_provider(
+            prompt,
+            use_ref_selfie=is_selfie_mode,
+            target_umo=target_umo,
+        )
 
     def get_last_description(self) -> Optional[str]:
         return self._last_image_description
+
+    def get_last_external_delivery(self, media_type: str = None) -> dict:
+        return self.provider_manager.get_last_external_delivery(media_type)
+
+    def reset_last_external_delivery(self, media_type: str = None):
+        self.provider_manager.reset_last_external_delivery(media_type)
 
     def reset_last_description(self):
         self._last_image_description = None

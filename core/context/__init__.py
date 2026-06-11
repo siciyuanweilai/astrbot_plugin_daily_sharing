@@ -9,6 +9,7 @@ from .history import ContextHistoryMixin
 from .life import ContextLifeMixin
 from .memory import ContextMemoryMixin
 from .tts import ContextTtsMixin
+from ..image.providers import ImageProviderManager
 from ..platform import (
     find_platform_instance_by_keywords,
     get_platform_client,
@@ -42,6 +43,13 @@ class ContextService(
         self.image_conf = self.config.get("image_conf", {})
         self.tts_conf = self.config.get("tts_conf", {}) 
         self.llm_conf = self.config.get("llm_conf", {})
+        self.tts_provider_manager = ImageProviderManager(context_obj, self.tts_conf)
+
+    def get_last_external_tts_delivery(self) -> dict:
+        return self.tts_provider_manager.get_last_external_delivery("audio")
+
+    def reset_last_external_tts_delivery(self):
+        self.tts_provider_manager.reset_last_external_delivery("audio")
 
     def _find_plugin(self, keyword: str):
         """按 AstrBot 插件元数据查找已加载实例。"""

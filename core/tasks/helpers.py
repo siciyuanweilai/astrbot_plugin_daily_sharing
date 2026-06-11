@@ -90,6 +90,26 @@ class TaskExecutorHelperMixin:
             return self._image_history_kwargs(resolved_image)
         return {}
 
+    def _calibrated_delivery_succeeded(self, service, media_type: str) -> bool:
+        getter = getattr(service, "get_last_external_delivery", None)
+        if not callable(getter):
+            return False
+        try:
+            status = getter(media_type)
+        except Exception:
+            return False
+        return bool(status and status.get("sent"))
+
+    def _calibrated_tts_delivery_succeeded(self) -> bool:
+        getter = getattr(self.ctx_service, "get_last_external_tts_delivery", None)
+        if not callable(getter):
+            return False
+        try:
+            status = getter()
+        except Exception:
+            return False
+        return bool(status and status.get("sent"))
+
     def _partial_send_error_labels(self, media_result: dict = None) -> list:
         labels = []
         for item in (media_result or {}).get("partial_errors", []):

@@ -64,6 +64,7 @@ class ImageVisualMixin:
 4. 不要让人物在室外赤脚，除非文案明确说明。
 5. 不要让人物在家里穿厚重大衣和外出鞋，除非文案明确说明刚回家或准备出门。
 6. 如果生活日程给了“今日穿搭”，可以在此基础上按当前地点和温度微调：例如在家可脱外套、换拖鞋；到室内公共场所可把外套搭在椅背；到室外则保持完整外出穿搭。
+7. 穿搭描述必须保守、日常、适合公开平台审核；不要使用“内搭、内衣、内裤、文胸、胸衣、吊带、抹胸、裸色、肉色、肤色、透明、低胸、深V、露背、露肩、蕾丝”等容易触发拦截或暧昧误读的词。需要描述层次时，使用“搭配、上衣、针织衫、衬衫、连衣裙、外套”等普通服饰词。
 """
 
         # 3. 动态构建地点逻辑提示词
@@ -107,7 +108,7 @@ class ImageVisualMixin:
 4. **场景 (scene_type)**：填“家里 / 室内公共场所 / 室外 / 未知”之一。
 5. **温感 (temperature_feel)**：根据天气温度和文案判断，填“寒冷 / 微凉 / 舒适 / 温暖 / 炎热 / 未知”之一。
 6. **天气 (weather_condition)**：提取晴、雨、雪、阴、闷热、潮湿等真实天气；不明确则填“未知”。
-7. **穿搭 (outfit)**：{outfit_hint} 请明确区分"内搭"和"外穿"层次，并说明外套是否穿着、半脱、挂在椅背或不需要；脚部状态也要自然融入穿搭里，要由你理解文案后决定。
+7. **穿搭 (outfit)**：{outfit_hint} 请使用保守日常的公开平台友好服饰描述；不要写“内搭/内衣/吊带/裸色”等高风险词。需要表达层次时写成“外套搭配上衣/针织衫/衬衫/连衣裙”，并说明外套是否穿着、半脱、挂在椅背或不需要；脚部状态也要自然融入穿搭里，要由你理解文案后决定。
 8. **穿搭逻辑 (outfit_logic)**：用一句话说明为什么这样穿，重点说明你如何根据地点、温度、动作和文案语气判断外套与脚部状态。
 9. **动作 (action)**：人物动作。
 
@@ -119,7 +120,7 @@ class ImageVisualMixin:
     "scene_type": "...",   // 场景: 家里 / 室内公共场所 / 室外 / 未知
     "temperature_feel": "...", // 温感: 寒冷 / 微凉 / 舒适 / 温暖 / 炎热 / 未知
     "weather_condition": "...", // 天气: 晴 / 雨 / 雪 / 阴 / 闷热 / 潮湿 / 未知
-    "outfit": "...",       // 穿搭，包含外套层次和脚部状态 (例如：白色棒球服外套，内搭黑色高领毛衣，白色运动鞋)
+    "outfit": "...",       // 穿搭，包含外套层次和脚部状态 (例如：白色棒球服外套搭配黑色高领毛衣，白色运动鞋)
     "outfit_logic": "...", // 穿搭逻辑 (例如：在家且温暖，所以脱掉外套换成拖鞋)
     "action": "...",       // 动作 (例如：双手捧着热咖啡)
     "weather_vibe": "..."  // 例如：玻璃上有水雾，朦胧感
@@ -166,6 +167,50 @@ class ImageVisualMixin:
             rule = "穿搭、外套和脚部状态必须符合当前地点、天气和温度。"
 
         return f"{'，'.join(details)}，{rule}"
+
+    def _sanitize_outfit_prompt(self, outfit: str) -> str:
+        text = str(outfit or "").strip()
+        if not text:
+            return ""
+
+        replacements = (
+            ("无痕内衣裤作为内搭", "贴身舒适衣物作为基础层"),
+            ("无痕内衣裤", "舒适基础衣物"),
+            ("内衣裤", "基础衣物"),
+            ("运动内衣", "运动上衣"),
+            ("内衣", "上衣"),
+            ("文胸", "上衣"),
+            ("胸衣", "上衣"),
+            ("内裤", "短裤"),
+            ("内搭", "搭配"),
+            ("真丝吊带裙", "真丝连衣裙"),
+            ("丝质吊带裙", "丝质连衣裙"),
+            ("吊带连衣裙", "连衣裙"),
+            ("吊带裙", "连衣裙"),
+            ("吊带衫", "轻薄上衣"),
+            ("吊带", "上衣"),
+            ("抹胸裙", "连衣裙"),
+            ("抹胸", "上衣"),
+            ("裸色", "浅杏色"),
+            ("肉色", "浅杏色"),
+            ("肤色", "浅杏色"),
+            ("半透明", "轻薄"),
+            ("透明", "轻薄"),
+            ("透视", "轻薄"),
+            ("低胸", "圆领"),
+            ("深V", "V领"),
+            ("深v", "V领"),
+            ("露背", "常规剪裁"),
+            ("露肩", "常规肩线"),
+            ("蕾丝", "细纹"),
+        )
+        for source, target in replacements:
+            text = text.replace(source, target)
+
+        text = re.sub(r"作为\s*搭配", "作为基础层", text)
+        text = re.sub(r"搭配\s*上衣", "搭配上衣", text)
+        text = re.sub(r"\s+", " ", text).strip(" ，,")
+        return text
 
     async def _check_involves_self(self, content: str, sharing_type: SharingType, target_umo: str = None) -> bool:
         """检测内容是否涉及'自己'"""
@@ -239,13 +284,17 @@ class ImageVisualMixin:
             action = visuals.get("action", "")
             
             # 一、外貌
-            appearance = await self._get_appearance_keywords(target_umo=target_umo)
-            if appearance: prompts.append(appearance)
-            else: prompts.append("1个女孩, 独奏")
+            if self.img_conf.get("use_gitee_selfie_ref", False):
+                logger.info("[每日分享] 已启用形象参考图，跳过默认人设外貌提取")
+            else:
+                appearance = await self._get_appearance_keywords(target_umo=target_umo)
+                if appearance: prompts.append(appearance)
+                else: prompts.append("1个女孩, 独奏")
 
             # 二、穿搭
             raw_outfit = str(visuals.get("outfit", "") or "").strip()
-            if raw_outfit: prompts.append(raw_outfit)
+            safe_outfit = self._sanitize_outfit_prompt(raw_outfit)
+            if safe_outfit: prompts.append(safe_outfit)
             
             # 三、动作
             if action: prompts.append(action)

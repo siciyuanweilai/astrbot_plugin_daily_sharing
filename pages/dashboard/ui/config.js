@@ -3,6 +3,7 @@ import { text } from "./format.js?v=20260609-format";
 const CONFIG_AUTO_SAVE_FAST_DELAY_MS = 360;
 const CONFIG_AUTO_SAVE_TEXT_DELAY_MS = 900;
 const CONFIG_AUTO_SAVE_RETRY_DELAY_MS = 600;
+const PROVIDER_PROBE_TIMEOUT_MS = 300000;
 
 export function createSettingsConfig({
   state,
@@ -40,6 +41,104 @@ export function createSettingsConfig({
   function setInputChecked(input, value) {
     if (!input) return;
     input.checked = Boolean(value);
+  }
+
+  function setProviderProbeButtonsDisabled(value) {
+    for (const button of [
+      el.probeImageProviderButton,
+      el.probeSelfieProviderButton,
+      el.probeVideoProviderButton,
+      el.probeTtsProviderButton,
+    ]) {
+      if (button) button.disabled = Boolean(value);
+    }
+  }
+
+  function setProviderProbeResult(message = "") {
+    if (!el.providerProbeResult) return;
+    el.providerProbeResult.textContent = message;
+  }
+
+  function providerProbePayload(kind) {
+    if (kind === "selfie") {
+      return {
+        kind,
+        apply: true,
+        prompt: "a natural daily selfie photo in a cozy room, no text, no watermark",
+      };
+    }
+    if (kind === "tts") {
+      return {
+        kind,
+        apply: true,
+        text: "每日分享语音测试",
+        emotion: "neutral",
+      };
+    }
+    if (kind === "video") {
+      return {
+        kind,
+        apply: true,
+        prompt: "turn a daily life photo into a short natural video with subtle motion",
+      };
+    }
+    return {
+      kind: "image",
+      apply: true,
+      prompt: "a clean daily life photo of a cup on a desk, no text, no watermark",
+    };
+  }
+
+  function providerProbeLabel(kind) {
+    if (kind === "selfie") return "自拍";
+    if (kind === "video") return "视频";
+    if (kind === "tts") return "语音";
+    return "生图";
+  }
+
+  function normalizeProviderMode(value, fallback) {
+    const mode = text(value).trim();
+    if (["auto_scan", "auto", "scan", "tool_scan"].includes(mode)) {
+      return "calibrated_tool";
+    }
+    return mode || fallback;
+  }
+
+  function formatProviderProbeResult(data = {}) {
+    const result = data.result || {};
+    const tool = text(result.tool_name).trim() || "未知工具";
+    const argKeys = Object.keys(result.tool_args || {});
+    const suffix = argKeys.length ? `，参数 ${argKeys.join(", ")}` : "";
+    return `${providerProbeLabel(data.kind)}命中 LLM 工具：${tool}${suffix}`;
+  }
+
+  async function runProviderProbe(kind) {
+    if (!bridge) return;
+    window.clearTimeout(state.configAutoSaveTimer);
+    state.configAutoSaveTimer = 0;
+    setProviderProbeButtonsDisabled(true);
+    setProviderProbeResult(`${providerProbeLabel(kind)}校准中...`);
+    setNotice(`${providerProbeLabel(kind)}校准中，可能需要等待工具调用完成。`, "info", 7000);
+    try {
+      const data = await apiPost(
+        "page/provider/probe",
+        providerProbePayload(kind),
+        PROVIDER_PROBE_TIMEOUT_MS,
+      );
+      if (data.config) {
+        applyConfigData(data.config);
+      }
+      const message = formatProviderProbeResult(data);
+      setProviderProbeResult(message);
+      setNotice(`${message}，配置已保存。`, "success", 7000);
+      await loadStatus({ quiet: true });
+    } catch (error) {
+      const message = error.message || `${providerProbeLabel(kind)}校准失败`;
+      setProviderProbeResult(message);
+      setNotice(message, "error", 9000);
+    } finally {
+      setProviderProbeButtonsDisabled(false);
+    }
   }
 
   function configSection(name) {
@@ -204,17 +303,38 @@ export function createSettingsConfig({
     setInputValue(el.cfgRecCats, arrayToLines(content.rec_cats));
 
     setInputChecked(el.cfgAiImage, media.enable_ai_image);
+    setInputValue(el.cfgImageProvider, normalizeProviderMode(media.image_provider, "gitee_aiimg"));
+    setInputValue(el.cfgGenericImagePlugin, media.generic_image_plugin_name || "");
+    setInputValue(el.cfgGenericImageMethod, media.generic_image_method_path || "");
+    setInputValue(el.cfgGenericImagePromptArg, media.generic_image_prompt_arg || "prompt");
+    setInputValue(el.cfgGenericImageExtraArgs, media.generic_image_extra_args || "");
+    setInputValue(el.cfgGenericImageResultField, media.generic_image_result_field || "");
+    setInputValue(el.cfgGenericImageEditMethod, media.generic_image_edit_method_path || "");
+    setInputValue(el.cfgGenericImageEditPromptArg, media.generic_image_edit_prompt_arg || "prompt");
+    setInputValue(el.cfgGenericImageEditExtraArgs, media.generic_image_edit_extra_args || "");
+    setInputValue(el.cfgGenericImageRefKeys, media.generic_image_ref_keys || "bot_selfie,selfie,default");
     setInputChecked(el.cfgHotImage, media.attach_hot_news_image);
     setInputValue(el.cfgNewsImageCleanupMax, media.news_image_cleanup_max_count ?? 200);
     setInputChecked(el.cfgGiteeSelfieRef, media.use_gitee_selfie_ref);
     setInputChecked(el.cfgPriorityText, media.priority_text_over_schedule);
     setInputChecked(el.cfgAiVideo, media.enable_ai_video);
+    setInputValue(el.cfgVideoProvider, normalizeProviderMode(media.video_provider, "gitee_aiimg"));
+    setInputValue(el.cfgGenericVideoPlugin, media.generic_video_plugin_name || "");
+    setInputValue(el.cfgGenericVideoMethod, media.generic_video_method_path || "");
+    setInputValue(el.cfgGenericVideoExtraArgs, media.generic_video_extra_args || "");
+    setInputValue(el.cfgGenericVideoResultField, media.generic_video_result_field || "");
     setInputChecked(el.cfgSeparateMedia, media.separate_text_and_image);
     setInputValue(el.cfgSeparateDelay, media.separate_send_delay || "1.0-2.0");
     setInputChecked(el.cfgRecordImageDesc, media.record_image_description);
     setInputChecked(el.cfgAlwaysSelf, media.image_always_include_self);
     setInputChecked(el.cfgNeverSelf, media.image_never_include_self);
     setInputChecked(el.cfgTtsEnabled, media.enable_tts);
+    setInputValue(el.cfgTtsProvider, normalizeProviderMode(media.tts_provider, "emotion_router"));
+    setInputValue(el.cfgGenericTtsPlugin, media.generic_tts_plugin_name || "");
+    setInputValue(el.cfgGenericTtsMethod, media.generic_tts_method_path || "");
+    setInputValue(el.cfgGenericTtsTextArg, media.generic_tts_text_arg || "text");
+    setInputValue(el.cfgGenericTtsExtraArgs, media.generic_tts_extra_args || "");
+    setInputValue(el.cfgGenericTtsResultField, media.generic_tts_result_field || "");
     setInputChecked(el.cfgAudioOnly, media.prefer_audio_only);
     setInputValue(el.cfgImageTypes, arrayToLines(media.image_enabled_types));
     setInputValue(el.cfgVideoTypes, arrayToLines(media.video_enabled_types));
@@ -332,11 +452,26 @@ export function createSettingsConfig({
         },
         media: {
           enable_ai_image: Boolean(el.cfgAiImage?.checked),
+          image_provider: el.cfgImageProvider?.value || "gitee_aiimg",
+          generic_image_plugin_name: text(el.cfgGenericImagePlugin?.value).trim(),
+          generic_image_method_path: text(el.cfgGenericImageMethod?.value).trim(),
+          generic_image_prompt_arg: text(el.cfgGenericImagePromptArg?.value).trim() || "prompt",
+          generic_image_extra_args: text(el.cfgGenericImageExtraArgs?.value).trim(),
+          generic_image_result_field: text(el.cfgGenericImageResultField?.value).trim(),
+          generic_image_edit_method_path: text(el.cfgGenericImageEditMethod?.value).trim(),
+          generic_image_edit_prompt_arg: text(el.cfgGenericImageEditPromptArg?.value).trim() || "prompt",
+          generic_image_edit_extra_args: text(el.cfgGenericImageEditExtraArgs?.value).trim(),
+          generic_image_ref_keys: text(el.cfgGenericImageRefKeys?.value).trim() || "bot_selfie,selfie,default",
           attach_hot_news_image: Boolean(el.cfgHotImage?.checked),
           news_image_cleanup_max_count: numberValue(el.cfgNewsImageCleanupMax, 200),
           use_gitee_selfie_ref: Boolean(el.cfgGiteeSelfieRef?.checked),
           priority_text_over_schedule: Boolean(el.cfgPriorityText?.checked),
           enable_ai_video: Boolean(el.cfgAiVideo?.checked),
+          video_provider: el.cfgVideoProvider?.value || "gitee_aiimg",
+          generic_video_plugin_name: text(el.cfgGenericVideoPlugin?.value).trim(),
+          generic_video_method_path: text(el.cfgGenericVideoMethod?.value).trim(),
+          generic_video_extra_args: text(el.cfgGenericVideoExtraArgs?.value).trim(),
+          generic_video_result_field: text(el.cfgGenericVideoResultField?.value).trim(),
           separate_text_and_image: Boolean(el.cfgSeparateMedia?.checked),
           separate_send_delay: text(el.cfgSeparateDelay?.value).trim() || "1.0-2.0",
           record_image_description: Boolean(el.cfgRecordImageDesc?.checked),
@@ -344,6 +479,12 @@ export function createSettingsConfig({
           image_always_include_self: Boolean(el.cfgAlwaysSelf?.checked),
           image_never_include_self: Boolean(el.cfgNeverSelf?.checked),
           enable_tts: Boolean(el.cfgTtsEnabled?.checked),
+          tts_provider: el.cfgTtsProvider?.value || "emotion_router",
+          generic_tts_plugin_name: text(el.cfgGenericTtsPlugin?.value).trim(),
+          generic_tts_method_path: text(el.cfgGenericTtsMethod?.value).trim(),
+          generic_tts_text_arg: text(el.cfgGenericTtsTextArg?.value).trim() || "text",
+          generic_tts_extra_args: text(el.cfgGenericTtsExtraArgs?.value).trim(),
+          generic_tts_result_field: text(el.cfgGenericTtsResultField?.value).trim(),
           prefer_audio_only: Boolean(el.cfgAudioOnly?.checked),
           image_enabled_types: linesToArray(el.cfgImageTypes?.value),
           video_enabled_types: linesToArray(el.cfgVideoTypes?.value),
@@ -503,7 +644,23 @@ export function createSettingsConfig({
     return isTargetEditorElement(event?.target);
   }
 
+  function bindProviderProbeEvents() {
+    el.probeImageProviderButton?.addEventListener("click", () => {
+      void runProviderProbe("image");
+    });
+    el.probeSelfieProviderButton?.addEventListener("click", () => {
+      void runProviderProbe("selfie");
+    });
+    el.probeVideoProviderButton?.addEventListener("click", () => {
+      void runProviderProbe("video");
+    });
+    el.probeTtsProviderButton?.addEventListener("click", () => {
+      void runProviderProbe("tts");
+    });
+  }
+
   return {
+    bindProviderProbeEvents,
     handleConfigChanged,
     loadConfig,
     saveConfig,

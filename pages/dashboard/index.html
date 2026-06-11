@@ -527,6 +527,59 @@
                 <input id="cfgAiImage" type="checkbox" />
                 <span>生成配图</span>
               </label>
+              <label class="setting-field">
+                <span>生图 provider</span>
+                <select id="cfgImageProvider">
+                  <option value="gitee_aiimg">Gitee AIImg</option>
+                  <option value="generic_plugin">通用插件</option>
+                  <option value="calibrated_tool">校准工具</option>
+                </select>
+              </label>
+              <label class="setting-field">
+                <span>生图插件名</span>
+                <input id="cfgGenericImagePlugin" type="text" placeholder="astrbot_plugin_aiimg_enhanced" />
+              </label>
+              <label class="setting-field">
+                <span>生图方法</span>
+                <input id="cfgGenericImageMethod" type="text" placeholder="draw.generate" />
+              </label>
+              <label class="setting-field">
+                <span>提示词参数</span>
+                <input id="cfgGenericImagePromptArg" type="text" placeholder="prompt" />
+              </label>
+              <label class="setting-field">
+                <span>改图方法</span>
+                <input id="cfgGenericImageEditMethod" type="text" placeholder="edit.edit" />
+              </label>
+              <label class="setting-field">
+                <span>改图提示词参数</span>
+                <input id="cfgGenericImageEditPromptArg" type="text" placeholder="prompt" />
+              </label>
+              <label class="setting-field">
+                <span>结果字段</span>
+                <input id="cfgGenericImageResultField" type="text" placeholder="data.image_path" />
+              </label>
+              <label class="setting-field">
+                <span>参考图 key</span>
+                <input id="cfgGenericImageRefKeys" type="text" placeholder="bot_selfie,selfie,default" />
+              </label>
+              <label class="setting-field setting-field-wide">
+                <span>生图额外参数</span>
+                <textarea id="cfgGenericImageExtraArgs" rows="2" placeholder='{"size":"1024x1024"}'></textarea>
+              </label>
+              <label class="setting-field setting-field-wide">
+                <span>改图额外参数</span>
+                <textarea id="cfgGenericImageEditExtraArgs" rows="2" placeholder='{"backend":"default"}'></textarea>
+              </label>
+              <div class="provider-probe-panel setting-field-wide" aria-live="polite">
+                <div class="provider-probe-actions">
+                  <button id="probeImageProviderButton" class="button-secondary" type="button">校准生图</button>
+                  <button id="probeSelfieProviderButton" class="button-secondary" type="button">校准自拍</button>
+                  <button id="probeVideoProviderButton" class="button-secondary" type="button">校准视频</button>
+                  <button id="probeTtsProviderButton" class="button-secondary" type="button">校准语音</button>
+                </div>
+                <output id="providerProbeResult" class="provider-probe-result"></output>
+              </div>
               <label class="setting-switch">
                 <input id="cfgHotImage" type="checkbox" />
                 <span>新闻长图</span>
@@ -546,6 +599,30 @@
               <label class="setting-switch">
                 <input id="cfgAiVideo" type="checkbox" />
                 <span>生成视频</span>
+              </label>
+              <label class="setting-field">
+                <span>视频 provider</span>
+                <select id="cfgVideoProvider">
+                  <option value="gitee_aiimg">Gitee AIImg</option>
+                  <option value="generic_plugin">通用插件</option>
+                  <option value="calibrated_tool">校准工具</option>
+                </select>
+              </label>
+              <label class="setting-field">
+                <span>视频插件名</span>
+                <input id="cfgGenericVideoPlugin" type="text" placeholder="留空复用生图插件" />
+              </label>
+              <label class="setting-field">
+                <span>视频方法</span>
+                <input id="cfgGenericVideoMethod" type="text" placeholder="video.generate" />
+              </label>
+              <label class="setting-field">
+                <span>视频结果字段</span>
+                <input id="cfgGenericVideoResultField" type="text" placeholder="data.video_url" />
+              </label>
+              <label class="setting-field setting-field-wide">
+                <span>视频额外参数</span>
+                <textarea id="cfgGenericVideoExtraArgs" rows="2" placeholder='{"model":"default"}'></textarea>
               </label>
               <label class="setting-switch">
                 <input id="cfgSeparateMedia" type="checkbox" />
@@ -586,6 +663,34 @@
               <label class="setting-switch">
                 <input id="cfgTtsEnabled" type="checkbox" />
                 <span>语音转换</span>
+              </label>
+              <label class="setting-field">
+                <span>语音 provider</span>
+                <select id="cfgTtsProvider">
+                  <option value="emotion_router">情绪语音路由</option>
+                  <option value="generic_plugin">通用插件</option>
+                  <option value="calibrated_tool">校准工具</option>
+                </select>
+              </label>
+              <label class="setting-field">
+                <span>语音插件名</span>
+                <input id="cfgGenericTtsPlugin" type="text" placeholder="astrbot_plugin_tts_xxx" />
+              </label>
+              <label class="setting-field">
+                <span>语音方法</span>
+                <input id="cfgGenericTtsMethod" type="text" placeholder="tts.synthesize" />
+              </label>
+              <label class="setting-field">
+                <span>文本参数名</span>
+                <input id="cfgGenericTtsTextArg" type="text" placeholder="text" />
+              </label>
+              <label class="setting-field">
+                <span>语音结果字段</span>
+                <input id="cfgGenericTtsResultField" type="text" placeholder="data.audio_path" />
+              </label>
+              <label class="setting-field setting-field-wide">
+                <span>语音额外参数</span>
+                <textarea id="cfgGenericTtsExtraArgs" rows="2" placeholder='{"voice":"default"}'></textarea>
               </label>
               <label class="setting-switch">
                 <input id="cfgAudioOnly" type="checkbox" />

@@ -206,6 +206,47 @@
   background: linear-gradient(90deg, var(--section-halo), transparent);
 }
 
+.provider-probe-panel {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px 12px;
+  align-items: center;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgba(225, 190, 208, 0.72);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.provider-probe-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.provider-probe-actions .button-secondary {
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 8px;
+  white-space: nowrap;
+}
+
+.provider-probe-result {
+  min-width: 0;
+  color: #6f5264;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .provider-probe-panel {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .settings-section-note {
   grid-column: 1 / -1;
   margin: -5px 0 2px;

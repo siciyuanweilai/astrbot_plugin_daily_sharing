@@ -6,7 +6,7 @@ from astrbot.api import logger
 class ImageAiimgMixin:
     async def _get_gitee_reference_images(self) -> List[bytes]:
         """从 Gitee 插件中提取参考图"""
-        gitee = self._aiimg_plugin
+        gitee = self.provider_manager.get_gitee_plugin()
         if not gitee: return []
         
         try:
@@ -28,16 +28,43 @@ class ImageAiimgMixin:
         
         return []
 
+    async def _call_image_provider(
+        self,
+        prompt: str,
+        use_ref_selfie: bool = False,
+        target_umo: str = None,
+    ) -> Optional[str]:
+        """调用配置的生图 provider。"""
+        provider = self.provider_manager.select_provider()
+        if provider == "generic_plugin":
+            if use_ref_selfie:
+                logger.info("[每日分享] 当前为通用生图 provider，尝试使用通用改图/参考图方法")
+            return await self.provider_manager.generate_with_generic_plugin(
+                prompt,
+                use_ref_selfie=use_ref_selfie,
+                target_umo=target_umo or "",
+            )
+        if provider == "calibrated_tool":
+            if use_ref_selfie:
+                logger.info("[每日分享] 当前为校准工具生图 provider，优先调用已校准自拍/参考图工具")
+            return await self.provider_manager.generate_with_calibrated_tool(
+                prompt,
+                use_ref_selfie=use_ref_selfie,
+                target_umo=target_umo or "",
+            )
+
+        return await self._call_aiimg(prompt, use_ref_selfie=use_ref_selfie)
+
     async def _call_aiimg(self, prompt: str, use_ref_selfie: bool = False) -> Optional[str]:
         """调用底层 Gitee 插件"""
-        self._ensure_plugin()
-        if not self._aiimg_plugin:
+        aiimg_plugin = self._ensure_plugin()
+        if not aiimg_plugin:
             logger.error("[每日分享] 未找到 astrbot_plugin_gitee_aiimg 插件")
             return None
 
         try:
             # ================= 形象参考图逻辑 =================
-            if use_ref_selfie and hasattr(self._aiimg_plugin, "edit"):
+            if use_ref_selfie and hasattr(aiimg_plugin, "edit"):
                 logger.info("[每日分享] 正在使用 Gitee 形象参考图生成...")
                 
                 # 1. 获取参考图
@@ -55,7 +82,7 @@ class ImageAiimgMixin:
                     )
                     
                     # 3. 调用改图接口
-                    path_obj = await self._aiimg_plugin.edit.edit(
+                    path_obj = await aiimg_plugin.edit.edit(
                         prompt=final_prompt,
                         images=ref_images,
                         backend=None,
@@ -66,9 +93,9 @@ class ImageAiimgMixin:
                     logger.warning("[每日分享] 虽开启形象模式，但未找到参考图，降级为文生图")
 
             # ================= 普通文生图逻辑 =================
-            if hasattr(self._aiimg_plugin, "draw"):
-                target_size = self._aiimg_plugin.config.get("size", "1024x1024")
-                path_obj = await self._aiimg_plugin.draw.generate(prompt=prompt, size=target_size)
+            if hasattr(aiimg_plugin, "draw"):
+                target_size = aiimg_plugin.config.get("size", "1024x1024")
+                path_obj = await aiimg_plugin.draw.generate(prompt=prompt, size=target_size)
                 return str(path_obj)
             else:
                  # 这种情况下通常意味着获取到的是类而非实例，或者插件异常
