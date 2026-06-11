@@ -56,6 +56,7 @@ class ImageService(ImageVisualMixin, ImageVideoMixin, ImageAiimgMixin):
     async def generate_image(self, content: str, sharing_type: SharingType, life_context: str = None, target_umo: str = None) -> Optional[str]:
         """生成图片的入口函数"""
         self.reset_last_description()
+        self.reset_last_external_delivery("image")
         if not self.img_conf.get("enable_ai_image", False): return None
 
         # 1. 智能判断：是否画人
@@ -114,6 +115,12 @@ class ImageService(ImageVisualMixin, ImageVideoMixin, ImageAiimgMixin):
 
     def get_last_description(self) -> Optional[str]:
         return self._last_image_description
+
+    def get_last_external_delivery(self, media_type: str = None) -> dict:
+        return self.provider_manager.get_last_external_delivery(media_type)
+
+    def reset_last_external_delivery(self, media_type: str = None):
+        self.provider_manager.reset_last_external_delivery(media_type)
 
     def reset_last_description(self):
         self._last_image_description = None

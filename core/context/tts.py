@@ -89,6 +89,7 @@ class ContextTtsMixin:
         """
         调用语音合成插件将文本转换为语音文件路径。
         """
+        self.reset_last_external_tts_delivery()
         # 1. 检查开关
         if not self.tts_conf.get("enable_tts", False):
             return None

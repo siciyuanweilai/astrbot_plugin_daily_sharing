@@ -76,6 +76,7 @@ class ImageVideoMixin:
 
     async def generate_video_from_image(self, image_path: str, content: str, target_umo: str = None) -> Optional[str]:
         """图片转视频"""
+        self.reset_last_external_delivery("video")
         if not self.img_conf.get("enable_ai_video", False): return None
         
         try:

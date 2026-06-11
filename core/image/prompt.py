@@ -239,9 +239,12 @@ class ImageVisualMixin:
             action = visuals.get("action", "")
             
             # 一、外貌
-            appearance = await self._get_appearance_keywords(target_umo=target_umo)
-            if appearance: prompts.append(appearance)
-            else: prompts.append("1个女孩, 独奏")
+            if self.img_conf.get("use_gitee_selfie_ref", False):
+                logger.info("[每日分享] 已启用形象参考图，跳过默认人设外貌提取")
+            else:
+                appearance = await self._get_appearance_keywords(target_umo=target_umo)
+                if appearance: prompts.append(appearance)
+                else: prompts.append("1个女孩, 独奏")
 
             # 二、穿搭
             raw_outfit = str(visuals.get("outfit", "") or "").strip()

@@ -325,6 +325,8 @@ class TaskCommandShareMixin:
                     img_path = ai_img_path
                     send_img_path = img_path
                     self._complete_share_progress_step(progress_id, "image", "配图已生成")
+                elif self._calibrated_delivery_succeeded(self.image_service, "image"):
+                    self._complete_share_progress_step(progress_id, "image", "配图已由校准工具发送")
                 else:
                     self._fail_share_progress_step(progress_id, "image", "配图生成失败，继续发送文案")
 
@@ -337,6 +339,8 @@ class TaskCommandShareMixin:
                         video_url = await self.image_service.generate_video_from_image(img_path, content, target_umo=target_umo)
                         if video_url:
                             self._complete_share_progress_step(progress_id, "video", "视频已生成")
+                        elif self._calibrated_delivery_succeeded(self.image_service, "video"):
+                            self._complete_share_progress_step(progress_id, "video", "视频已由校准工具发送")
                         else:
                             self._fail_share_progress_step(progress_id, "video", "视频生成失败，继续发送")
                     elif not img_path:
@@ -360,6 +364,8 @@ class TaskCommandShareMixin:
                     audio_path = await self.ctx_service.text_to_speech(content, target_umo, target_type_enum, period)
                     if audio_path:
                         self._complete_share_progress_step(progress_id, "audio", "语音已生成")
+                    elif self._calibrated_tts_delivery_succeeded():
+                        self._complete_share_progress_step(progress_id, "audio", "语音已由校准工具发送")
                     else:
                         self._fail_share_progress_step(progress_id, "audio", "语音生成失败，继续发送")
                 else:

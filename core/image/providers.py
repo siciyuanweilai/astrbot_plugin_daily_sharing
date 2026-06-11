@@ -204,6 +204,39 @@ class ImageProviderManager:
         self.image_conf = image_conf
         self._gitee_plugin = None
         self._gitee_plugin_not_found = False
+        self._last_external_deliveries = {}
+
+    def reset_last_external_delivery(self, media_type: str = None) -> None:
+        if media_type:
+            self._last_external_deliveries.pop(str(media_type), None)
+            return
+        self._last_external_deliveries.clear()
+
+    def get_last_external_delivery(self, media_type: str = None) -> dict:
+        if media_type:
+            return (self._last_external_deliveries.get(str(media_type)) or {}).copy()
+        return {
+            key: value.copy() if isinstance(value, dict) else value
+            for key, value in self._last_external_deliveries.items()
+        }
+
+    def _set_last_external_delivery(
+        self,
+        media_type: str,
+        *,
+        sent: bool,
+        tool_name: str = "",
+        label: str = "",
+        error: str = "",
+        send_count: int = 0,
+    ) -> None:
+        self._last_external_deliveries[str(media_type)] = {
+            "sent": bool(sent),
+            "tool_name": str(tool_name or ""),
+            "label": str(label or ""),
+            "error": str(error or ""),
+            "send_count": int(send_count or 0),
+        }
 
     def _iter_stars(self):
         getter = getattr(self.context, "get_all_stars", None)
@@ -739,9 +772,25 @@ class ImageProviderManager:
             return None
         return kwargs
 
-    def _make_silent_llm_tool_event(self, target_umo: str, message_text: str):
+    async def _forward_tool_message_to_target(self, target_umo: str, message_chain: Any) -> None:
+        target_umo = str(target_umo or "").strip()
+        if not target_umo:
+            raise RuntimeError("missing target session for calibrated tool delivery")
+        sender = getattr(self.context, "send_message", None)
+        if not callable(sender):
+            raise RuntimeError("AstrBot context does not support send_message")
+        await self._maybe_await(sender(target_umo, message_chain))
+
+    def _make_silent_llm_tool_event(
+        self,
+        target_umo: str,
+        message_text: str,
+        *,
+        forward_sends: bool = False,
+    ):
         target_umo = str(target_umo or "").strip() or "daily_sharing:FriendMessage:llm_tool"
         message_text = str(message_text or "")
+        manager = self
         try:
             from astrbot.core.message.components import Plain
             from astrbot.core.message.message_event_result import MessageChain
@@ -779,9 +828,21 @@ class ImageProviderManager:
                 def __init__(self):
                     super().__init__(message_text, message, platform, session_id)
                     self.sent_messages = []
+                    self.delivery_success = False
+                    self.delivery_count = 0
+                    self.delivery_errors = []
 
                 async def send(self, message_chain: MessageChain) -> None:
                     self.sent_messages.append(message_chain)
+                    if not forward_sends:
+                        return
+                    try:
+                        await manager._forward_tool_message_to_target(target_umo, message_chain)
+                        self.delivery_success = True
+                        self.delivery_count += 1
+                    except Exception as exc:
+                        self.delivery_errors.append(str(exc))
+                        raise
 
             event = SilentToolEvent()
             event.unified_msg_origin = target_umo
@@ -791,6 +852,9 @@ class ImageProviderManager:
             event = SimpleNamespace(
                 unified_msg_origin=target_umo,
                 sent_messages=[],
+                delivery_success=False,
+                delivery_count=0,
+                delivery_errors=[],
                 get_result=lambda: None,
                 clear_result=lambda: None,
                 get_sender_id=lambda: "",
@@ -799,12 +863,33 @@ class ImageProviderManager:
 
             async def send(message_chain):
                 event.sent_messages.append(message_chain)
+                if not forward_sends:
+                    return
+                try:
+                    await manager._forward_tool_message_to_target(target_umo, message_chain)
+                    event.delivery_success = True
+                    event.delivery_count += 1
+                except Exception as exc:
+                    event.delivery_errors.append(str(exc))
+                    raise
 
             event.send = send
             return event
 
-    async def _execute_recorded_llm_tool(self, tool, kwargs: dict, target_umo: str, message_text: str):
-        event = self._make_silent_llm_tool_event(target_umo, message_text)
+    async def _execute_recorded_llm_tool(
+        self,
+        tool,
+        kwargs: dict,
+        target_umo: str,
+        message_text: str,
+        *,
+        forward_sends: bool = False,
+    ):
+        event = self._make_silent_llm_tool_event(
+            target_umo,
+            message_text,
+            forward_sends=forward_sends,
+        )
         agent_context = SimpleNamespace(context=self.context, event=event, extra={})
         run_context = SimpleNamespace(
             context=agent_context,
@@ -839,6 +924,51 @@ class ImageProviderManager:
         if inspect.isawaitable(result):
             return await result, event
         return result, event
+
+    def _looks_like_message_chain(self, value: Any) -> bool:
+        chain = getattr(value, "chain", None)
+        return isinstance(chain, list)
+
+    def _iter_message_chain_candidates(self, value: Any):
+        if value is None:
+            return
+        if self._looks_like_message_chain(value):
+            yield value
+            return
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                yield from self._iter_message_chain_candidates(item)
+            return
+        for attr in ("message_chain", "chain_result", "event_result"):
+            nested = getattr(value, attr, None)
+            if nested is not None and nested is not value:
+                yield from self._iter_message_chain_candidates(nested)
+
+    async def _forward_tool_result_messages(self, result: Any, event: Any) -> int:
+        forwarded = 0
+        seen_ids = set()
+        candidates = []
+        event_result = getattr(event, "get_result", lambda: None)()
+        if event_result is not None:
+            candidates.append(event_result)
+        if result is not None and result is not event_result:
+            candidates.append(result)
+
+        for candidate in candidates:
+            for chain in self._iter_message_chain_candidates(candidate):
+                marker = id(chain)
+                if marker in seen_ids:
+                    continue
+                seen_ids.add(marker)
+                await event.send(chain)
+                forwarded += 1
+        return forwarded
+
+    def _recorded_tool_delivery_state(self, event: Any) -> tuple[bool, int, str]:
+        sent = bool(getattr(event, "delivery_success", False))
+        count = int(getattr(event, "delivery_count", 0) or 0)
+        errors = [str(item) for item in (getattr(event, "delivery_errors", []) or []) if str(item)]
+        return sent, count, "; ".join(errors)
 
     async def _extract_media_ref_from_component(self, component: Any) -> Optional[str]:
         for attr in ("path", "file", "url", "audio", "image"):
@@ -996,6 +1126,110 @@ class ImageProviderManager:
         except Exception as exc:
             logger.warning(f"[DailySharing] Recorded LLM {label} tool failed: {tool_name}: {exc}")
         return None
+
+    async def _call_recorded_llm_tool_external_delivery(
+        self,
+        *,
+        media_type: str,
+        tool_name_key: str,
+        tool_args_key: str,
+        values: list[tuple[tuple[str, ...], Any]],
+        result_field_key: str,
+        result_keys: tuple[str, ...],
+        label: str,
+        target_umo: str = "",
+        message_text: str = "",
+    ) -> bool:
+        self.reset_last_external_delivery(media_type)
+        tool_name = str(self.image_conf.get(tool_name_key, "") or "").strip()
+        if not tool_name:
+            self._set_last_external_delivery(
+                media_type,
+                sent=False,
+                label=label,
+                error=f"missing calibrated {label} tool",
+            )
+            return False
+        tool = self._find_llm_tool(tool_name)
+        if not tool:
+            error = f"recorded LLM {label} tool not found: {tool_name}"
+            logger.warning(f"[DailySharing] {error}")
+            self._set_last_external_delivery(
+                media_type,
+                sent=False,
+                tool_name=tool_name,
+                label=label,
+                error=error,
+            )
+            return False
+        kwargs = self._build_recorded_tool_kwargs(
+            tool,
+            self._read_recorded_tool_args(tool_args_key),
+            values,
+        )
+        if kwargs is None:
+            error = f"recorded LLM {label} tool arguments are incomplete"
+            self._set_last_external_delivery(
+                media_type,
+                sent=False,
+                tool_name=tool_name,
+                label=label,
+                error=error,
+            )
+            return False
+
+        try:
+            logger.info(f"[DailySharing] Triggering recorded LLM {label} tool for self-delivery: {tool_name}")
+            result, event = await self._execute_recorded_llm_tool(
+                tool,
+                kwargs,
+                target_umo,
+                message_text,
+                forward_sends=True,
+            )
+            await self._forward_tool_result_messages(result, event)
+            sent, count, error = self._recorded_tool_delivery_state(event)
+            if sent:
+                logger.info(f"[DailySharing] Recorded LLM {label} tool self-delivered successfully: {tool_name}")
+                self._set_last_external_delivery(
+                    media_type,
+                    sent=True,
+                    tool_name=tool_name,
+                    label=label,
+                    send_count=count,
+                )
+                return True
+
+            media_ref = await self._extract_llm_tool_media_result(
+                result,
+                event=event,
+                result_field=str(self.image_conf.get(result_field_key, "") or "").strip(),
+                result_keys=result_keys,
+            )
+            if media_ref:
+                error = "tool returned media but did not send it"
+            else:
+                error = error or "tool completed without sending media"
+            logger.warning(f"[DailySharing] Recorded LLM {label} tool did not self-deliver: {tool_name}: {error}")
+            self._set_last_external_delivery(
+                media_type,
+                sent=False,
+                tool_name=tool_name,
+                label=label,
+                error=error,
+                send_count=count,
+            )
+        except Exception as exc:
+            error = str(exc)
+            logger.warning(f"[DailySharing] Recorded LLM {label} tool self-delivery failed: {tool_name}: {error}")
+            self._set_last_external_delivery(
+                media_type,
+                sent=False,
+                tool_name=tool_name,
+                label=label,
+                error=error,
+            )
+        return False
 
     async def _call_configured_method(
         self,
@@ -1408,11 +1642,18 @@ class ImageProviderManager:
             tool_name = str(self.image_conf.get("llm_selfie_tool_name", "") or "").strip()
             if not tool_name:
                 logger.warning("[DailySharing] Calibrated image provider is missing selfie/reference tool")
+                self._set_last_external_delivery(
+                    "image",
+                    sent=False,
+                    label="calibrated image selfie/reference",
+                    error="missing selfie/reference tool",
+                )
                 return None
             tool = self._find_llm_tool(tool_name)
             plugin = getattr(getattr(tool, "handler", None), "__self__", None) if tool else None
             refs = await self._get_plugin_reference_images(plugin)
-            return await self._call_recorded_llm_tool(
+            await self._call_recorded_llm_tool_external_delivery(
+                media_type="image",
                 tool_name_key="llm_selfie_tool_name",
                 tool_args_key="llm_selfie_tool_args",
                 values=[
@@ -1428,8 +1669,10 @@ class ImageProviderManager:
                 target_umo=target_umo,
                 message_text=prompt,
             )
+            return None
 
-        return await self._call_recorded_llm_tool(
+        await self._call_recorded_llm_tool_external_delivery(
+            media_type="image",
             tool_name_key="llm_image_tool_name",
             tool_args_key="llm_image_tool_args",
             values=[
@@ -1443,6 +1686,7 @@ class ImageProviderManager:
             target_umo=target_umo,
             message_text=prompt,
         )
+        return None
 
     async def generate_video_with_generic_plugin(self, prompt: str, image_path: str, image_bytes: bytes = None) -> Optional[str]:
         return await self._call_configured_method(
@@ -1475,7 +1719,8 @@ class ImageProviderManager:
         )
 
     async def generate_video_with_calibrated_tool(self, prompt: str, image_path: str, image_bytes: bytes = None, target_umo: str = "") -> Optional[str]:
-        return await self._call_recorded_llm_tool(
+        await self._call_recorded_llm_tool_external_delivery(
+            media_type="video",
             tool_name_key="llm_video_tool_name",
             tool_args_key="llm_video_tool_args",
             values=[
@@ -1490,6 +1735,7 @@ class ImageProviderManager:
             target_umo=target_umo,
             message_text=prompt,
         )
+        return None
 
     async def generate_tts_with_generic_plugin(
         self,
@@ -1546,7 +1792,8 @@ class ImageProviderManager:
         target_umo: str = "",
         session_state=None,
     ) -> Optional[str]:
-        return await self._call_recorded_llm_tool(
+        await self._call_recorded_llm_tool_external_delivery(
+            media_type="audio",
             tool_name_key="llm_tts_tool_name",
             tool_args_key="llm_tts_tool_args",
             values=[
@@ -1561,6 +1808,7 @@ class ImageProviderManager:
             target_umo=target_umo,
             message_text=text,
         )
+        return None
 
     def select_video_provider(self) -> str:
         provider = str(self.image_conf.get("video_provider", "gitee_aiimg") or "gitee_aiimg").strip().lower()

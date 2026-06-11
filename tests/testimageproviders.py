@@ -81,9 +81,13 @@ class _ToolContext(_Context):
     def __init__(self, stars, tools):
         super().__init__(stars)
         self._tool_manager = _ToolManager(tools)
+        self.sent_messages = []
 
     def get_llm_tool_manager(self):
         return self._tool_manager
+
+    async def send_message(self, target_umo, chain):
+        self.sent_messages.append((target_umo, chain))
 
 
 class _LlmTool:
@@ -352,21 +356,21 @@ class ImageProviderManagerTests(unittest.TestCase):
         self.assertEqual(result, "/tmp/draw.png")
         self.assertEqual(calls, [("draw.generate", "normal prompt")])
 
-    def test_calibrated_provider_uses_recorded_llm_image_tool(self):
+    def test_calibrated_provider_self_delivers_recorded_llm_image_tool(self):
         providers = _load_providers_module()
         calls = []
 
         async def recorded_tool(event, prompt, mode):
             calls.append(("recorded", prompt, mode, event.unified_msg_origin))
-            return {"image_path": "/tmp/recorded.png"}
+            await event.send(types.SimpleNamespace(chain=[types.SimpleNamespace(path="/tmp/recorded.png")]))
+            return None
 
         class Plugin:
             def draw_image(self, prompt):
                 calls.append(("fallback", prompt))
                 return "/tmp/fallback.png"
 
-        manager = providers.ImageProviderManager(
-            _ToolContext(
+        context = _ToolContext(
                 [_Star("plugin_draw_image", Plugin())],
                 [
                     _LlmTool(
@@ -382,7 +386,9 @@ class ImageProviderManagerTests(unittest.TestCase):
                         recorded_tool,
                     )
                 ],
-            ),
+            )
+        manager = providers.ImageProviderManager(
+            context,
             {
                 "image_provider": "calibrated_tool",
                 "llm_image_tool_name": "draw_calibrated",
@@ -392,19 +398,22 @@ class ImageProviderManagerTests(unittest.TestCase):
 
         result = asyncio.run(manager.generate_with_calibrated_tool("real prompt", target_umo="aiocqhttp:FriendMessage:123"))
 
-        self.assertEqual(result, "/tmp/recorded.png")
+        self.assertIsNone(result)
         self.assertEqual(calls, [("recorded", "real prompt", "text", "aiocqhttp:FriendMessage:123")])
+        self.assertEqual(len(context.sent_messages), 1)
+        self.assertEqual(context.sent_messages[0][0], "aiocqhttp:FriendMessage:123")
+        self.assertTrue(manager.get_last_external_delivery("image")["sent"])
 
-    def test_calibrated_tts_uses_recorded_llm_tool(self):
+    def test_calibrated_tts_self_delivers_recorded_llm_tool(self):
         providers = _load_providers_module()
         calls = []
 
-        def recorded_tool(event, text, emotion):
+        async def recorded_tool(event, text, emotion):
             calls.append((text, emotion, event.unified_msg_origin))
-            return {"audio_path": "/tmp/recorded.mp3"}
+            await event.send(types.SimpleNamespace(chain=[types.SimpleNamespace(file="/tmp/recorded.mp3")]))
+            return None
 
-        manager = providers.ImageProviderManager(
-            _ToolContext(
+        context = _ToolContext(
                 [],
                 [
                     _LlmTool(
@@ -419,7 +428,9 @@ class ImageProviderManagerTests(unittest.TestCase):
                         recorded_tool,
                     )
                 ],
-            ),
+            )
+        manager = providers.ImageProviderManager(
+            context,
             {
                 "tts_provider": "calibrated_tool",
                 "llm_tts_tool_name": "voice_calibrated",
@@ -435,8 +446,10 @@ class ImageProviderManagerTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(result, "/tmp/recorded.mp3")
+        self.assertIsNone(result)
         self.assertEqual(calls, [("正式语音", "happy", "aiocqhttp:FriendMessage:456")])
+        self.assertEqual(len(context.sent_messages), 1)
+        self.assertTrue(manager.get_last_external_delivery("audio")["sent"])
 
     def test_calibrated_tts_rejects_plain_text_result(self):
         providers = _load_providers_module()
@@ -470,8 +483,9 @@ class ImageProviderManagerTests(unittest.TestCase):
         result = asyncio.run(manager.generate_tts_with_calibrated_tool("正式语音"))
 
         self.assertIsNone(result)
+        self.assertFalse(manager.get_last_external_delivery("audio")["sent"])
 
-    def test_calibrated_image_reads_media_sent_by_tool_event(self):
+    def test_calibrated_image_does_not_deliver_event_messages_without_send(self):
         providers = _load_providers_module()
 
         class ImageComponent:
@@ -508,7 +522,8 @@ class ImageProviderManagerTests(unittest.TestCase):
 
         result = asyncio.run(manager.generate_with_calibrated_tool("real prompt"))
 
-        self.assertEqual(result, "/tmp/event-image.png")
+        self.assertIsNone(result)
+        self.assertFalse(manager.get_last_external_delivery("image")["sent"])
 
     def test_generic_selfie_mode_without_edit_method_does_not_fallback_to_draw(self):
         providers = _load_providers_module()
