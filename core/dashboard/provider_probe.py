@@ -1,5 +1,3 @@
-import asyncio
-import contextlib
 import uuid
 from typing import Any
 
@@ -203,6 +201,19 @@ class DashboardProviderProbeMixin:
                 return "\n".join(chunks)
         return str(tool_result)
 
+    def _page_probe_tool_result_failed(self, result: str) -> bool:
+        text = str(result or "").strip().lower()
+        if not text:
+            return True
+        return (
+            text.startswith("error:")
+            or " execution timeout " in text
+            or "生成失败" in text
+            or "调用失败" in text
+            or "failed" in text
+            or "timeout" in text
+        )
+
     async def _page_probe_llm_tool(self, kind: str, body: dict) -> dict:
         from astrbot.core.agent.hooks import BaseAgentRunHooks
 
@@ -216,7 +227,6 @@ class DashboardProviderProbeMixin:
         event = self._page_probe_event(target_umo, prompt)
         tools = self._page_probe_toolset(kind)
         calls = []
-        first_tool_started = asyncio.Event()
 
         class ProbeHooks(BaseAgentRunHooks):
             async def on_tool_start(self, run_context, tool, tool_args):
@@ -225,27 +235,25 @@ class DashboardProviderProbeMixin:
                         "tool_name": str(getattr(tool, "name", "") or ""),
                         "tool_args": dict(tool_args or {}),
                         "result": "",
+                        "ended": False,
                     }
                 )
-                first_tool_started.set()
 
             async def on_tool_end(self, run_context, tool, tool_args, tool_result):
                 item = calls[-1] if calls else {
                     "tool_name": str(getattr(tool, "name", "") or ""),
                     "tool_args": dict(tool_args or {}),
                     "result": "",
+                    "ended": False,
                 }
                 item["result"] = self_outer._page_probe_extract_tool_result(tool_result)
+                item["ended"] = True
                 if not calls:
                     calls.append(item)
 
         self_outer = self
-        response = None
-        probe_error = ""
-        selection_timeout = int(body.get("selection_timeout") or 90)
-        result_grace_seconds = int(body.get("result_grace_seconds") or 3)
-        agent_task = asyncio.create_task(
-            self.context.tool_loop_agent(
+        try:
+            response = await self.context.tool_loop_agent(
                 event=event,
                 chat_provider_id=provider_id,
                 prompt=prompt,
@@ -255,75 +263,30 @@ class DashboardProviderProbeMixin:
                 tool_call_timeout=int(body.get("tool_call_timeout") or 300),
                 agent_hooks=ProbeHooks(),
             )
-        )
-        try:
-            start_task = asyncio.create_task(first_tool_started.wait())
-            done, _pending = await asyncio.wait(
-                {start_task, agent_task},
-                timeout=selection_timeout,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            if not done:
-                agent_task.cancel()
-                start_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await agent_task
-                with contextlib.suppress(asyncio.CancelledError):
-                    await start_task
-                raise RuntimeError("LLM 未在限定时间内调用媒体工具，无法记录工具")
-            if agent_task in done and not calls:
-                with contextlib.suppress(BaseException):
-                    response = agent_task.result()
-                if not calls:
-                    raise RuntimeError("LLM 没有调用任何媒体工具，无法记录工具")
-            start_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await start_task
-            try:
-                response = await asyncio.wait_for(
-                    asyncio.shield(agent_task),
-                    timeout=result_grace_seconds,
-                )
-            except asyncio.TimeoutError:
-                probe_error = "已捕获工具调用，未等待媒体生成完成"
-                agent_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await agent_task
-        except asyncio.TimeoutError:
-            if calls:
-                probe_error = "已捕获工具调用，等待工具结果超时"
-            else:
-                agent_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await agent_task
-                raise RuntimeError("LLM 未在限定时间内调用媒体工具，无法记录工具")
         except Exception as exc:
-            if not agent_task.done():
-                agent_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await agent_task
-            probe_error = str(exc) or type(exc).__name__
             if not calls:
-                raise
-        finally:
-            if calls and not agent_task.done():
-                agent_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await agent_task
-        if agent_task.done() and not agent_task.cancelled() and not response:
-            with contextlib.suppress(Exception):
-                response = agent_task.result()
+                raise RuntimeError(f"{kind} 校准生成失败: {exc}") from exc
+            tool_call = calls[0]
+            if not tool_call.get("ended"):
+                raise RuntimeError(f"{kind} 校准生成失败: {exc}") from exc
+            if self._page_probe_tool_result_failed(tool_call.get("result", "")):
+                raise RuntimeError(f"{kind} 校准生成失败: {tool_call.get('result') or exc}") from exc
+            response = None
+
         if not calls:
             raise RuntimeError("LLM 没有调用任何媒体工具，无法记录工具")
 
         tool_call = calls[0]
+        if not tool_call.get("ended"):
+            raise RuntimeError("工具调用尚未完成，无法记录工具")
+        if self._page_probe_tool_result_failed(tool_call.get("result", "")):
+            raise RuntimeError(f"{kind} 校准生成失败: {tool_call.get('result') or '工具没有返回结果'}")
         return {
             "provider_type": kind,
             "tool_name": tool_call["tool_name"],
             "tool_args": tool_call["tool_args"],
             "tool_result": tool_call.get("result", ""),
             "final_text": str(getattr(response, "completion_text", "") or ""),
-            "probe_error": probe_error,
             "target_umo": target_umo,
             "provider_id": provider_id,
             "sent_count": len(getattr(event, "sent_messages", []) or []),

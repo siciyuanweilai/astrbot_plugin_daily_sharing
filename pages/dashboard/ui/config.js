@@ -109,8 +109,7 @@ export function createSettingsConfig({
     const tool = text(result.tool_name).trim() || "未知工具";
     const argKeys = Object.keys(result.tool_args || {});
     const suffix = argKeys.length ? `，参数 ${argKeys.join(", ")}` : "";
-    const errorNote = result.probe_error ? "，最终回复异常但已记录" : "";
-    return `${providerProbeLabel(data.kind)}命中 LLM 工具：${tool}${suffix}${errorNote}`;
+    return `${providerProbeLabel(data.kind)}命中 LLM 工具：${tool}${suffix}`;
   }
 
   async function runProviderProbe(kind) {
